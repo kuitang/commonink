@@ -1,6 +1,6 @@
-# Milestone 3.5: OAuth 2.1 Provider (For ChatGPT Connectors)
+# Milestone 3.5: OAuth 2.1 Provider (For ChatGPT + Claude Code)
 
-**Goal**: Implement OAuth 2.1 provider conforming to MCP authorization spec so ChatGPT can authenticate users and access their notes via MCP.
+**Goal**: Implement OAuth 2.1 provider conforming to MCP authorization spec so **both ChatGPT and Claude Code** can authenticate users and access their notes via MCP.
 
 **Prerequisites**: Milestone 3 complete (rate limiting, public notes, web UI, consent screens)
 
@@ -592,17 +592,429 @@ func setupTestServer(t *testing.T) *httptest.Server {
 
 ---
 
+## Claude Code MCP OAuth Conformance Test
+
+Claude Code also supports OAuth for MCP servers, but with **key differences** from ChatGPT.
+
+### Claude vs ChatGPT OAuth Differences
+
+| Feature | Claude Code | ChatGPT |
+|---------|-------------|---------|
+| **Callback URL** | `https://claude.ai/api/mcp/auth_callback` | `https://chatgpt.com/connector_platform_oauth_redirect` |
+| **Future Callback** | `https://claude.com/api/mcp/auth_callback` | `https://platform.openai.com/apps-manage/oauth` |
+| **Client Name** | `"claudeai"` | `"ChatGPT"` |
+| **Token Auth Method** | `"none"` (public client) | `client_secret_post` / `client_secret_basic` |
+| **Client Secret on Token** | NO (public client) | YES |
+| **MCP Auth Spec** | 3/26 and 6/18 | 6/18 |
+| **Custom Client ID/Secret** | Supported (optional) | Not documented |
+
+**CRITICAL DIFFERENCE**: Claude uses `token_endpoint_auth_method: "none"`, meaning it's a **public client** and does NOT send `client_secret` on the `/oauth/token` endpoint. Your server MUST support this.
+
+### Claude Code OAuth Flow
+
+Reference: [Building Custom Connectors](https://support.claude.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Claude Code OAuth Flow                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Step 1: Fetch Protected Resource Metadata (same as ChatGPT)        │
+│  ─────────────────────────────────────────────────────────          │
+│  GET /.well-known/oauth-protected-resource                          │
+│  → Extract: resource, authorization_servers                         │
+│                                                                     │
+│  Step 2: Fetch Auth Server Metadata (same as ChatGPT)               │
+│  ────────────────────────────────────────────────────               │
+│  GET {authorization_server}/.well-known/oauth-authorization-server  │
+│  → FAIL IF: code_challenge_methods_supported missing S256           │
+│                                                                     │
+│  Step 3: Dynamic Client Registration (DIFFERENT!)                   │
+│  ────────────────────────────────────────────────                   │
+│  POST {registration_endpoint}                                       │
+│  Body: {                                                            │
+│      "client_name": "claudeai",                                     │
+│      "grant_types": ["authorization_code", "refresh_token"],        │
+│      "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],  │
+│      "response_types": ["code"],                                    │
+│      "token_endpoint_auth_method": "none"  ← PUBLIC CLIENT!         │
+│  }                                                                  │
+│  → Extract: client_id (NO client_secret needed for token endpoint)  │
+│                                                                     │
+│  Step 4: Authorization Code + PKCE Flow (same as ChatGPT)           │
+│  ──────────────────────────────────────────────────────             │
+│  GET {authorization_endpoint}?                                      │
+│      client_id={client_id}&                                         │
+│      redirect_uri=https://claude.ai/api/mcp/auth_callback&          │
+│      response_type=code&                                            │
+│      scope={scopes}&                                                │
+│      state={random}&                                                │
+│      code_challenge={S256_challenge}&                               │
+│      code_challenge_method=S256&                                    │
+│      resource={resource}                                            │
+│                                                                     │
+│  Step 5: Token Exchange (DIFFERENT - NO client_secret!)             │
+│  ──────────────────────────────────────────────────────             │
+│  POST {token_endpoint}                                              │
+│  Body: grant_type=authorization_code&                               │
+│        client_id={client_id}&                                       │
+│        code={code}&                                                 │
+│        redirect_uri={redirect_uri}&                                 │
+│        code_verifier={verifier}                                     │
+│        ↑ NO client_secret (public client with PKCE)                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Claude Code Conformance Test Implementation
+
+**File**: `tests/conformance/claude_oauth_test.go`
+
+```go
+// Package conformance implements a custom Claude Code OAuth conformance test client.
+// This tests the EXACT flow that Claude Code performs as a PUBLIC OAuth client.
+//
+// Key difference from ChatGPT: Claude uses token_endpoint_auth_method: "none"
+// meaning NO client_secret is sent on token exchange (relies on PKCE only).
+//
+// Reference: https://support.claude.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers
+package conformance
+
+// ClaudeOAuthConformanceTest tests the exact OAuth flow that Claude Code performs.
+// CRITICAL: Claude is a PUBLIC client (no client_secret on token endpoint)
+type ClaudeOAuthConformanceTest struct {
+    t         *testing.T
+    serverURL string
+    client    *http.Client
+
+    resourceMetadata   ResourceMetadata
+    authServerMetadata AuthServerMetadata
+
+    clientID string
+    // NOTE: No clientSecret field - Claude doesn't use it on token endpoint
+
+    codeVerifier  string
+    codeChallenge string
+
+    accessToken  string
+    refreshToken string
+}
+
+// ClaudeDCRRequest - Claude's DCR request differs from ChatGPT
+type ClaudeDCRRequest struct {
+    ClientName              string   `json:"client_name"`
+    GrantTypes              []string `json:"grant_types"`
+    RedirectURIs            []string `json:"redirect_uris"`
+    ResponseTypes           []string `json:"response_types"`
+    TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"` // "none" for Claude!
+}
+
+// =============================================================================
+// CONFORMANCE TEST: Step 3 - Dynamic Client Registration (Claude-specific)
+// Reference: https://support.claude.com/en/articles/11503834
+// =============================================================================
+
+func (c *ClaudeOAuthConformanceTest) Step3_DynamicClientRegistration() {
+    c.t.Log("Step 3: Dynamic Client Registration (Claude - PUBLIC CLIENT)")
+
+    // Claude's DCR request - note token_endpoint_auth_method: "none"
+    dcrReq := ClaudeDCRRequest{
+        ClientName:              "claudeai",
+        GrantTypes:              []string{"authorization_code", "refresh_token"},
+        RedirectURIs:            []string{"https://claude.ai/api/mcp/auth_callback"},
+        ResponseTypes:           []string{"code"},
+        TokenEndpointAuthMethod: "none", // CRITICAL: Claude is a public client
+    }
+
+    body, _ := json.Marshal(dcrReq)
+    resp, err := c.client.Post(
+        c.authServerMetadata.RegistrationEndpoint,
+        "application/json",
+        strings.NewReader(string(body)),
+    )
+    require.NoError(c.t, err)
+    defer resp.Body.Close()
+
+    require.Equal(c.t, http.StatusOK, resp.StatusCode,
+        "DCR must succeed for public client (token_endpoint_auth_method=none)")
+
+    var dcrResp DCRResponse
+    err = json.NewDecoder(resp.Body).Decode(&dcrResp)
+    require.NoError(c.t, err)
+
+    // MUST return client_id
+    require.NotEmpty(c.t, dcrResp.ClientID,
+        "DCR response MUST include 'client_id'")
+
+    // client_secret may or may not be returned for public clients
+    // but it should NOT be required for token exchange
+
+    c.clientID = dcrResp.ClientID
+
+    c.t.Logf("  ✓ client_id: %s", c.clientID)
+    c.t.Log("  ✓ token_endpoint_auth_method: none (public client)")
+}
+
+// =============================================================================
+// CONFORMANCE TEST: Step 5 - Token Exchange (Claude-specific - NO client_secret)
+// =============================================================================
+
+func (c *ClaudeOAuthConformanceTest) Step5_TokenExchange_PublicClient(code, redirectURI string) {
+    c.t.Log("Step 5: Token exchange (Claude - PUBLIC CLIENT, no client_secret)")
+
+    // Claude's token request - NO client_secret, relies on PKCE only
+    params := url.Values{
+        "grant_type":    {"authorization_code"},
+        "client_id":     {c.clientID},
+        // NO client_secret - this is the key difference from ChatGPT
+        "code":          {code},
+        "redirect_uri":  {redirectURI},
+        "code_verifier": {c.codeVerifier},
+    }
+
+    resp, err := c.client.PostForm(c.authServerMetadata.TokenEndpoint, params)
+    require.NoError(c.t, err)
+    defer resp.Body.Close()
+
+    // MUST succeed without client_secret (PKCE provides proof)
+    require.Equal(c.t, http.StatusOK, resp.StatusCode,
+        "Token exchange MUST work without client_secret for public clients with PKCE")
+
+    var tokenResp TokenResponse
+    err = json.NewDecoder(resp.Body).Decode(&tokenResp)
+    require.NoError(c.t, err)
+
+    require.NotEmpty(c.t, tokenResp.AccessToken)
+    require.Equal(c.t, "Bearer", tokenResp.TokenType)
+
+    c.accessToken = tokenResp.AccessToken
+    c.refreshToken = tokenResp.RefreshToken
+
+    c.t.Log("  ✓ Token exchange succeeded WITHOUT client_secret")
+    c.t.Log("  ✓ PKCE code_verifier provided sufficient proof")
+}
+
+// =============================================================================
+// NEGATIVE TEST: Verify server rejects token exchange without PKCE for public client
+// =============================================================================
+
+func (c *ClaudeOAuthConformanceTest) TestNegative_PublicClientWithoutPKCE() {
+    c.t.Log("Negative Test: Public client token exchange without PKCE must fail")
+
+    // Try token exchange with neither client_secret NOR code_verifier
+    params := url.Values{
+        "grant_type":   {"authorization_code"},
+        "client_id":    {c.clientID},
+        "code":         {"test-code"},
+        "redirect_uri": {"https://claude.ai/api/mcp/auth_callback"},
+        // NO client_secret AND NO code_verifier
+    }
+
+    resp, err := c.client.PostForm(c.authServerMetadata.TokenEndpoint, params)
+    require.NoError(c.t, err)
+    defer resp.Body.Close()
+
+    // MUST fail - public client requires PKCE
+    require.Equal(c.t, http.StatusBadRequest, resp.StatusCode,
+        "Token exchange for public client without PKCE MUST be rejected")
+
+    c.t.Log("  ✓ Public client without PKCE correctly rejected")
+}
+
+// =============================================================================
+// MAIN TEST RUNNER
+// =============================================================================
+
+func TestClaudeOAuthConformance(t *testing.T) {
+    server := setupTestServer(t)
+    defer server.Close()
+
+    conformance := &ClaudeOAuthConformanceTest{
+        t:         t,
+        serverURL: server.URL,
+        client:    &http.Client{},
+    }
+
+    // Steps 1-2 are same as ChatGPT (reuse from shared tests)
+    t.Run("Step1_ProtectedResourceMetadata", conformance.Step1_FetchProtectedResourceMetadata)
+    t.Run("Step2_AuthServerMetadata", conformance.Step2_FetchAuthServerMetadata)
+
+    // Step 3 is Claude-specific (public client registration)
+    t.Run("Step3_DCR_PublicClient", conformance.Step3_DynamicClientRegistration)
+
+    // Steps 4-5 are Claude-specific (no client_secret)
+    t.Run("Step4_PKCE", conformance.Step4_GeneratePKCE)
+
+    // Negative tests
+    t.Run("Negative_PublicClientWithoutPKCE", conformance.TestNegative_PublicClientWithoutPKCE)
+}
+
+// TestBothClients ensures server works with BOTH ChatGPT and Claude
+func TestBothClientsCompatibility(t *testing.T) {
+    server := setupTestServer(t)
+    defer server.Close()
+
+    // Test 1: ChatGPT flow (confidential client with client_secret)
+    t.Run("ChatGPT_ConfidentialClient", func(t *testing.T) {
+        chatgpt := &ChatGPTOAuthConformanceTest{
+            t:         t,
+            serverURL: server.URL,
+            client:    &http.Client{},
+        }
+        // Run ChatGPT tests...
+    })
+
+    // Test 2: Claude flow (public client without client_secret)
+    t.Run("Claude_PublicClient", func(t *testing.T) {
+        claude := &ClaudeOAuthConformanceTest{
+            t:         t,
+            serverURL: server.URL,
+            client:    &http.Client{},
+        }
+        // Run Claude tests...
+    })
+}
+```
+
+### Server Implementation Requirements for Both Clients
+
+Your OAuth server MUST support BOTH client types:
+
+```go
+// internal/oauth/dcr.go
+
+func (p *Provider) DCR(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        ClientName              string   `json:"client_name"`
+        RedirectURIs            []string `json:"redirect_uris"`
+        GrantTypes              []string `json:"grant_types"`
+        ResponseTypes           []string `json:"response_types"`
+        TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+    }
+    json.NewDecoder(r.Body).Decode(&req)
+
+    // Determine client type
+    isPublicClient := req.TokenEndpointAuthMethod == "none"
+
+    // Validate redirect URIs (both ChatGPT and Claude)
+    allowedRedirects := []string{
+        // ChatGPT
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+        "https://platform.openai.com/apps-manage/oauth",
+        // Claude
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://claude.com/api/mcp/auth_callback",
+        // Local testing
+        "http://localhost:",
+    }
+
+    // Generate credentials
+    clientID := generateSecureID()
+    var clientSecretHash string
+    var clientSecret string
+
+    if !isPublicClient {
+        // Confidential client (ChatGPT) - generate and store secret
+        clientSecret = generateSecureSecret()
+        clientSecretHash = hashSecret(clientSecret)
+    }
+
+    // Store client with type info
+    p.store.CreateClient(ctx, &Client{
+        ID:                      clientID,
+        SecretHash:              clientSecretHash, // Empty for public clients
+        Name:                    req.ClientName,
+        RedirectURIs:            req.RedirectURIs,
+        IsPublic:                isPublicClient,
+        TokenEndpointAuthMethod: req.TokenEndpointAuthMethod,
+    })
+
+    // Response
+    resp := map[string]any{
+        "client_id":          clientID,
+        "client_id_issued_at": time.Now().Unix(),
+        "redirect_uris":       req.RedirectURIs,
+    }
+
+    if !isPublicClient {
+        resp["client_secret"] = clientSecret // Only for confidential clients
+    }
+
+    json.NewEncoder(w).Encode(resp)
+}
+```
+
+```go
+// internal/oauth/handlers.go - Token endpoint
+
+func (p *Provider) Token(w http.ResponseWriter, r *http.Request) {
+    clientID := r.FormValue("client_id")
+    clientSecret := r.FormValue("client_secret")
+    codeVerifier := r.FormValue("code_verifier")
+
+    client, err := p.store.GetClient(ctx, clientID)
+    if err != nil {
+        http.Error(w, "invalid_client", 401)
+        return
+    }
+
+    // Authenticate client based on type
+    if client.IsPublic {
+        // Public client (Claude) - MUST have code_verifier (PKCE)
+        if codeVerifier == "" {
+            http.Error(w, "invalid_request: code_verifier required for public clients", 400)
+            return
+        }
+        // No client_secret check needed
+    } else {
+        // Confidential client (ChatGPT) - MUST have valid client_secret
+        if !verifySecret(clientSecret, client.SecretHash) {
+            http.Error(w, "invalid_client", 401)
+            return
+        }
+    }
+
+    // Verify PKCE (required for both, but critical for public clients)
+    storedChallenge := getStoredCodeChallenge(code)
+    if !verifyPKCE(codeVerifier, storedChallenge) {
+        http.Error(w, "invalid_grant: PKCE verification failed", 400)
+        return
+    }
+
+    // Issue tokens...
+}
+```
+
+### Updated Redirect URI Allowlist
+
+```go
+// Both ChatGPT and Claude redirect URIs
+var allowedRedirectPatterns = []string{
+    // ChatGPT
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    "https://platform.openai.com/apps-manage/oauth",
+    // Claude
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+    // Local testing (MCP Inspector, etc.)
+    "http://localhost:",
+}
+```
+
+---
+
 ## What This Milestone Covers
 
 | Feature | Description |
 |---------|-------------|
 | **OAuth 2.1 Provider** | MCP authorization spec compliant using `fosite` |
-| **Dynamic Client Registration (DCR)** | ChatGPT registers itself per-session |
+| **Dynamic Client Registration (DCR)** | Both ChatGPT and Claude register per-session |
+| **Public + Confidential Clients** | Claude (public, no secret) + ChatGPT (confidential, with secret) |
 | **PKCE (S256)** | Mandatory for all authorization flows |
 | **Resource Parameter** | Echo throughout flow, embed in token `aud` |
 | **Token Verification** | Signature, issuer, audience, expiry, scopes |
 | **MCP Auth Integration** | `_meta["mcp/www_authenticate"]` responses |
-| **Custom Conformance Tests** | Tests exact ChatGPT flow from auth.md |
+| **Custom Conformance Tests** | Tests exact ChatGPT AND Claude Code flows |
 
 ---
 
@@ -647,6 +1059,26 @@ func setupTestServer(t *testing.T) *httptest.Server {
         └───────────────────┼───────────────────┘
                             │
                         [Commit]
+                            │
+        ┌───────────────────┴───────────────────┐
+        │                                       │
+[Remove All               [PAT (Personal
+ Unauthenticated           Access Token)
+ Codepaths]                Endpoint]
+        │                       │
+        └───────────┬───────────┘
+                    │
+        [Update All Tests
+         to Use Auth]
+                    │
+         ┌──────────┴──────────┐
+         │                     │
+[Unit Tests:              [MCP Tests:
+ Mock Email →              Full OAuth
+ Magic Login →             Flow]
+ Session]
+                    │
+                [Final Commit]
 ```
 
 ---
@@ -1021,19 +1453,31 @@ After conformance tests pass:
 go test -v ./tests/conformance/...
 ```
 
-All steps from the ChatGPT OAuth flow (auth.md lines 99-119) must pass:
+**ChatGPT Conformance** (confidential client with client_secret):
 - [ ] Step 1: Protected Resource Metadata
 - [ ] Step 2: Auth Server Metadata (S256 in code_challenge_methods_supported)
-- [ ] Step 3: Dynamic Client Registration
+- [ ] Step 3: DCR with redirect_uri `https://chatgpt.com/connector_platform_oauth_redirect`
 - [ ] Step 4: Authorization with PKCE + resource parameter
-- [ ] Step 5: Token Exchange with resource parameter
+- [ ] Step 5: Token Exchange WITH client_secret + resource parameter
 - [ ] Step 6: Token Verification (iss, aud, exp, scopes)
 - [ ] Step 7: Auth Trigger (_meta["mcp/www_authenticate"])
 
+**Claude Code Conformance** (public client WITHOUT client_secret):
+- [ ] Step 1-2: Same metadata endpoints as ChatGPT
+- [ ] Step 3: DCR with `token_endpoint_auth_method: "none"` + redirect_uri `https://claude.ai/api/mcp/auth_callback`
+- [ ] Step 4: Authorization with PKCE + resource parameter
+- [ ] Step 5: Token Exchange WITHOUT client_secret (PKCE only)
+- [ ] Step 6-7: Same as ChatGPT
+
+**Both Clients Compatibility**:
+- [ ] Server accepts BOTH ChatGPT (confidential) and Claude (public) client registrations
+- [ ] Token endpoint works with client_secret (ChatGPT) AND without (Claude + PKCE)
+
 ### Negative Tests Must Pass
 - [ ] Authorization without PKCE rejected
-- [ ] Invalid redirect_uri rejected
+- [ ] Invalid redirect_uri rejected (not in allowlist)
 - [ ] Wrong code_verifier rejected
+- [ ] Public client without PKCE on token exchange rejected
 - [ ] Expired token rejected
 - [ ] Wrong audience rejected
 
@@ -1065,7 +1509,18 @@ go test -v ./tests/conformance/...
 
 ## References
 
+### ChatGPT
 - **`chatgpt-apps/auth.md`** (lines 1-281) - AUTHORITATIVE SPEC, read completely
+- [OpenAI Apps SDK Authentication](https://developers.openai.com/apps-sdk/build/auth/)
+
+### Claude Code
+- [Building Custom Connectors via Remote MCP Servers](https://support.claude.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers)
+- [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)
+- Claude callback URL: `https://claude.ai/api/mcp/auth_callback`
+- Claude uses `token_endpoint_auth_method: "none"` (public client)
+
+### Specifications
 - [MCP Authorization Spec (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
 - [RFC 9728 - OAuth Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 8414 - OAuth Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
+- [RFC 7591 - Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
