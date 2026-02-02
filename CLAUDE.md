@@ -1,3 +1,13 @@
+# CRITICAL Principles
+- In every task/subagent prompt, You MUST tell them to read the entire CLAUDE.md
+- EVERY TASK MUST USE OPUS 4.5.
+- Use parallel tasks, back ground tasks, everywhere. Defer implementation and research to them.
+- If you find an error in CLAUDE.md or anything out of date with the code, you must fix CLAUDE.md
+- NEVER write fallback or backwards compatible code. Always make sure we execute the difficult path.
+- Expense, complexity, and token limit are of no object. Simply execute what I tell you to and do not simplify it. (However, use tasks to do the heavy lifting, always as parallel as possible.)
+- ALWAYS follow the directives below on property-based testing.
+- ALWAYS use gpt-5-mini! NEVER use a gpt-4 series model
+
 # Developer Guide - Remote Notes MicroSaaS
 
 Quick reference for Claude and developers working on this project.
@@ -283,9 +293,21 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 - Coverage instrumentation works
 - Faster startup than real server
 
-### MCP Transport
-- Streamable HTTP only (no stdio, no WebSocket)
-- Test via HTTP POST to `/mcp`
+### MCP Transport (Streamable HTTP - MCP Spec 2025-03-26)
+- **Streamable HTTP** transport only (NOT SSE, NOT WebSocket)
+- Single endpoint `/mcp` handles:
+  - **POST**: Client sends JSON-RPC messages (requests, notifications, responses)
+  - **GET**: Server pushes messages to client (optional SSE stream)
+  - **DELETE**: Session termination (optional)
+- Session management via `Mcp-Session-Id` header
+- Test via HTTP POST to `/mcp` with proper Accept header:
+  ```bash
+  curl -X POST http://localhost:8080/mcp \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+  ```
+- Reference: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
 
 ### Rate Limiting in Tests
 - Disable rate limiting in test env
