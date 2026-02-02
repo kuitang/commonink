@@ -87,8 +87,10 @@
    - Test all 6 MCP tools
 
 9. **OpenAI Conformance Test** (`tests/e2e/openai/`)
-   - `conformance_test.go` - Go test using OpenAI SDK
-   - Execute all 6 functions against local server
+   - `conformance_test.go` - Go test using OpenAI Responses API
+   - Use `type: "mcp"` to connect to MCP server via ngrok
+   - OpenAI auto-discovers tools from MCP server
+   - Test prompts that exercise all 6 tools
    - Property tests with rapid
 
 10. **HTTP curl Test** (`tests/e2e/curl/`)
