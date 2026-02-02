@@ -39,32 +39,36 @@ CREATE TABLE IF NOT EXISTS user_keys (
 -- OAuth clients table: registered OAuth 2.1 clients
 CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id TEXT PRIMARY KEY,
-    client_secret TEXT NOT NULL,
+    client_secret_hash TEXT,  -- NULL for public clients (Claude)
     client_name TEXT,
     redirect_uris TEXT NOT NULL,
+    is_public INTEGER NOT NULL DEFAULT 0,  -- 1 for public clients (Claude), 0 for confidential (ChatGPT)
+    token_endpoint_auth_method TEXT DEFAULT 'client_secret_post',  -- 'none' for public clients
     created_at INTEGER NOT NULL
 );
 
 -- OAuth tokens table: access and refresh tokens
 CREATE TABLE IF NOT EXISTS oauth_tokens (
-    access_token TEXT PRIMARY KEY,
-    refresh_token TEXT,
+    access_token_hash TEXT PRIMARY KEY,  -- Store hash, not plaintext
+    refresh_token_hash TEXT,
     client_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     scope TEXT,
+    resource TEXT,  -- MCP resource identifier for aud claim
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_client ON oauth_tokens(user_id, client_id);
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh ON oauth_tokens(refresh_token);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh ON oauth_tokens(refresh_token_hash);
 
 -- OAuth authorization codes table: temporary codes for token exchange
 CREATE TABLE IF NOT EXISTS oauth_codes (
-    code TEXT PRIMARY KEY,
+    code_hash TEXT PRIMARY KEY,  -- Store hash, not plaintext
     client_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     redirect_uri TEXT NOT NULL,
     scope TEXT,
+    resource TEXT,  -- MCP resource identifier
     code_challenge TEXT NOT NULL,
     code_challenge_method TEXT DEFAULT 'S256',
     expires_at INTEGER NOT NULL,
@@ -135,7 +139,7 @@ CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
     WHERE rowid = new.rowid;
 END;
 
--- API keys table: programmatic access keys
+-- API keys table: programmatic access keys (legacy, kept for backwards compatibility)
 CREATE TABLE IF NOT EXISTS api_keys (
     key_id TEXT PRIMARY KEY,
     key_hash TEXT NOT NULL,
@@ -144,4 +148,17 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_used INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_last_used ON api_keys(last_used);
+
+-- Personal Access Tokens table: long-lived tokens for programmatic API access
+CREATE TABLE IF NOT EXISTS personal_access_tokens (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    scope TEXT DEFAULT 'read_write',
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pat_token_hash ON personal_access_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_pat_expires_at ON personal_access_tokens(expires_at);
 `

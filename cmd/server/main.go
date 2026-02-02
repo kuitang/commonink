@@ -1,10 +1,12 @@
 // Remote Notes MicroSaaS - Main Server Entry Point
-// Milestone 3: Web UI, rate limiting, and public notes
+// Milestone 3.5: OAuth 2.1 Provider for ChatGPT and Claude Code
 
 package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,6 +32,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/internal/mcp"
 	"github.com/kuitang/agent-notes/internal/notes"
+	"github.com/kuitang/agent-notes/internal/oauth"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/web"
@@ -125,6 +128,24 @@ func main() {
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
+	// Initialize OAuth 2.1 provider (Milestone 3.5)
+	oauthHMACSecret := loadOAuthHMACSecret()
+	oauthSigningKey := loadOAuthSigningKey()
+	oauthProvider, err := oauth.NewProvider(oauth.Config{
+		DB:         sessionsDB.DB(),
+		Issuer:     baseURL,
+		Resource:   baseURL,
+		HMACSecret: oauthHMACSecret,
+		SigningKey: oauthSigningKey,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create OAuth provider: %v", err)
+	}
+	log.Println("OAuth 2.1 provider initialized")
+
+	// Initialize OAuth handler with consent service
+	oauthHandler := oauth.NewHandler(oauthProvider, sessionService, consentService, renderer)
+
 	// Initialize public notes service
 	publicNotes := notes.NewPublicNoteService(s3Client)
 
@@ -153,6 +174,16 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"remote-notes","milestone":3}`))
 	})
+
+	// Register OAuth 2.1 provider routes (Milestone 3.5)
+	// Well-known metadata endpoints (no auth required)
+	oauthProvider.RegisterMetadataRoutes(mux)
+	log.Println("OAuth metadata routes registered at /.well-known/*")
+
+	// OAuth endpoints: DCR, authorize, token
+	mux.HandleFunc("POST /oauth/register", oauthProvider.DCR)
+	oauthHandler.RegisterRoutes(mux)
+	log.Println("OAuth provider routes registered at /oauth/*")
 
 	// Register web UI routes (handles /, /login, /register, /notes/*, /public/*, /oauth/consent)
 	webHandler.RegisterRoutes(mux, authMiddleware)
@@ -185,6 +216,13 @@ func main() {
 	mux.Handle("POST /api/notes/search", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.SearchNotes))))
 	log.Println("Protected notes API routes registered at /api/notes with rate limiting")
 
+	// Register PAT (Personal Access Token) API routes
+	patHandler := auth.NewPATHandler(userService)
+	mux.Handle("POST /api/tokens", authMiddleware.RequireAuth(http.HandlerFunc(patHandler.CreatePAT)))
+	mux.Handle("GET /api/tokens", authMiddleware.RequireAuth(http.HandlerFunc(patHandler.ListPATs)))
+	mux.Handle("DELETE /api/tokens/{id}", authMiddleware.RequireAuth(http.HandlerFunc(patHandler.RevokePAT)))
+	log.Println("PAT API routes registered at /api/tokens")
+
 	// Create and mount MCP server (requires auth + rate limiting)
 	mcpHandler := &AuthenticatedMCPHandler{}
 	mux.Handle("/mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
@@ -206,6 +244,14 @@ func main() {
 	go func() {
 		log.Printf("Server listening on %s", addr)
 		log.Println("Endpoints:")
+		log.Println("  OAuth 2.1 Provider (Milestone 3.5):")
+		log.Println("    GET  /.well-known/oauth-protected-resource  - Protected resource metadata")
+		log.Println("    GET  /.well-known/oauth-authorization-server - Auth server metadata")
+		log.Println("    GET  /.well-known/jwks.json                  - JWKS for token verification")
+		log.Println("    POST /oauth/register              - Dynamic Client Registration (DCR)")
+		log.Println("    GET  /oauth/authorize             - Authorization endpoint")
+		log.Println("    POST /oauth/consent               - Consent submission")
+		log.Println("    POST /oauth/token                 - Token endpoint")
 		log.Println("  Web UI:")
 		log.Println("    GET  /                           - Landing (redirects)")
 		log.Println("    GET  /login                      - Login page")
@@ -235,6 +281,10 @@ func main() {
 		log.Println("    PUT  /api/notes/{id}             - Update note (protected)")
 		log.Println("    DELETE /api/notes/{id}           - Delete note (protected)")
 		log.Println("    POST /api/notes/search           - Search notes (protected)")
+		log.Println("  PAT API (Personal Access Tokens):")
+		log.Println("    GET  /api/tokens                 - List tokens (protected)")
+		log.Println("    POST /api/tokens                 - Create token (protected)")
+		log.Println("    DELETE /api/tokens/{id}          - Revoke token (protected)")
 		log.Println("  MCP (rate limited):")
 		log.Println("    POST /mcp                        - MCP endpoint (protected)")
 		log.Println("  Health:")
@@ -595,4 +645,53 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 // writeError writes a JSON error response with the given status code
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, ErrorResponse{Error: message})
+}
+
+// =============================================================================
+// OAuth Configuration Helpers
+// =============================================================================
+
+// loadOAuthHMACSecret loads or generates the HMAC secret for OAuth tokens.
+// In production, this should be loaded from a secure secret store.
+func loadOAuthHMACSecret() []byte {
+	secretHex := os.Getenv("OAUTH_HMAC_SECRET")
+	if secretHex != "" {
+		secret, err := hex.DecodeString(secretHex)
+		if err == nil && len(secret) >= 32 {
+			log.Println("OAuth HMAC secret loaded from environment")
+			return secret
+		}
+		log.Println("WARNING: Invalid OAUTH_HMAC_SECRET, generating random secret")
+	}
+
+	// Generate random secret for development
+	log.Println("WARNING: OAUTH_HMAC_SECRET not set, using random secret (NOT FOR PRODUCTION)")
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		log.Fatalf("Failed to generate OAuth HMAC secret: %v", err)
+	}
+	return secret
+}
+
+// loadOAuthSigningKey loads or generates the Ed25519 signing key for OAuth JWTs.
+// In production, this should be loaded from a secure key store.
+func loadOAuthSigningKey() ed25519.PrivateKey {
+	keyHex := os.Getenv("OAUTH_SIGNING_KEY")
+	if keyHex != "" {
+		keyBytes, err := hex.DecodeString(keyHex)
+		if err == nil && len(keyBytes) == ed25519.SeedSize {
+			privateKey := ed25519.NewKeyFromSeed(keyBytes)
+			log.Println("OAuth signing key loaded from environment")
+			return privateKey
+		}
+		log.Println("WARNING: Invalid OAUTH_SIGNING_KEY, generating random key")
+	}
+
+	// Generate random key for development
+	log.Println("WARNING: OAUTH_SIGNING_KEY not set, using random key (NOT FOR PRODUCTION)")
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		log.Fatalf("Failed to generate OAuth signing key: %v", err)
+	}
+	return privateKey
 }

@@ -1,0 +1,17 @@
+# Gitleaks ignore file - false positives
+
+# Example/placeholder tokens in documentation and templates
+web/templates/settings/tokens.html:curl-auth-header:189
+spec.md:curl-auth-header:727
+spec.md:generic-api-key:728
+
+# Test master keys (deterministic test data, not real secrets)
+tests/browser/public_notes_test.go:generic-api-key:35
+tests/browser/pat_settings_test.go:generic-api-key:44
+
+# Historical commits with example tokens in docs
+f50934c5fb078ddea9a82053c3b760b5e9ad27c4:web/templates/settings/tokens.html:curl-auth-header:189
+06063cb52af644e9887bf7978a6a6a347568d791:notes/testing-tools.md:curl-auth-header:537
+0e4eafc88a416012db1001ce7455df738d05a36b:notes/testing-tools.md:curl-auth-header:537
+81ae073b17df4d7c930f4c6e02961e54fdb388bf:notes/testing-tools.md:curl-auth-header:537
+4ab6ac9a38c541f14f940aeb259696505006d04a:tests/browser/public_notes_test.go:generic-api-key:35

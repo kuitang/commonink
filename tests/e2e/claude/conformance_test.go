@@ -100,18 +100,18 @@ type StreamMessage struct {
 
 // AssistantMessage represents the assistant message within a StreamMessage
 type AssistantMessage struct {
-	ID      string           `json:"id"`
-	Role    string           `json:"role"`
-	Content []ContentBlock   `json:"content"`
+	ID      string         `json:"id"`
+	Role    string         `json:"role"`
+	Content []ContentBlock `json:"content"`
 }
 
 // ContentBlock represents a content block in assistant messages
 type ContentBlock struct {
 	Type      string `json:"type"`
 	Text      string `json:"text,omitempty"`
-	ToolUseID string `json:"id,omitempty"`      // For tool_use blocks
-	Name      string `json:"name,omitempty"`    // Tool name
-	Input     any    `json:"input,omitempty"`   // Tool input
+	ToolUseID string `json:"id,omitempty"`    // For tool_use blocks
+	Name      string `json:"name,omitempty"`  // Tool name
+	Input     any    `json:"input,omitempty"` // Tool input
 	ServerID  string `json:"server_id,omitempty"`
 }
 
@@ -124,12 +124,12 @@ type ToolCall struct {
 
 // Conversation manages a streaming conversation with Claude CLI
 type Conversation struct {
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   io.ReadCloser
-	scanner  *bufio.Scanner
-	mu       sync.Mutex
-	closed   bool
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	scanner *bufio.Scanner
+	mu      sync.Mutex
+	closed  bool
 }
 
 // NewConversation starts a new streaming conversation with Claude

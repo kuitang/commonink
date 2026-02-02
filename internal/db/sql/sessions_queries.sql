@@ -105,22 +105,22 @@ DELETE FROM user_keys WHERE user_id = ?;
 -- OAuth clients operations
 
 -- name: CreateOAuthClient :exec
-INSERT INTO oauth_clients (client_id, client_secret, client_name, redirect_uris, created_at)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO oauth_clients (client_id, client_secret_hash, client_name, redirect_uris, is_public, token_endpoint_auth_method, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetOAuthClient :one
-SELECT client_id, client_secret, client_name, redirect_uris, created_at
+SELECT client_id, client_secret_hash, client_name, redirect_uris, is_public, token_endpoint_auth_method, created_at
 FROM oauth_clients
 WHERE client_id = ?;
 
 -- name: ListOAuthClients :many
-SELECT client_id, client_secret, client_name, redirect_uris, created_at
+SELECT client_id, client_secret_hash, client_name, redirect_uris, is_public, token_endpoint_auth_method, created_at
 FROM oauth_clients
 ORDER BY created_at DESC;
 
 -- name: UpdateOAuthClient :exec
 UPDATE oauth_clients
-SET client_secret = ?, client_name = ?, redirect_uris = ?
+SET client_secret_hash = ?, client_name = ?, redirect_uris = ?
 WHERE client_id = ?;
 
 -- name: DeleteOAuthClient :exec
@@ -129,27 +129,27 @@ DELETE FROM oauth_clients WHERE client_id = ?;
 -- OAuth tokens operations
 
 -- name: CreateOAuthToken :exec
-INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scope, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO oauth_tokens (access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetOAuthToken :one
-SELECT access_token, refresh_token, client_id, user_id, scope, expires_at, created_at
+SELECT access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at
 FROM oauth_tokens
-WHERE access_token = ?;
+WHERE access_token_hash = ?;
 
 -- name: GetOAuthTokenByRefresh :one
-SELECT access_token, refresh_token, client_id, user_id, scope, expires_at, created_at
+SELECT access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at
 FROM oauth_tokens
-WHERE refresh_token = ?;
+WHERE refresh_token_hash = ?;
 
 -- name: GetOAuthTokensByUserClient :many
-SELECT access_token, refresh_token, client_id, user_id, scope, expires_at, created_at
+SELECT access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at
 FROM oauth_tokens
 WHERE user_id = ? AND client_id = ?
 ORDER BY created_at DESC;
 
 -- name: DeleteOAuthToken :exec
-DELETE FROM oauth_tokens WHERE access_token = ?;
+DELETE FROM oauth_tokens WHERE access_token_hash = ?;
 
 -- name: DeleteExpiredOAuthTokens :exec
 DELETE FROM oauth_tokens WHERE expires_at < ?;
@@ -163,16 +163,21 @@ DELETE FROM oauth_tokens WHERE client_id = ?;
 -- OAuth authorization codes operations
 
 -- name: CreateOAuthCode :exec
-INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, resource, code_challenge, code_challenge_method, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetOAuthCode :one
-SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, created_at
+SELECT code_hash, client_id, user_id, redirect_uri, scope, resource, code_challenge, code_challenge_method, expires_at, created_at
 FROM oauth_codes
-WHERE code = ?;
+WHERE code_hash = ?;
+
+-- name: GetValidOAuthCode :one
+SELECT code_hash, client_id, user_id, redirect_uri, scope, resource, code_challenge, code_challenge_method, expires_at, created_at
+FROM oauth_codes
+WHERE code_hash = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER);
 
 -- name: DeleteOAuthCode :exec
-DELETE FROM oauth_codes WHERE code = ?;
+DELETE FROM oauth_codes WHERE code_hash = ?;
 
 -- name: DeleteExpiredOAuthCodes :exec
 DELETE FROM oauth_codes WHERE expires_at < ?;

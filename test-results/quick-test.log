@@ -1,13 +1,314 @@
-# github.com/mutecomm/go-sqlcipher
-sqlite3.c: In function ‘sqlite3SelectNew’:
-sqlite3.c:120891:10: warning: function may return address of local variable [-Wreturn-local-addr]
-120891 |   return pNew;
-       |          ^~~~
-sqlite3.c:120852:10: note: declared here
-120852 |   Select standin;
-       |          ^~~~~~~
+# github.com/mutecomm/go-sqlcipher/v4
+sqlite3.c: In function ‘sqlite3Fts5IndexQuery’:
+sqlite3.c:226667:18: warning: ‘memcpy’ specified bound 18446744073709551615 exceeds maximum object size 9223372036854775807 [-Wstringop-overflow=]
+226667 |     if( nToken ) memcpy(&buf.p[1], pToken, nToken);
+       |                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ?   	github.com/kuitang/agent-notes/cmd/server	[no test files]
-=== RUN   TestExample
---- PASS: TestExample (0.00s)
+?   	github.com/kuitang/agent-notes/internal/api	[no test files]
+=== RUN   TestSessionID_HighEntropy
+    session_test.go:11: [rapid] OK, passed 100 tests (178.561µs)
+--- PASS: TestSessionID_HighEntropy (0.00s)
+=== RUN   TestSessionID_Length
+    session_test.go:37: [rapid] OK, passed 100 tests (100.961µs)
+--- PASS: TestSessionID_Length (0.00s)
+=== RUN   TestPassword_HashVerify_Roundtrip
+    user_test.go:11: [rapid] OK, passed 100 tests (29.994952s)
+--- PASS: TestPassword_HashVerify_Roundtrip (30.00s)
+=== RUN   TestPassword_WrongPassword_FailsVerify
+    user_test.go:28: [rapid] OK, passed 100 tests (31.589577444s)
+--- PASS: TestPassword_WrongPassword_FailsVerify (31.59s)
+=== RUN   TestPassword_HashNotDeterministic
+    user_test.go:47: [rapid] OK, passed 100 tests (31.472439283s)
+--- PASS: TestPassword_HashNotDeterministic (31.47s)
+=== RUN   TestPassword_Validation
+    user_test.go:68: [rapid] OK, passed 100 tests (5.998562ms)
+--- PASS: TestPassword_Validation (0.01s)
+=== RUN   TestPassword_Validation_ValidPasswords
+    user_test.go:85: [rapid] OK, passed 100 tests (371.722µs)
+--- PASS: TestPassword_Validation_ValidPasswords (0.00s)
 PASS
-ok  	github.com/kuitang/agent-notes/tests/e2e	0.004s
+ok  	github.com/kuitang/agent-notes/internal/auth	93.166s
+=== RUN   TestCrypto_EncryptDecrypt_Roundtrip
+    crypto_test.go:13: [rapid] OK, passed 100 tests (1.576011ms)
+--- PASS: TestCrypto_EncryptDecrypt_Roundtrip (0.00s)
+=== RUN   TestCrypto_KEK_Deterministic
+    crypto_test.go:36: [rapid] OK, passed 100 tests (1.38505ms)
+--- PASS: TestCrypto_KEK_Deterministic (0.00s)
+=== RUN   TestCrypto_KEK_DifferentInputs_DifferentOutputs
+    crypto_test.go:53: [rapid] OK, passed 100 tests (7.244211ms)
+--- PASS: TestCrypto_KEK_DifferentInputs_DifferentOutputs (0.01s)
+=== RUN   TestCrypto_KEK_DifferentVersions_DifferentOutputs
+    crypto_test.go:73: [rapid] OK, passed 100 tests (1.42049ms)
+--- PASS: TestCrypto_KEK_DifferentVersions_DifferentOutputs (0.00s)
+=== RUN   TestCrypto_WrongKEK_FailsDecrypt
+    crypto_test.go:91: [rapid] OK, passed 100 tests (19.665779ms)
+--- PASS: TestCrypto_WrongKEK_FailsDecrypt (0.02s)
+=== RUN   TestCrypto_DEK_Length
+    crypto_test.go:118: [rapid] OK, passed 100 tests (203.961µs)
+--- PASS: TestCrypto_DEK_Length (0.00s)
+=== RUN   TestCrypto_KEK_Length
+    crypto_test.go:132: [rapid] OK, passed 100 tests (1.017007ms)
+--- PASS: TestCrypto_KEK_Length (0.00s)
+=== RUN   TestCrypto_Encryption_NonDeterministic
+    crypto_test.go:148: [rapid] OK, passed 100 tests (1.576491ms)
+--- PASS: TestCrypto_Encryption_NonDeterministic (0.00s)
+=== RUN   TestCrypto_InvalidKeySize_RejectsEncrypt
+    crypto_test.go:190: [rapid] OK, passed 100 tests (1.065967ms)
+--- PASS: TestCrypto_InvalidKeySize_RejectsEncrypt (0.00s)
+=== RUN   TestCrypto_InvalidDEKSize_RejectsEncrypt
+    crypto_test.go:209: [rapid] OK, passed 100 tests (1.087968ms)
+--- PASS: TestCrypto_InvalidDEKSize_RejectsEncrypt (0.00s)
+=== RUN   TestCrypto_TruncatedCiphertext_FailsDecrypt
+    crypto_test.go:229: [rapid] OK, passed 100 tests (1.243648ms)
+--- PASS: TestCrypto_TruncatedCiphertext_FailsDecrypt (0.00s)
+=== RUN   TestCrypto_ModifiedCiphertext_FailsDecrypt
+    crypto_test.go:252: [rapid] OK, passed 100 tests (1.281129ms)
+--- PASS: TestCrypto_ModifiedCiphertext_FailsDecrypt (0.02s)
+=== RUN   TestKeyManager_GetOrCreate_Roundtrip
+    keymanager_test.go:37: [rapid] OK, passed 100 tests (6.935612769s)
+--- PASS: TestKeyManager_GetOrCreate_Roundtrip (6.94s)
+=== RUN   TestKeyManager_GetUserDEK_AfterCreate
+    keymanager_test.go:83: [rapid] OK, passed 100 tests (7.833789976s)
+--- PASS: TestKeyManager_GetUserDEK_AfterCreate (7.83s)
+=== RUN   TestKeyManager_GetUserDEK_NotFound
+    keymanager_test.go:123: [rapid] OK, passed 100 tests (6.502950596s)
+--- PASS: TestKeyManager_GetUserDEK_NotFound (6.50s)
+=== RUN   TestKeyManager_RotateKEK_PreservesDEK
+    keymanager_test.go:155: [rapid] OK, passed 100 tests (7.321729047s)
+--- PASS: TestKeyManager_RotateKEK_PreservesDEK (7.32s)
+=== RUN   TestKeyManager_RotateKEK_NotFound
+    keymanager_test.go:200: [rapid] OK, passed 100 tests (6.912358182s)
+--- PASS: TestKeyManager_RotateKEK_NotFound (6.91s)
+=== RUN   TestKeyManager_MultipleRotations
+    keymanager_test.go:232: [rapid] OK, passed 100 tests (9.901838673s)
+--- PASS: TestKeyManager_MultipleRotations (9.90s)
+=== RUN   TestKeyManager_DifferentUsers_DifferentDEKs
+    keymanager_test.go:280: [rapid] OK, passed 100 tests (6.687901915s)
+--- PASS: TestKeyManager_DifferentUsers_DifferentDEKs (6.69s)
+=== RUN   TestKeyManager_DifferentMasterKeys_DifferentDEKs
+    keymanager_test.go:323: [rapid] OK, passed 100 tests (7.306635764s)
+--- PASS: TestKeyManager_DifferentMasterKeys_DifferentDEKs (7.31s)
+PASS
+ok  	github.com/kuitang/agent-notes/internal/crypto	59.486s
+=== RUN   TestSessionsDB_Singleton_Properties
+    db_test.go:119: [rapid] OK, passed 100 tests (4.819985034s)
+--- PASS: TestSessionsDB_Singleton_Properties (4.82s)
+=== RUN   TestSessionsDB_Schema_Properties
+    db_test.go:164: [rapid] OK, passed 100 tests (3.821539761s)
+--- PASS: TestSessionsDB_Schema_Properties (3.82s)
+=== RUN   TestUserDB_ValidUserID_Properties
+    db_test.go:213: [rapid] OK, passed 100 tests (4.501651611s)
+--- PASS: TestUserDB_ValidUserID_Properties (4.50s)
+=== RUN   TestUserDB_EmptyUserID_Properties
+    db_test.go:241: [rapid] OK, passed 100 tests (3.714786ms)
+--- PASS: TestUserDB_EmptyUserID_Properties (0.00s)
+=== RUN   TestUserDB_Schema_Properties
+    db_test.go:296: [rapid] OK, passed 100 tests (4.36300434s)
+--- PASS: TestUserDB_Schema_Properties (4.36s)
+=== RUN   TestUserDB_MultipleUsers_Isolation_Properties
+    db_test.go:376: [rapid] OK, passed 100 tests (18.424710233s)
+--- PASS: TestUserDB_MultipleUsers_Isolation_Properties (18.42s)
+=== RUN   TestUserDB_FTS5_Sync_Properties
+    db_test.go:473: [rapid] OK, passed 100 tests (6.638228933s)
+--- PASS: TestUserDB_FTS5_Sync_Properties (6.64s)
+=== RUN   TestUserDB_ContentSizeLimit_Properties
+    db_test.go:535: [rapid] OK, passed 100 tests (14.02058951s)
+--- PASS: TestUserDB_ContentSizeLimit_Properties (14.02s)
+=== RUN   TestInitSchemas_Properties
+    db_test.go:594: [rapid] OK, passed 100 tests (15.259842267s)
+--- PASS: TestInitSchemas_Properties (15.26s)
+=== RUN   TestCloseAll_Properties
+    db_test.go:633: [rapid] OK, passed 100 tests (18.757223591s)
+--- PASS: TestCloseAll_Properties (18.76s)
+=== RUN   TestGetHardcodedDEK_Properties
+    db_test.go:664: [rapid] OK, passed 100 tests (53.48µs)
+--- PASS: TestGetHardcodedDEK_Properties (0.00s)
+=== RUN   TestUserDB_Encryption_Roundtrip_Properties
+    db_test.go:726: [rapid] OK, passed 100 tests (7.767432572s)
+--- PASS: TestUserDB_Encryption_Roundtrip_Properties (7.77s)
+=== RUN   TestSessionsDB_CRUD_Properties
+    db_test.go:804: [rapid] OK, passed 100 tests (6.87531254s)
+--- PASS: TestSessionsDB_CRUD_Properties (6.88s)
+=== RUN   TestUserDB_FTS5_ArbitraryQuery_Properties
+    db_test.go:877: [rapid] OK, passed 100 tests (7.108932764s)
+--- PASS: TestUserDB_FTS5_ArbitraryQuery_Properties (7.11s)
+=== RUN   TestUserDB_FTS5_ArbitraryQueryCount_Properties
+    db_test.go:922: [rapid] OK, passed 100 tests (6.231353708s)
+--- PASS: TestUserDB_FTS5_ArbitraryQueryCount_Properties (6.23s)
+=== RUN   TestMilestone1Setup
+--- PASS: TestMilestone1Setup (0.13s)
+=== RUN   TestDatabaseEncryption
+    integration_test.go:234: Database encryption test passed. File is encrypted with SQLCipher.
+--- PASS: TestDatabaseEncryption (0.05s)
+=== RUN   TestMilestone1Constants
+--- PASS: TestMilestone1Constants (0.00s)
+=== RUN   TestMilestone1QuickStart
+    integration_test.go:337: Milestone 1 quick start test passed!
+--- PASS: TestMilestone1QuickStart (0.11s)
+=== RUN   TestMilestone1FTS5Search
+    integration_test.go:419: Milestone 1 FTS5 search test passed!
+--- PASS: TestMilestone1FTS5Search (0.13s)
+=== RUN   TestConcurrentDatabaseAccess
+    integration_test.go:511: Concurrent operations: 100/100 succeeded (100.0%)
+--- PASS: TestConcurrentDatabaseAccess (0.21s)
+PASS
+ok  	github.com/kuitang/agent-notes/internal/db	(cached)
+?   	github.com/kuitang/agent-notes/internal/db/sessions	[no test files]
+?   	github.com/kuitang/agent-notes/internal/db/testutil	[no test files]
+?   	github.com/kuitang/agent-notes/internal/db/userdb	[no test files]
+?   	github.com/kuitang/agent-notes/internal/email	[no test files]
+?   	github.com/kuitang/agent-notes/internal/mcp	[no test files]
+=== RUN   TestCreate_Roundtrip_Properties
+    notes_test.go:116: [rapid] fail file "testdata/rapid/TestCreate_Roundtrip_Properties/TestCreate_Roundtrip_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:116: [rapid] OK, passed 100 tests (1.473348872s)
+--- PASS: TestCreate_Roundtrip_Properties (1.47s)
+=== RUN   TestCreate_RequiresTitle_Properties
+    notes_test.go:144: [rapid] fail file "testdata/rapid/TestCreate_RequiresTitle_Properties/TestCreate_RequiresTitle_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:144: [rapid] OK, passed 100 tests (599.413212ms)
+--- PASS: TestCreate_RequiresTitle_Properties (0.60s)
+=== RUN   TestCreate_AllowsEmptyContent_Properties
+    notes_test.go:175: [rapid] fail file "testdata/rapid/TestCreate_AllowsEmptyContent_Properties/TestCreate_AllowsEmptyContent_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:175: [rapid] OK, passed 100 tests (711.65204ms)
+--- PASS: TestCreate_AllowsEmptyContent_Properties (0.71s)
+=== RUN   TestRead_NonExistent_Properties
+    notes_test.go:200: [rapid] fail file "testdata/rapid/TestRead_NonExistent_Properties/TestRead_NonExistent_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:200: [rapid] OK, passed 100 tests (328.970392ms)
+--- PASS: TestRead_NonExistent_Properties (0.33s)
+=== RUN   TestRead_EmptyID_Properties
+    notes_test.go:223: [rapid] OK, passed 100 tests (600.600581ms)
+--- PASS: TestRead_EmptyID_Properties (0.60s)
+=== RUN   TestUpdate_FieldsModified_Properties
+    notes_test.go:292: [rapid] fail file "testdata/rapid/TestUpdate_FieldsModified_Properties/TestUpdate_FieldsModified_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:292: [rapid] OK, passed 100 tests (710.850195ms)
+--- PASS: TestUpdate_FieldsModified_Properties (0.71s)
+=== RUN   TestUpdate_NonExistent_Properties
+    notes_test.go:320: [rapid] fail file "testdata/rapid/TestUpdate_NonExistent_Properties/TestUpdate_NonExistent_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:320: [rapid] OK, passed 100 tests (418.892143ms)
+--- PASS: TestUpdate_NonExistent_Properties (0.42s)
+=== RUN   TestUpdate_EmptyID_Properties
+    notes_test.go:347: [rapid] fail file "testdata/rapid/TestUpdate_EmptyID_Properties/TestUpdate_EmptyID_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:347: [rapid] OK, passed 100 tests (456.427928ms)
+--- PASS: TestUpdate_EmptyID_Properties (0.46s)
+=== RUN   TestDelete_RemovesNote_Properties
+    notes_test.go:388: [rapid] fail file "testdata/rapid/TestDelete_RemovesNote_Properties/TestDelete_RemovesNote_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:388: [rapid] OK, passed 100 tests (643.389762ms)
+--- PASS: TestDelete_RemovesNote_Properties (0.64s)
+=== RUN   TestDelete_NonExistent_Properties
+    notes_test.go:413: [rapid] fail file "testdata/rapid/TestDelete_NonExistent_Properties/TestDelete_NonExistent_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:413: [rapid] OK, passed 100 tests (649.624246ms)
+--- PASS: TestDelete_NonExistent_Properties (0.65s)
+=== RUN   TestDelete_EmptyID_Properties
+    notes_test.go:436: [rapid] OK, passed 100 tests (631.910201ms)
+--- PASS: TestDelete_EmptyID_Properties (0.63s)
+=== RUN   TestList_Pagination_Properties
+    notes_test.go:498: [rapid] fail file "testdata/rapid/TestList_Pagination_Properties/TestList_Pagination_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:498: [rapid] OK, passed 100 tests (640.758104ms)
+--- PASS: TestList_Pagination_Properties (0.64s)
+=== RUN   TestList_MaxLimit_Properties
+    notes_test.go:528: [rapid] fail file "testdata/rapid/TestList_MaxLimit_Properties/TestList_MaxLimit_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:528: [rapid] OK, passed 100 tests (394.877015ms)
+--- PASS: TestList_MaxLimit_Properties (0.40s)
+=== RUN   TestList_DefaultLimit_Properties
+    notes_test.go:558: [rapid] fail file "testdata/rapid/TestList_DefaultLimit_Properties/TestList_DefaultLimit_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:558: [rapid] OK, passed 100 tests (785.2544ms)
+--- PASS: TestList_DefaultLimit_Properties (0.79s)
+=== RUN   TestSearch_FindsByContent_Properties
+    notes_test.go:621: [rapid] fail file "testdata/rapid/TestSearch_FindsByContent_Properties/TestSearch_FindsByContent_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:621: [rapid] OK, passed 100 tests (962.681206ms)
+--- PASS: TestSearch_FindsByContent_Properties (0.96s)
+=== RUN   TestSearch_EmptyQuery_Properties
+    notes_test.go:644: [rapid] OK, passed 100 tests (761.18211ms)
+--- PASS: TestSearch_EmptyQuery_Properties (0.76s)
+=== RUN   TestSearch_NoMatches_Properties
+    notes_test.go:688: [rapid] fail file "testdata/rapid/TestSearch_NoMatches_Properties/TestSearch_NoMatches_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:688: [rapid] OK, passed 100 tests (670.476753ms)
+--- PASS: TestSearch_NoMatches_Properties (0.67s)
+=== RUN   TestCRUD_Workflow_Consistency_Properties
+    notes_test.go:759: [rapid] fail file "testdata/rapid/TestCRUD_Workflow_Consistency_Properties/TestCRUD_Workflow_Consistency_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:759: [rapid] OK, passed 100 tests (1.05835488s)
+--- PASS: TestCRUD_Workflow_Consistency_Properties (1.06s)
+=== RUN   TestMultipleNotes_Independence_Properties
+    notes_test.go:829: [rapid] fail file "testdata/rapid/TestMultipleNotes_Independence_Properties/TestMultipleNotes_Independence_Properties-20260202103530-3832551.fail" is no longer valid
+    notes_test.go:829: [rapid] OK, passed 100 tests (1.341721552s)
+--- PASS: TestMultipleNotes_Independence_Properties (1.35s)
+=== RUN   TestPublic_AccessibleAfterSetPublic_Properties
+    public_test.go:94: [rapid] fail file "testdata/rapid/TestPublic_AccessibleAfterSetPublic_Properties/TestPublic_AccessibleAfterSetPublic_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:94: [rapid] OK, passed 100 tests (1.870925434s)
+--- PASS: TestPublic_AccessibleAfterSetPublic_Properties (1.95s)
+=== RUN   TestPublic_PrivateReturnsError_Properties
+    public_test.go:186: [rapid] fail file "testdata/rapid/TestPublic_PrivateReturnsError_Properties/TestPublic_PrivateReturnsError_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:186: [rapid] OK, passed 100 tests (1.635258498s)
+--- PASS: TestPublic_PrivateReturnsError_Properties (1.64s)
+=== RUN   TestPublic_OwnerCanToggle_Properties
+    public_test.go:275: [rapid] fail file "testdata/rapid/TestPublic_OwnerCanToggle_Properties/TestPublic_OwnerCanToggle_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:275: [rapid] OK, passed 100 tests (2.24421954s)
+--- PASS: TestPublic_OwnerCanToggle_Properties (2.25s)
+=== RUN   TestPublic_ListReturnsOnlyPublic_Properties
+    public_test.go:359: [rapid] fail file "testdata/rapid/TestPublic_ListReturnsOnlyPublic_Properties/TestPublic_ListReturnsOnlyPublic_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:359: [rapid] OK, passed 100 tests (1.646551379s)
+--- PASS: TestPublic_ListReturnsOnlyPublic_Properties (1.67s)
+=== RUN   TestPublic_S3ObjectCreatedDeleted_Properties
+    public_test.go:450: [rapid] fail file "testdata/rapid/TestPublic_S3ObjectCreatedDeleted_Properties/TestPublic_S3ObjectCreatedDeleted_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:450: [rapid] OK, passed 100 tests (1.637102393s)
+--- PASS: TestPublic_S3ObjectCreatedDeleted_Properties (1.65s)
+=== RUN   TestPublic_SetPublicNonExistent_Properties
+    public_test.go:549: [rapid] fail file "testdata/rapid/TestPublic_SetPublicNonExistent_Properties/TestPublic_SetPublicNonExistent_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:549: [rapid] OK, passed 100 tests (1.728848279s)
+--- PASS: TestPublic_SetPublicNonExistent_Properties (1.75s)
+=== RUN   TestPublic_SetPublicEmptyID_Properties
+    public_test.go:603: [rapid] OK, passed 100 tests (1.193965757s)
+--- PASS: TestPublic_SetPublicEmptyID_Properties (1.22s)
+=== RUN   TestPublic_GetPublicEmptyID_Properties
+    public_test.go:652: [rapid] OK, passed 100 tests (1.297232524s)
+--- PASS: TestPublic_GetPublicEmptyID_Properties (1.31s)
+=== RUN   TestPublic_GetPublicURL_Properties
+    public_test.go:701: [rapid] fail file "testdata/rapid/TestPublic_GetPublicURL_Properties/TestPublic_GetPublicURL_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:701: [rapid] OK, passed 100 tests (1.019809733s)
+--- PASS: TestPublic_GetPublicURL_Properties (1.04s)
+=== RUN   TestPublic_ListPagination_Properties
+    public_test.go:763: [rapid] fail file "testdata/rapid/TestPublic_ListPagination_Properties/TestPublic_ListPagination_Properties-20260202103530-3832551.fail" is no longer valid
+    public_test.go:763: [rapid] OK, passed 100 tests (2.948625142s)
+--- PASS: TestPublic_ListPagination_Properties (2.96s)
+PASS
+ok  	github.com/kuitang/agent-notes/internal/notes	31.824s
+?   	github.com/kuitang/agent-notes/internal/oauth	[no test files]
+=== RUN   TestRateLimiter_RequestsWithinLimit
+    limiter_test.go:72: [rapid] OK, passed 100 tests (1.41401ms)
+--- PASS: TestRateLimiter_RequestsWithinLimit (0.00s)
+=== RUN   TestRateLimiter_ExceedingLimitBlocked
+    limiter_test.go:118: [rapid] OK, passed 100 tests (1.017847ms)
+--- PASS: TestRateLimiter_ExceedingLimitBlocked (0.00s)
+=== RUN   TestRateLimiter_UserIndependence
+    limiter_test.go:166: [rapid] OK, passed 100 tests (1.40653ms)
+--- PASS: TestRateLimiter_UserIndependence (0.00s)
+=== RUN   TestRateLimiter_PaidUsersHigherLimits
+    limiter_test.go:227: [rapid] OK, passed 100 tests (2.389258ms)
+--- PASS: TestRateLimiter_PaidUsersHigherLimits (0.01s)
+=== RUN   TestRateLimiter_IdleLimiterCleanup
+    limiter_test.go:281: [rapid] OK, passed 100 tests (1.588555016s)
+--- PASS: TestRateLimiter_IdleLimiterCleanup (1.59s)
+=== RUN   TestRateLimiter_ActiveLimiterNotCleaned
+    limiter_test.go:340: [rapid] OK, passed 100 tests (6.094706654s)
+--- PASS: TestRateLimiter_ActiveLimiterNotCleaned (6.09s)
+=== RUN   TestRateLimiter_ConcurrentAccess
+    limiter_test.go:417: [rapid] OK, passed 100 tests (17.733686ms)
+--- PASS: TestRateLimiter_ConcurrentAccess (0.02s)
+=== RUN   TestRateLimiter_GetLimiterConsistency
+    limiter_test.go:456: [rapid] OK, passed 100 tests (13.020333ms)
+--- PASS: TestRateLimiter_GetLimiterConsistency (0.01s)
+=== RUN   TestRateLimiter_TierChangeCreatesNewLimiter
+    limiter_test.go:502: [rapid] OK, passed 100 tests (748.165µs)
+--- PASS: TestRateLimiter_TierChangeCreatesNewLimiter (0.00s)
+=== RUN   TestRateLimiter_LenReturnsCorrectCount
+    limiter_test.go:550: [rapid] OK, passed 100 tests (4.716594ms)
+--- PASS: TestRateLimiter_LenReturnsCorrectCount (0.00s)
+=== RUN   TestRateLimiter_DefaultConfigValid
+    limiter_test.go:593: [rapid] OK, passed 100 tests (4.531192ms)
+--- PASS: TestRateLimiter_DefaultConfigValid (0.00s)
+=== RUN   TestRateLimiter_StopGracefulShutdown
+    limiter_test.go:639: [rapid] OK, passed 100 tests (2.042294ms)
+--- PASS: TestRateLimiter_StopGracefulShutdown (0.00s)
+PASS
+ok  	github.com/kuitang/agent-notes/internal/ratelimit	(cached)
+?   	github.com/kuitang/agent-notes/internal/s3client	[no test files]
+?   	github.com/kuitang/agent-notes/internal/web	[no test files]

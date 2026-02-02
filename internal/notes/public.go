@@ -206,15 +206,15 @@ const publicNoteHTMLTemplate = `<!DOCTYPE html>
 <body>
     <article>
         <h1>{{.Title}}</h1>
-        <div class="content">{{.ContentHTML}}</div>
+        <div class="content"><pre>{{.Content}}</pre></div>
     </article>
 </body>
 </html>`
 
 type publicNoteTemplateData struct {
-	Title       string
-	ContentHTML template.HTML
-	URL         string
+	Title   string
+	Content string // Plain text content - template will escape it
+	URL     string
 }
 
 // renderNoteHTML renders a note's content to HTML.
@@ -226,14 +226,11 @@ func renderNoteHTML(title, content, userID, noteID string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
 
-	// For now, treat content as plain text (escaped)
-	// Wrap in <pre> to preserve formatting
-	contentHTML := template.HTML("<pre>" + template.HTMLEscapeString(content) + "</pre>")
-
+	// Pass content as plain text - template will escape it automatically
 	data := publicNoteTemplateData{
-		Title:       title,
-		ContentHTML: contentHTML,
-		URL:         fmt.Sprintf("/public/%s/%s", userID, noteID),
+		Title:   title,
+		Content: content, // Template escapes this when rendering
+		URL:     fmt.Sprintf("/public/%s/%s", userID, noteID),
 	}
 
 	var buf bytes.Buffer

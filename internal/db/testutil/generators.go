@@ -16,18 +16,18 @@ import (
 // - Very long strings
 func ArbitraryString() *rapid.Generator[string] {
 	return rapid.OneOf(
-		rapid.String(),                                    // Truly arbitrary (rapid's default)
-		rapid.Just(""),                                    // Empty string
-		rapid.Just("\x00"),                                // Single null byte
-		rapid.Just("test\x00test"),                        // Embedded null
-		rapid.Just("\x00\x00\x00"),                        // Multiple nulls
-		rapid.StringMatching(`[a-zA-Z0-9 ]{0,100}`),       // Normal alphanumeric
-		rapid.StringMatching(`[\x00-\x1F]{1,10}`),         // Control characters
-		arbitrarySQLInjection(),                           // SQL injection attempts
-		arbitraryFTS5Syntax(),                             // FTS5 special syntax
-		arbitraryUnicode(),                                // Unicode edge cases
-		arbitraryWhitespace(),                             // Whitespace variations
-		arbitraryLongString(),                             // Long strings
+		rapid.String(),                              // Truly arbitrary (rapid's default)
+		rapid.Just(""),                              // Empty string
+		rapid.Just("\x00"),                          // Single null byte
+		rapid.Just("test\x00test"),                  // Embedded null
+		rapid.Just("\x00\x00\x00"),                  // Multiple nulls
+		rapid.StringMatching(`[a-zA-Z0-9 ]{0,100}`), // Normal alphanumeric
+		rapid.StringMatching(`[\x00-\x1F]{1,10}`),   // Control characters
+		arbitrarySQLInjection(),                     // SQL injection attempts
+		arbitraryFTS5Syntax(),                       // FTS5 special syntax
+		arbitraryUnicode(),                          // Unicode edge cases
+		arbitraryWhitespace(),                       // Whitespace variations
+		arbitraryLongString(),                       // Long strings
 	)
 }
 
@@ -129,32 +129,32 @@ func arbitraryFTS5Syntax() *rapid.Generator[string] {
 // arbitraryUnicode generates various Unicode edge cases
 func arbitraryUnicode() *rapid.Generator[string] {
 	return rapid.SampledFrom([]string{
-		"日本語",                              // Japanese
-		"中文测试",                             // Chinese
-		"العربية",                            // Arabic (RTL)
-		"עברית",                              // Hebrew (RTL)
-		"🔥🎉💻🚀",                            // Emoji
-		"emoji🔥in🎉middle",                   // Mixed emoji
-		"Ñoño",                               // Spanish
-		"Zürich",                             // German umlaut
-		"Москва",                             // Cyrillic
-		"Ελληνικά",                           // Greek
-		"한국어",                               // Korean
-		"\u200B",                             // Zero-width space
-		"\u200C",                             // Zero-width non-joiner
-		"\u200D",                             // Zero-width joiner
-		"\uFEFF",                             // BOM
-		"a\u0300",                            // Combining diacritical
-		"\u202E" + "reversed" + "\u202C",     // RTL override
-		"🧑‍💻",                               // ZWJ sequence (person + computer)
-		"👨‍👩‍👧‍👦",                          // Family emoji (ZWJ sequence)
-		"\U0001F1FA\U0001F1F8",               // Flag emoji (regional indicators)
-		"é" + "\u0301",                       // Double combining
-		"test\u00A0space",                    // Non-breaking space
-		"line\u2028separator",                // Line separator
-		"para\u2029separator",                // Paragraph separator
-		"\U0001F600",                         // Grinning face emoji
-		"math∑∏∫",                            // Mathematical symbols
+		"日本語",                            // Japanese
+		"中文测试",                           // Chinese
+		"العربية",                        // Arabic (RTL)
+		"עברית",                          // Hebrew (RTL)
+		"🔥🎉💻🚀",                           // Emoji
+		"emoji🔥in🎉middle",                // Mixed emoji
+		"Ñoño",                           // Spanish
+		"Zürich",                         // German umlaut
+		"Москва",                         // Cyrillic
+		"Ελληνικά",                       // Greek
+		"한국어",                            // Korean
+		"\u200B",                         // Zero-width space
+		"\u200C",                         // Zero-width non-joiner
+		"\u200D",                         // Zero-width joiner
+		"\uFEFF",                         // BOM
+		"a\u0300",                        // Combining diacritical
+		"\u202E" + "reversed" + "\u202C", // RTL override
+		"🧑‍💻",                            // ZWJ sequence (person + computer)
+		"👨‍👩‍👧‍👦",                        // Family emoji (ZWJ sequence)
+		"\U0001F1FA\U0001F1F8",           // Flag emoji (regional indicators)
+		"é" + "\u0301",                   // Double combining
+		"test\u00A0space",                // Non-breaking space
+		"line\u2028separator",            // Line separator
+		"para\u2029separator",            // Paragraph separator
+		"\U0001F600",                     // Grinning face emoji
+		"math∑∏∫",                        // Mathematical symbols
 	})
 }
 
@@ -175,12 +175,12 @@ func arbitraryWhitespace() *rapid.Generator[string] {
 		"\ttest\t",
 		"line1\nline2",
 		"line1\r\nline2",
-		"\u00A0",     // Non-breaking space
-		"\u2003",     // Em space
-		"\u2002",     // En space
-		"\u3000",     // Ideographic space
-		"\v",         // Vertical tab
-		"\f",         // Form feed
+		"\u00A0", // Non-breaking space
+		"\u2003", // Em space
+		"\u2002", // En space
+		"\u3000", // Ideographic space
+		"\v",     // Vertical tab
+		"\f",     // Form feed
 	})
 }
 
@@ -220,12 +220,12 @@ func ValidUserID() *rapid.Generator[string] {
 func ArbitraryUserID() *rapid.Generator[string] {
 	return rapid.OneOf(
 		ValidUserID(),
-		rapid.Just(""),          // Empty
-		rapid.Just("\x00"),      // Null byte
-		rapid.Just("../escape"), // Path traversal
-		rapid.Just("/root"),     // Absolute path
-		rapid.Just("a/b"),       // Slash in name
+		rapid.Just(""),           // Empty
+		rapid.Just("\x00"),       // Null byte
+		rapid.Just("../escape"),  // Path traversal
+		rapid.Just("/root"),      // Absolute path
+		rapid.Just("a/b"),        // Slash in name
 		rapid.Just("user\x00id"), // Embedded null
-		ArbitraryString(),       // Fully arbitrary
+		ArbitraryString(),        // Fully arbitrary
 	)
 }

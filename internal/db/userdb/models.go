@@ -41,3 +41,13 @@ type Note struct {
 	CreatedAt int64         `json:"created_at"`
 	UpdatedAt int64         `json:"updated_at"`
 }
+
+type PersonalAccessToken struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	TokenHash  string         `json:"token_hash"`
+	Scope      sql.NullString `json:"scope"`
+	ExpiresAt  int64          `json:"expires_at"`
+	CreatedAt  int64          `json:"created_at"`
+	LastUsedAt sql.NullInt64  `json:"last_used_at"`
+}

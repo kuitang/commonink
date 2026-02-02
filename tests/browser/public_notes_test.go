@@ -63,13 +63,9 @@ func (ts *publicNotesTestServer) close() {
 func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	t.Helper()
 
-	// Create temporary directory for test databases
-	tempDir := t.TempDir()
-	originalDataDir := os.Getenv("DATA_DIR")
-	os.Setenv("DATA_DIR", tempDir)
-	t.Cleanup(func() {
-		os.Setenv("DATA_DIR", originalDataDir)
-	})
+	// Reset database singleton and set fresh data directory
+	db.ResetForTesting()
+	db.DataDirectory = t.TempDir()
 
 	// Create fake S3 server
 	backend := s3mem.New()
@@ -324,7 +320,7 @@ func TestBrowser_PublishNote(t *testing.T) {
 	}
 
 	// Submit the form
-	err = page.Locator("button[type='submit']").Click()
+	err = page.Locator("button[type='submit']:has-text('Create Note')").Click()
 	if err != nil {
 		t.Fatalf("failed to click submit: %v", err)
 	}
@@ -369,8 +365,8 @@ func TestBrowser_PublishNote(t *testing.T) {
 		t.Fatalf("failed to wait for page load: %v", err)
 	}
 
-	// Verify public badge appears
-	publicBadge := page.Locator("span:has-text('Public')")
+	// Verify public badge appears (use specific class to avoid matching "Public Share Link")
+	publicBadge := page.Locator("span.bg-green-100:has-text('Public')")
 	isBadgeVisible, err := publicBadge.IsVisible()
 	if err != nil {
 		t.Fatalf("failed to check public badge visibility: %v", err)
@@ -448,7 +444,7 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = authPage.Locator("button[type='submit']").Click()
+	err = authPage.Locator("button[type='submit']:has-text('Create Note')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit form: %v", err)
 	}
@@ -590,7 +586,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = page.Locator("button[type='submit']").Click()
+	err = page.Locator("button[type='submit']:has-text('Create Note')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit: %v", err)
 	}
@@ -620,8 +616,8 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 		t.Fatalf("failed to wait for load: %v", err)
 	}
 
-	// Verify it's now public
-	publicBadge := page.Locator("span:has-text('Public')")
+	// Verify it's now public (use specific class to avoid matching "Public Share Link")
+	publicBadge := page.Locator("span.bg-green-100:has-text('Public')")
 	isPublic, err := publicBadge.IsVisible()
 	if err != nil {
 		t.Fatalf("failed to check badge: %v", err)
@@ -747,7 +743,7 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = authPage.Locator("button[type='submit']").Click()
+	err = authPage.Locator("button[type='submit']:has-text('Create Note')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit: %v", err)
 	}
@@ -884,7 +880,7 @@ func TestBrowser_ShareLinkWorks(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = authPage.Locator("button[type='submit']").Click()
+	err = authPage.Locator("button[type='submit']:has-text('Create Note')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit: %v", err)
 	}

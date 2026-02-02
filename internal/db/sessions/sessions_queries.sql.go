@@ -60,25 +60,29 @@ func (q *Queries) CreateMagicToken(ctx context.Context, arg CreateMagicTokenPara
 
 const createOAuthClient = `-- name: CreateOAuthClient :exec
 
-INSERT INTO oauth_clients (client_id, client_secret, client_name, redirect_uris, created_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO oauth_clients (client_id, client_secret_hash, client_name, redirect_uris, is_public, token_endpoint_auth_method, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateOAuthClientParams struct {
-	ClientID     string         `json:"client_id"`
-	ClientSecret string         `json:"client_secret"`
-	ClientName   sql.NullString `json:"client_name"`
-	RedirectUris string         `json:"redirect_uris"`
-	CreatedAt    int64          `json:"created_at"`
+	ClientID                string         `json:"client_id"`
+	ClientSecretHash        sql.NullString `json:"client_secret_hash"`
+	ClientName              sql.NullString `json:"client_name"`
+	RedirectUris            string         `json:"redirect_uris"`
+	IsPublic                int64          `json:"is_public"`
+	TokenEndpointAuthMethod sql.NullString `json:"token_endpoint_auth_method"`
+	CreatedAt               int64          `json:"created_at"`
 }
 
 // OAuth clients operations
 func (q *Queries) CreateOAuthClient(ctx context.Context, arg CreateOAuthClientParams) error {
 	_, err := q.db.ExecContext(ctx, createOAuthClient,
 		arg.ClientID,
-		arg.ClientSecret,
+		arg.ClientSecretHash,
 		arg.ClientName,
 		arg.RedirectUris,
+		arg.IsPublic,
+		arg.TokenEndpointAuthMethod,
 		arg.CreatedAt,
 	)
 	return err
@@ -86,16 +90,17 @@ func (q *Queries) CreateOAuthClient(ctx context.Context, arg CreateOAuthClientPa
 
 const createOAuthCode = `-- name: CreateOAuthCode :exec
 
-INSERT INTO oauth_codes (code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, scope, resource, code_challenge, code_challenge_method, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateOAuthCodeParams struct {
-	Code                string         `json:"code"`
+	CodeHash            string         `json:"code_hash"`
 	ClientID            string         `json:"client_id"`
 	UserID              string         `json:"user_id"`
 	RedirectUri         string         `json:"redirect_uri"`
 	Scope               sql.NullString `json:"scope"`
+	Resource            sql.NullString `json:"resource"`
 	CodeChallenge       string         `json:"code_challenge"`
 	CodeChallengeMethod sql.NullString `json:"code_challenge_method"`
 	ExpiresAt           int64          `json:"expires_at"`
@@ -105,11 +110,12 @@ type CreateOAuthCodeParams struct {
 // OAuth authorization codes operations
 func (q *Queries) CreateOAuthCode(ctx context.Context, arg CreateOAuthCodeParams) error {
 	_, err := q.db.ExecContext(ctx, createOAuthCode,
-		arg.Code,
+		arg.CodeHash,
 		arg.ClientID,
 		arg.UserID,
 		arg.RedirectUri,
 		arg.Scope,
+		arg.Resource,
 		arg.CodeChallenge,
 		arg.CodeChallengeMethod,
 		arg.ExpiresAt,
@@ -120,28 +126,30 @@ func (q *Queries) CreateOAuthCode(ctx context.Context, arg CreateOAuthCodeParams
 
 const createOAuthToken = `-- name: CreateOAuthToken :exec
 
-INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scope, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO oauth_tokens (access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateOAuthTokenParams struct {
-	AccessToken  string         `json:"access_token"`
-	RefreshToken sql.NullString `json:"refresh_token"`
-	ClientID     string         `json:"client_id"`
-	UserID       string         `json:"user_id"`
-	Scope        sql.NullString `json:"scope"`
-	ExpiresAt    int64          `json:"expires_at"`
-	CreatedAt    int64          `json:"created_at"`
+	AccessTokenHash  string         `json:"access_token_hash"`
+	RefreshTokenHash sql.NullString `json:"refresh_token_hash"`
+	ClientID         string         `json:"client_id"`
+	UserID           string         `json:"user_id"`
+	Scope            sql.NullString `json:"scope"`
+	Resource         sql.NullString `json:"resource"`
+	ExpiresAt        int64          `json:"expires_at"`
+	CreatedAt        int64          `json:"created_at"`
 }
 
 // OAuth tokens operations
 func (q *Queries) CreateOAuthToken(ctx context.Context, arg CreateOAuthTokenParams) error {
 	_, err := q.db.ExecContext(ctx, createOAuthToken,
-		arg.AccessToken,
-		arg.RefreshToken,
+		arg.AccessTokenHash,
+		arg.RefreshTokenHash,
 		arg.ClientID,
 		arg.UserID,
 		arg.Scope,
+		arg.Resource,
 		arg.ExpiresAt,
 		arg.CreatedAt,
 	)
@@ -280,20 +288,20 @@ func (q *Queries) DeleteOAuthClient(ctx context.Context, clientID string) error 
 }
 
 const deleteOAuthCode = `-- name: DeleteOAuthCode :exec
-DELETE FROM oauth_codes WHERE code = ?
+DELETE FROM oauth_codes WHERE code_hash = ?
 `
 
-func (q *Queries) DeleteOAuthCode(ctx context.Context, code string) error {
-	_, err := q.db.ExecContext(ctx, deleteOAuthCode, code)
+func (q *Queries) DeleteOAuthCode(ctx context.Context, codeHash string) error {
+	_, err := q.db.ExecContext(ctx, deleteOAuthCode, codeHash)
 	return err
 }
 
 const deleteOAuthToken = `-- name: DeleteOAuthToken :exec
-DELETE FROM oauth_tokens WHERE access_token = ?
+DELETE FROM oauth_tokens WHERE access_token_hash = ?
 `
 
-func (q *Queries) DeleteOAuthToken(ctx context.Context, accessToken string) error {
-	_, err := q.db.ExecContext(ctx, deleteOAuthToken, accessToken)
+func (q *Queries) DeleteOAuthToken(ctx context.Context, accessTokenHash string) error {
+	_, err := q.db.ExecContext(ctx, deleteOAuthToken, accessTokenHash)
 	return err
 }
 
@@ -398,7 +406,7 @@ func (q *Queries) GetMagicTokensByEmail(ctx context.Context, email string) ([]Ma
 }
 
 const getOAuthClient = `-- name: GetOAuthClient :one
-SELECT client_id, client_secret, client_name, redirect_uris, created_at
+SELECT client_id, client_secret_hash, client_name, redirect_uris, is_public, token_endpoint_auth_method, created_at
 FROM oauth_clients
 WHERE client_id = ?
 `
@@ -408,29 +416,32 @@ func (q *Queries) GetOAuthClient(ctx context.Context, clientID string) (OauthCli
 	var i OauthClient
 	err := row.Scan(
 		&i.ClientID,
-		&i.ClientSecret,
+		&i.ClientSecretHash,
 		&i.ClientName,
 		&i.RedirectUris,
+		&i.IsPublic,
+		&i.TokenEndpointAuthMethod,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getOAuthCode = `-- name: GetOAuthCode :one
-SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, created_at
+SELECT code_hash, client_id, user_id, redirect_uri, scope, resource, code_challenge, code_challenge_method, expires_at, created_at
 FROM oauth_codes
-WHERE code = ?
+WHERE code_hash = ?
 `
 
-func (q *Queries) GetOAuthCode(ctx context.Context, code string) (OauthCode, error) {
-	row := q.db.QueryRowContext(ctx, getOAuthCode, code)
+func (q *Queries) GetOAuthCode(ctx context.Context, codeHash string) (OauthCode, error) {
+	row := q.db.QueryRowContext(ctx, getOAuthCode, codeHash)
 	var i OauthCode
 	err := row.Scan(
-		&i.Code,
+		&i.CodeHash,
 		&i.ClientID,
 		&i.UserID,
 		&i.RedirectUri,
 		&i.Scope,
+		&i.Resource,
 		&i.CodeChallenge,
 		&i.CodeChallengeMethod,
 		&i.ExpiresAt,
@@ -440,20 +451,21 @@ func (q *Queries) GetOAuthCode(ctx context.Context, code string) (OauthCode, err
 }
 
 const getOAuthToken = `-- name: GetOAuthToken :one
-SELECT access_token, refresh_token, client_id, user_id, scope, expires_at, created_at
+SELECT access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at
 FROM oauth_tokens
-WHERE access_token = ?
+WHERE access_token_hash = ?
 `
 
-func (q *Queries) GetOAuthToken(ctx context.Context, accessToken string) (OauthToken, error) {
-	row := q.db.QueryRowContext(ctx, getOAuthToken, accessToken)
+func (q *Queries) GetOAuthToken(ctx context.Context, accessTokenHash string) (OauthToken, error) {
+	row := q.db.QueryRowContext(ctx, getOAuthToken, accessTokenHash)
 	var i OauthToken
 	err := row.Scan(
-		&i.AccessToken,
-		&i.RefreshToken,
+		&i.AccessTokenHash,
+		&i.RefreshTokenHash,
 		&i.ClientID,
 		&i.UserID,
 		&i.Scope,
+		&i.Resource,
 		&i.ExpiresAt,
 		&i.CreatedAt,
 	)
@@ -461,20 +473,21 @@ func (q *Queries) GetOAuthToken(ctx context.Context, accessToken string) (OauthT
 }
 
 const getOAuthTokenByRefresh = `-- name: GetOAuthTokenByRefresh :one
-SELECT access_token, refresh_token, client_id, user_id, scope, expires_at, created_at
+SELECT access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at
 FROM oauth_tokens
-WHERE refresh_token = ?
+WHERE refresh_token_hash = ?
 `
 
-func (q *Queries) GetOAuthTokenByRefresh(ctx context.Context, refreshToken sql.NullString) (OauthToken, error) {
-	row := q.db.QueryRowContext(ctx, getOAuthTokenByRefresh, refreshToken)
+func (q *Queries) GetOAuthTokenByRefresh(ctx context.Context, refreshTokenHash sql.NullString) (OauthToken, error) {
+	row := q.db.QueryRowContext(ctx, getOAuthTokenByRefresh, refreshTokenHash)
 	var i OauthToken
 	err := row.Scan(
-		&i.AccessToken,
-		&i.RefreshToken,
+		&i.AccessTokenHash,
+		&i.RefreshTokenHash,
 		&i.ClientID,
 		&i.UserID,
 		&i.Scope,
+		&i.Resource,
 		&i.ExpiresAt,
 		&i.CreatedAt,
 	)
@@ -482,7 +495,7 @@ func (q *Queries) GetOAuthTokenByRefresh(ctx context.Context, refreshToken sql.N
 }
 
 const getOAuthTokensByUserClient = `-- name: GetOAuthTokensByUserClient :many
-SELECT access_token, refresh_token, client_id, user_id, scope, expires_at, created_at
+SELECT access_token_hash, refresh_token_hash, client_id, user_id, scope, resource, expires_at, created_at
 FROM oauth_tokens
 WHERE user_id = ? AND client_id = ?
 ORDER BY created_at DESC
@@ -503,11 +516,12 @@ func (q *Queries) GetOAuthTokensByUserClient(ctx context.Context, arg GetOAuthTo
 	for rows.Next() {
 		var i OauthToken
 		if err := rows.Scan(
-			&i.AccessToken,
-			&i.RefreshToken,
+			&i.AccessTokenHash,
+			&i.RefreshTokenHash,
 			&i.ClientID,
 			&i.UserID,
 			&i.Scope,
+			&i.Resource,
 			&i.ExpiresAt,
 			&i.CreatedAt,
 		); err != nil {
@@ -613,6 +627,30 @@ func (q *Queries) GetValidMagicToken(ctx context.Context, tokenHash string) (Mag
 	return i, err
 }
 
+const getValidOAuthCode = `-- name: GetValidOAuthCode :one
+SELECT code_hash, client_id, user_id, redirect_uri, scope, resource, code_challenge, code_challenge_method, expires_at, created_at
+FROM oauth_codes
+WHERE code_hash = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)
+`
+
+func (q *Queries) GetValidOAuthCode(ctx context.Context, codeHash string) (OauthCode, error) {
+	row := q.db.QueryRowContext(ctx, getValidOAuthCode, codeHash)
+	var i OauthCode
+	err := row.Scan(
+		&i.CodeHash,
+		&i.ClientID,
+		&i.UserID,
+		&i.RedirectUri,
+		&i.Scope,
+		&i.Resource,
+		&i.CodeChallenge,
+		&i.CodeChallengeMethod,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getValidSession = `-- name: GetValidSession :one
 SELECT session_id, user_id, expires_at, created_at FROM sessions WHERE session_id = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)
 `
@@ -630,7 +668,7 @@ func (q *Queries) GetValidSession(ctx context.Context, sessionID string) (Sessio
 }
 
 const listOAuthClients = `-- name: ListOAuthClients :many
-SELECT client_id, client_secret, client_name, redirect_uris, created_at
+SELECT client_id, client_secret_hash, client_name, redirect_uris, is_public, token_endpoint_auth_method, created_at
 FROM oauth_clients
 ORDER BY created_at DESC
 `
@@ -646,9 +684,11 @@ func (q *Queries) ListOAuthClients(ctx context.Context) ([]OauthClient, error) {
 		var i OauthClient
 		if err := rows.Scan(
 			&i.ClientID,
-			&i.ClientSecret,
+			&i.ClientSecretHash,
 			&i.ClientName,
 			&i.RedirectUris,
+			&i.IsPublic,
+			&i.TokenEndpointAuthMethod,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -666,20 +706,20 @@ func (q *Queries) ListOAuthClients(ctx context.Context) ([]OauthClient, error) {
 
 const updateOAuthClient = `-- name: UpdateOAuthClient :exec
 UPDATE oauth_clients
-SET client_secret = ?, client_name = ?, redirect_uris = ?
+SET client_secret_hash = ?, client_name = ?, redirect_uris = ?
 WHERE client_id = ?
 `
 
 type UpdateOAuthClientParams struct {
-	ClientSecret string         `json:"client_secret"`
-	ClientName   sql.NullString `json:"client_name"`
-	RedirectUris string         `json:"redirect_uris"`
-	ClientID     string         `json:"client_id"`
+	ClientSecretHash sql.NullString `json:"client_secret_hash"`
+	ClientName       sql.NullString `json:"client_name"`
+	RedirectUris     string         `json:"redirect_uris"`
+	ClientID         string         `json:"client_id"`
 }
 
 func (q *Queries) UpdateOAuthClient(ctx context.Context, arg UpdateOAuthClientParams) error {
 	_, err := q.db.ExecContext(ctx, updateOAuthClient,
-		arg.ClientSecret,
+		arg.ClientSecretHash,
 		arg.ClientName,
 		arg.RedirectUris,
 		arg.ClientID,

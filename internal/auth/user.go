@@ -235,8 +235,14 @@ func VerifyPassword(password, encodedHash string) bool {
 		return false
 	}
 
+	// Validate hash length is reasonable (Argon2 output is typically 32 bytes)
+	hashLen := len(hashBytes)
+	if hashLen <= 0 || hashLen > argon2KeyLen*2 {
+		return false
+	}
+
 	// Compute hash of provided password
-	computedHash := argon2.IDKey([]byte(password), saltBytes, time, memory, threads, uint32(len(hashBytes)))
+	computedHash := argon2.IDKey([]byte(password), saltBytes, time, memory, threads, uint32(hashLen))
 
 	// Constant-time comparison
 	return subtle.ConstantTimeCompare(hashBytes, computedHash) == 1

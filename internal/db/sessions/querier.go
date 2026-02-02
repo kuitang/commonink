@@ -37,8 +37,8 @@ type Querier interface {
 	DeleteMagicToken(ctx context.Context, tokenHash string) error
 	DeleteMagicTokensByEmail(ctx context.Context, email string) error
 	DeleteOAuthClient(ctx context.Context, clientID string) error
-	DeleteOAuthCode(ctx context.Context, code string) error
-	DeleteOAuthToken(ctx context.Context, accessToken string) error
+	DeleteOAuthCode(ctx context.Context, codeHash string) error
+	DeleteOAuthToken(ctx context.Context, accessTokenHash string) error
 	DeleteOAuthTokensByClientID(ctx context.Context, clientID string) error
 	DeleteOAuthTokensByUserID(ctx context.Context, userID string) error
 	DeleteSession(ctx context.Context, sessionID string) error
@@ -48,14 +48,15 @@ type Querier interface {
 	GetMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
 	GetMagicTokensByEmail(ctx context.Context, email string) ([]MagicToken, error)
 	GetOAuthClient(ctx context.Context, clientID string) (OauthClient, error)
-	GetOAuthCode(ctx context.Context, code string) (OauthCode, error)
-	GetOAuthToken(ctx context.Context, accessToken string) (OauthToken, error)
-	GetOAuthTokenByRefresh(ctx context.Context, refreshToken sql.NullString) (OauthToken, error)
+	GetOAuthCode(ctx context.Context, codeHash string) (OauthCode, error)
+	GetOAuthToken(ctx context.Context, accessTokenHash string) (OauthToken, error)
+	GetOAuthTokenByRefresh(ctx context.Context, refreshTokenHash sql.NullString) (OauthToken, error)
 	GetOAuthTokensByUserClient(ctx context.Context, arg GetOAuthTokensByUserClientParams) ([]OauthToken, error)
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	GetSessionsByUserID(ctx context.Context, userID string) ([]Session, error)
 	GetUserKey(ctx context.Context, userID string) (UserKey, error)
 	GetValidMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
+	GetValidOAuthCode(ctx context.Context, codeHash string) (OauthCode, error)
 	GetValidSession(ctx context.Context, sessionID string) (Session, error)
 	ListConsentsForUser(ctx context.Context, userID string) ([]OauthConsent, error)
 	ListOAuthClients(ctx context.Context) ([]OauthClient, error)

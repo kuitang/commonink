@@ -128,3 +128,33 @@ DELETE FROM api_keys WHERE key_id = ?;
 
 -- name: CountAPIKeys :one
 SELECT COUNT(*) FROM api_keys;
+
+-- Personal Access Token operations
+
+-- name: CreatePAT :exec
+INSERT INTO personal_access_tokens (id, name, token_hash, scope, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: GetPATByHash :one
+SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
+FROM personal_access_tokens
+WHERE token_hash = ?;
+
+-- name: GetPATByID :one
+SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
+FROM personal_access_tokens
+WHERE id = ?;
+
+-- name: ListPATs :many
+SELECT id, name, scope, expires_at, created_at, last_used_at
+FROM personal_access_tokens
+ORDER BY created_at DESC;
+
+-- name: UpdatePATLastUsed :exec
+UPDATE personal_access_tokens SET last_used_at = ? WHERE id = ?;
+
+-- name: DeletePAT :exec
+DELETE FROM personal_access_tokens WHERE id = ?;
+
+-- name: CountPATs :one
+SELECT COUNT(*) FROM personal_access_tokens;

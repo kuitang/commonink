@@ -12,6 +12,7 @@ import (
 type Querier interface {
 	CountAPIKeys(ctx context.Context) (int64, error)
 	CountNotes(ctx context.Context) (int64, error)
+	CountPATs(ctx context.Context) (int64, error)
 	CountPublicNotes(ctx context.Context) (int64, error)
 	// FTS5 search operations
 	// Note: FTS5 queries are handled separately in Go code due to sqlc limitations with virtual tables
@@ -23,17 +24,23 @@ type Querier interface {
 	CreateAccount(ctx context.Context, arg CreateAccountParams) error
 	// Notes CRUD operations
 	CreateNote(ctx context.Context, arg CreateNoteParams) error
+	// Personal Access Token operations
+	CreatePAT(ctx context.Context, arg CreatePATParams) error
 	DeleteAPIKey(ctx context.Context, keyID string) error
 	DeleteAccount(ctx context.Context, userID string) error
 	DeleteNote(ctx context.Context, id string) error
+	DeletePAT(ctx context.Context, id string) error
 	GetAPIKey(ctx context.Context, keyID string) (ApiKey, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
 	GetAccount(ctx context.Context, userID string) (Account, error)
 	GetAccountByEmail(ctx context.Context, email string) (Account, error)
 	GetAccountByGoogleSub(ctx context.Context, googleSub sql.NullString) (Account, error)
 	GetNote(ctx context.Context, id string) (Note, error)
+	GetPATByHash(ctx context.Context, tokenHash string) (PersonalAccessToken, error)
+	GetPATByID(ctx context.Context, id string) (PersonalAccessToken, error)
 	ListAPIKeys(ctx context.Context) ([]ApiKey, error)
 	ListNotes(ctx context.Context, arg ListNotesParams) ([]Note, error)
+	ListPATs(ctx context.Context) ([]ListPATsRow, error)
 	ListPublicNotes(ctx context.Context, arg ListPublicNotesParams) ([]Note, error)
 	NoteExists(ctx context.Context, id string) (int64, error)
 	UpdateAPIKeyLastUsed(ctx context.Context, arg UpdateAPIKeyLastUsedParams) error
@@ -48,6 +55,7 @@ type Querier interface {
 	UpdateNoteContent(ctx context.Context, arg UpdateNoteContentParams) error
 	UpdateNotePublic(ctx context.Context, arg UpdateNotePublicParams) error
 	UpdateNoteTitle(ctx context.Context, arg UpdateNoteTitleParams) error
+	UpdatePATLastUsed(ctx context.Context, arg UpdatePATLastUsedParams) error
 }
 
 var _ Querier = (*Queries)(nil)

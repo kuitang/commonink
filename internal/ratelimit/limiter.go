@@ -19,11 +19,11 @@ type Config struct {
 
 // DefaultConfig provides sensible defaults for rate limiting.
 var DefaultConfig = Config{
-	FreeRPS:         10,         // 10 requests/second
-	FreeBurst:       20,         // Allow burst of 20
-	PaidRPS:         1000,       // Effectively unlimited for paid
-	PaidBurst:       2000,       // Large burst for paid
-	CleanupInterval: time.Hour,  // Clean up idle limiters every hour
+	FreeRPS:         10,        // 10 requests/second
+	FreeBurst:       20,        // Allow burst of 20
+	PaidRPS:         1000,      // Effectively unlimited for paid
+	PaidBurst:       2000,      // Large burst for paid
+	CleanupInterval: time.Hour, // Clean up idle limiters every hour
 }
 
 // rateLimiterEntry holds a rate limiter and tracks its last usage.

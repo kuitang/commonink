@@ -60,7 +60,13 @@ Per-user via stdlib `golang.org/x/time/rate`:
 
 ### Public Notes
 
-URL: `yourdomain.com/public/{user_id}/{note_id}` (no subdomain)
+**Storage**: Fly.io Tigris (S3-compatible, global CDN built-in)
+- Interface: `ObjectStorage` (M3 mock → M4+ Tigris)
+- Pre-render Markdown → HTML with SEO tags
+- Upload to: `public/{user_id}/{note_id}.html`
+- URL: `yourdomain.com/public/{user_id}/{note_id}`
+
+**See**: `DEPLOYMENT_ARCHITECTURE.md` for Tigris setup, local MinIO, and cost details.
 
 ---
 
@@ -174,6 +180,7 @@ URL: `yourdomain.com/public/{user_id}/{note_id}` (no subdomain)
 │ │   • login.html                                         │
 │ │   • oauth_consent.html                                 │
 │ │   • notes_list.html (minimal UI)                       │
+│ │   • settings_tokens.html (PAT management)              │
 │ │                                                         │
 │ └── static/         - CSS, JS (minimal)                  │
 └─────────────────────────────────────────────────────────┘
@@ -223,6 +230,13 @@ JSON-RPC Methods:
   - tools/list              - List available tools
   - tools/call              - Execute tool
   - notifications/cancelled - Cancel running operation
+```
+
+### Personal Access Tokens (PAT)
+```
+POST /api/tokens            - Create PAT (requires email + password)
+GET  /api/tokens            - List user's PATs (session auth required)
+DELETE /api/tokens/{id}     - Revoke a PAT (session auth required)
 ```
 
 ### Payments
@@ -347,12 +361,14 @@ CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
     WHERE rowid = new.rowid;
 END;
 
-CREATE TABLE api_keys (
-    key_id TEXT PRIMARY KEY,
-    key_hash TEXT NOT NULL,
-    scope TEXT DEFAULT 'read_write',
+CREATE TABLE personal_access_tokens (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    scope TEXT DEFAULT 'read_write',  -- 'read' or 'read_write'
+    expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
-    last_used INTEGER
+    last_used_at INTEGER
 );
 ```
 
@@ -366,13 +382,15 @@ CREATE TABLE api_keys (
 - **is_public**: Boolean flag for public sharing
 - **FTS5 triggers**: Auto-sync with full-text search index
 
-### API Keys Schema
+### Personal Access Tokens Schema
 
-Users can create API keys for programmatic access:
-- **key_id**: Unique identifier (shown to user)
-- **key_hash**: Argon2id hash of the actual key
-- **scope**: read_only or read_write
-- **last_used**: Track usage for cleanup
+Users can create PATs for programmatic access (alternative to OAuth):
+- **id**: Unique identifier (shown to user as `token_id`)
+- **name**: User-provided description for the token
+- **token_hash**: Argon2id hash of the actual token
+- **scope**: `read` or `read_write`
+- **expires_at**: Token expiration (1 year from creation)
+- **last_used_at**: Track usage for cleanup and audit
 
 ---
 
@@ -638,6 +656,123 @@ SQLite DB (encrypted at rest)
 
 ---
 
+## Personal Access Token (PAT) Specification
+
+PATs allow users to authenticate programmatically without going through the OAuth flow. Useful for CLI tools, scripts, and local MCP clients.
+
+### Create PAT
+
+**Endpoint**: `POST /api/tokens`
+
+**Request** (no session required - uses email/password):
+```json
+{
+  "email": "user@example.com",
+  "password": "user_password",
+  "name": "My CLI Token",
+  "scope": "read_write"
+}
+```
+
+**Response** (token shown ONCE, never stored in plaintext):
+```json
+{
+  "token": "pat_a1b2c3d4e5f6...",
+  "token_id": "tok_abc123",
+  "name": "My CLI Token",
+  "scope": "read_write",
+  "expires_at": "2027-02-02T10:00:00Z",
+  "created_at": "2026-02-02T10:00:00Z"
+}
+```
+
+**Scope Values:**
+- `read` - Read-only access to notes
+- `read_write` - Full access to notes (default)
+
+### List PATs
+
+**Endpoint**: `GET /api/tokens`
+
+**Auth**: Session cookie required
+
+**Response** (actual token values are NEVER returned - only metadata for management):
+```json
+{
+  "tokens": [
+    {
+      "token_id": "tok_abc123",
+      "name": "My CLI Token",
+      "scope": "read_write",
+      "created_at": "2026-02-02T10:00:00Z",
+      "last_used_at": "2026-02-02T15:30:00Z"
+    }
+  ]
+}
+```
+
+### Revoke PAT
+
+**Endpoint**: `DELETE /api/tokens/{token_id}`
+
+**Auth**: Session cookie required
+
+**Response**: `204 No Content`
+
+### Using PATs
+
+PATs can be used as Bearer tokens for MCP and API requests:
+
+```bash
+curl -X POST https://your-domain.com/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer pat_a1b2c3d4e5f6..." \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+```
+
+**Acceptance Criteria:**
+- PAT created only with valid email/password
+- Token shown once on creation, never retrievable again
+- Tokens hashed (Argon2id) before storage
+- PATs expire after 1 year
+- PAT authentication works for MCP and API endpoints
+- `last_used_at` updated on each use
+- Revoking PAT immediately invalidates it
+
+### PAT Management UI
+
+**Route**: `GET /settings/tokens`
+
+**Auth**: Session cookie required
+
+**UI Flow**:
+
+1. **Token List View** (default)
+   - Table showing all user's PATs: name, scope, created_at, last_used_at
+   - "Revoke" button per token (confirmation dialog)
+   - "Create New Token" button
+
+2. **Create Token Form**
+   - Name field (required, for user's reference)
+   - Scope dropdown: "Read & Write" (default), "Read Only"
+   - Password field (re-authenticate to create token)
+   - "Generate Token" button
+
+3. **Token Created Modal** (shown once after creation)
+   - Display token value with copy button
+   - Warning: "This token will only be shown once. Copy it now."
+   - "Done" button (dismisses modal, token never shown again)
+
+4. **Revoke Confirmation Dialog**
+   - "Are you sure? This will immediately invalidate the token."
+   - "Cancel" / "Revoke" buttons
+
+**Template**: `web/templates/settings_tokens.html`
+
+**Implementation**: UI calls same backend API endpoints (`POST/GET/DELETE /api/tokens`)
+
+---
+
 ## Testing Strategy
 
 See `notes/testing-strategy.md` for full details. Summary:
@@ -894,7 +1029,7 @@ All architectural decisions finalized for MVP:
 | **Organization** | Flat list with tags (no folders) |
 | **Deletion** | Hard delete (no versioning) |
 | **Auth methods** | Magic Login + Email/Password + Google OIDC |
-| **API keys** | Supported (stored in user DB) |
+| **PAT (API tokens)** | Supported - email/password → 1-year token (stored hashed in user DB) |
 | **OAuth tokens** | Shared `sessions.db` |
 | **Search** | FTS5 default weighting, native operators |
 | **Web UI** | Minimal (OAuth consent + basic CRUD) |

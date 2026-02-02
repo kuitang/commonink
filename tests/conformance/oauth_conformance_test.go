@@ -1,5 +1,3 @@
-// TODO: These tests have not been run yet - implementation pending
-//
 // Package conformance implements a unified OAuth conformance test client that supports
 // BOTH ChatGPT (confidential client) and Claude (public client) OAuth flows.
 //
@@ -17,20 +15,34 @@
 package conformance
 
 import (
-	"crypto/rand"
+	"context"
+	"crypto/ed25519"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
+
+	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/db"
+	"github.com/kuitang/agent-notes/internal/email"
+	"github.com/kuitang/agent-notes/internal/oauth"
+	"github.com/kuitang/agent-notes/internal/web"
 )
 
 // =============================================================================
@@ -65,7 +77,9 @@ func ChatGPTConfig() ClientConfig {
 		RedirectURIs: []string{
 			"https://chatgpt.com/connector_platform_oauth_redirect",
 		},
-		TokenEndpointAuthMethod: "", // Confidential client - uses client_secret
+		// Confidential client - uses client_secret
+		// ChatGPT sends client_secret_post for token endpoint authentication
+		TokenEndpointAuthMethod: "client_secret_post",
 	}
 }
 
@@ -266,12 +280,16 @@ func (c *OAuthConformanceTest) Step3_DynamicClientRegistration() {
 		ResponseTypes: []string{"code"},
 	}
 
-	// Claude-specific: Add token_endpoint_auth_method: "none" for public client
+	// Set token_endpoint_auth_method based on client mode
+	if c.config.TokenEndpointAuthMethod != "" {
+		dcrReq.TokenEndpointAuthMethod = c.config.TokenEndpointAuthMethod
+	}
+
+	// Log based on client type
 	if c.config.Mode == ClientModeClaude {
-		dcrReq.TokenEndpointAuthMethod = "none"
 		c.t.Log("  [INFO] Registering as PUBLIC client (token_endpoint_auth_method=none)")
 	} else {
-		c.t.Log("  [INFO] Registering as CONFIDENTIAL client")
+		c.t.Logf("  [INFO] Registering as CONFIDENTIAL client (token_endpoint_auth_method=%s)", c.config.TokenEndpointAuthMethod)
 	}
 
 	body, err := json.Marshal(dcrReq)
@@ -726,23 +744,392 @@ func TestOAuthConformance_Properties(t *testing.T) {
 
 func generateSecureRandom(length int) string {
 	bytes := make([]byte, length)
-	_, err := rand.Read(bytes)
+	_, err := crand.Read(bytes)
 	if err != nil {
 		panic(err)
 	}
 	return hex.EncodeToString(bytes)[:length]
 }
 
+// =============================================================================
+// TEST SERVER SETUP
+// =============================================================================
+
+// testServer wraps httptest.Server with additional test helpers
+type testServer struct {
+	*httptest.Server
+	t              *testing.T
+	oauthProvider  *oauth.Provider
+	sessionService *auth.SessionService
+	consentService *auth.ConsentService
+	userService    *auth.UserService
+	sessionsDB     *db.SessionsDB
+}
+
+// setupTestServer creates a fully configured test server with all OAuth routes
 func setupTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	// TODO: Wire up actual server handlers
-	// This should create an httptest.Server with the OAuth provider handlers
-	//
-	// Example:
-	//   handler := server.NewHandler(...)
-	//   return httptest.NewServer(handler)
-	//
-	// For now, return nil to indicate implementation pending
-	t.Skip("Test server setup not yet implemented")
-	return nil
+
+	ts := setupTestServerWithHelpers(t)
+	return ts.Server
+}
+
+// setupTestServerWithHelpers creates a test server with helpers for advanced testing
+func setupTestServerWithHelpers(t *testing.T) *testServer {
+	t.Helper()
+
+	// Reset database singleton and set fresh data directory for test isolation
+	db.ResetForTesting()
+	db.DataDirectory = t.TempDir()
+
+	// Initialize sessions database (now uses fresh directory)
+	sessionsDB, err := db.OpenSessionsDB()
+	require.NoError(t, err, "Failed to open sessions database")
+
+	// Generate test HMAC secret and signing key
+	hmacSecret := make([]byte, 32)
+	_, err = crand.Read(hmacSecret)
+	require.NoError(t, err, "Failed to generate HMAC secret")
+
+	_, signingKey, err := ed25519.GenerateKey(crand.Reader)
+	require.NoError(t, err, "Failed to generate signing key")
+
+	// Create mux for routing
+	mux := http.NewServeMux()
+
+	// Start httptest server first to get the URL
+	server := httptest.NewServer(mux)
+
+	// Create OAuth provider with server URL as issuer
+	oauthProvider, err := oauth.NewProvider(oauth.Config{
+		DB:         sessionsDB.DB(),
+		Issuer:     server.URL,
+		Resource:   server.URL,
+		HMACSecret: hmacSecret,
+		SigningKey: signingKey,
+	})
+	require.NoError(t, err, "Failed to create OAuth provider")
+
+	// Create services
+	emailService := email.NewMockEmailService()
+	sessionService := auth.NewSessionService(sessionsDB)
+	consentService := auth.NewConsentService(sessionsDB)
+	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+
+	// Find templates directory for renderer
+	templatesDir := findConformanceTemplatesDir()
+	renderer, err := web.NewRenderer(templatesDir)
+	require.NoError(t, err, "Failed to create renderer from templates at %s", templatesDir)
+
+	// Create OAuth handler
+	oauthHandler := oauth.NewHandler(oauthProvider, sessionService, consentService, renderer)
+
+	// Register OAuth metadata routes
+	oauthProvider.RegisterMetadataRoutes(mux)
+
+	// Register OAuth endpoints
+	mux.HandleFunc("POST /oauth/register", oauthProvider.DCR)
+	oauthHandler.RegisterRoutes(mux)
+
+	// Register a simple login endpoint for testing
+	mux.HandleFunc("POST /auth/login", func(w http.ResponseWriter, r *http.Request) {
+		handleTestLogin(w, r, userService, sessionService)
+	})
+	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
+		handleTestLoginPage(w, r)
+	})
+
+	// Register MCP endpoint (simple stub for token verification test)
+	mux.HandleFunc("POST /mcp", func(w http.ResponseWriter, r *http.Request) {
+		handleTestMCP(w, r, oauthProvider)
+	})
+
+	// Cleanup on test completion
+	t.Cleanup(func() {
+		server.Close()
+		db.ResetForTesting()
+	})
+
+	return &testServer{
+		Server:         server,
+		t:              t,
+		oauthProvider:  oauthProvider,
+		sessionService: sessionService,
+		consentService: consentService,
+		userService:    userService,
+		sessionsDB:     sessionsDB,
+	}
+}
+
+// findConformanceTemplatesDir locates the templates directory for tests.
+func findConformanceTemplatesDir() string {
+	candidates := []string{
+		"../../web/templates",
+		"../../../web/templates",
+		"web/templates",
+		"./web/templates",
+		"/home/kuitang/git/agent-notes/web/templates",
+	}
+
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "base.html")); err == nil {
+			return dir
+		}
+	}
+
+	// Fallback - panic with helpful message
+	panic("Cannot find templates directory. Tried: " + strings.Join(candidates, ", "))
+}
+
+// =============================================================================
+// TEST HANDLERS
+// =============================================================================
+
+// handleTestLogin handles POST /auth/login for testing
+func handleTestLogin(w http.ResponseWriter, r *http.Request, userService *auth.UserService, sessionService *auth.SessionService) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+
+	email := r.FormValue("email")
+	// password := r.FormValue("password") // Not validated in test mode
+
+	if email == "" {
+		http.Error(w, "Email required", http.StatusBadRequest)
+		return
+	}
+
+	// Find or create user
+	user, err := userService.FindOrCreateByEmail(r.Context(), email)
+	if err != nil {
+		http.Error(w, "User error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Create session
+	sessionID, err := sessionService.Create(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "Session error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Set session cookie
+	auth.SetCookie(w, sessionID)
+
+	// Check for return_to parameter
+	returnTo := r.URL.Query().Get("return_to")
+	if returnTo != "" {
+		http.Redirect(w, r, returnTo, http.StatusFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":     "ok",
+		"session_id": sessionID,
+		"user_id":    user.ID,
+	})
+}
+
+// handleTestLoginPage handles GET /login for testing
+func handleTestLoginPage(w http.ResponseWriter, r *http.Request) {
+	returnTo := r.URL.Query().Get("return_to")
+
+	html := `<!DOCTYPE html>
+<html>
+<head><title>Login</title></head>
+<body>
+<h1>Login</h1>
+<form method="POST" action="/auth/login?return_to=` + url.QueryEscape(returnTo) + `">
+<input type="email" name="email" placeholder="Email" required>
+<input type="password" name="password" placeholder="Password">
+<button type="submit">Login</button>
+</form>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(html))
+}
+
+// handleTestMCP handles POST /mcp for token verification testing
+func handleTestMCP(w http.ResponseWriter, r *http.Request, provider *oauth.Provider) {
+	// Check Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		// Return 401 with WWW-Authenticate header
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+provider.Resource()+`/.well-known/oauth-protected-resource"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse Bearer token
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		http.Error(w, "Invalid authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+
+	// Verify token
+	_, err := provider.VerifyAccessToken(token)
+	if err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		http.Error(w, "Invalid token: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Return successful MCP response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"result": map[string]interface{}{
+			"tools": []interface{}{},
+		},
+	})
+}
+
+// =============================================================================
+// TEST HELPERS
+// =============================================================================
+
+// createTestUser creates a user and returns their credentials
+func createTestUser(t *testing.T, ts *testServer, userEmail string) (userID string) {
+	t.Helper()
+
+	// Create user via the user service
+	ctx := context.Background()
+	user, err := ts.userService.FindOrCreateByEmail(ctx, userEmail)
+	require.NoError(t, err, "Failed to create test user")
+
+	return user.ID
+}
+
+// loginUser logs in a user and returns an HTTP client with session cookie
+func loginUser(t *testing.T, ts *testServer, userEmail string) *http.Client {
+	t.Helper()
+
+	// Create a cookie jar to maintain session
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err, "Failed to create cookie jar")
+
+	client := &http.Client{
+		Jar: jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Don't follow redirects automatically
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Login via POST /auth/login
+	loginURL := ts.URL + "/auth/login"
+	form := url.Values{
+		"email":    {userEmail},
+		"password": {"testpassword"},
+	}
+
+	resp, err := client.PostForm(loginURL, form)
+	require.NoError(t, err, "Login request failed")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Login should succeed")
+
+	return client
+}
+
+// simulateConsent follows the OAuth flow and simulates user consent
+// Returns the authorization code
+func simulateConsent(t *testing.T, ts *testServer, authURL string, client *http.Client) string {
+	t.Helper()
+
+	// Step 1: Navigate to authorization URL
+	resp, err := client.Get(authURL)
+	require.NoError(t, err, "Failed to access authorization URL")
+	defer resp.Body.Close()
+
+	// Should either be consent page (200) or redirect to login (302)
+	if resp.StatusCode == http.StatusFound {
+		// Redirect to login - follow it, login, then retry
+		loginURL := resp.Header.Get("Location")
+		t.Logf("Redirected to login: %s", loginURL)
+
+		// Follow redirect to login page
+		resp2, err := client.Get(ts.URL + loginURL)
+		require.NoError(t, err, "Failed to access login page")
+		resp2.Body.Close()
+
+		// Now retry the auth URL - user should be logged in
+		resp, err = client.Get(authURL)
+		require.NoError(t, err, "Failed to access authorization URL after login")
+		defer resp.Body.Close()
+	}
+
+	// Should be showing consent page now
+	if resp.StatusCode == http.StatusOK {
+		// Parse the consent page to get the form
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err, "Failed to read consent page")
+		t.Logf("Consent page body: %s", string(body))
+
+		// Submit consent form with "allow"
+		consentURL := ts.URL + "/oauth/consent"
+		form := url.Values{
+			"decision": {"allow"},
+		}
+
+		consentResp, err := client.PostForm(consentURL, form)
+		require.NoError(t, err, "Failed to submit consent form")
+		defer consentResp.Body.Close()
+
+		// Should redirect with authorization code
+		require.Equal(t, http.StatusFound, consentResp.StatusCode, "Consent should redirect")
+
+		redirectURL := consentResp.Header.Get("Location")
+		t.Logf("Consent redirect: %s", redirectURL)
+
+		// Parse the redirect URL to extract the code
+		parsed, err := url.Parse(redirectURL)
+		require.NoError(t, err, "Failed to parse redirect URL")
+
+		code := parsed.Query().Get("code")
+		require.NotEmpty(t, code, "Authorization code should be present in redirect")
+
+		return code
+	}
+
+	// If we got redirected directly with a code (user already consented)
+	if resp.StatusCode == http.StatusFound {
+		redirectURL := resp.Header.Get("Location")
+		parsed, err := url.Parse(redirectURL)
+		require.NoError(t, err, "Failed to parse redirect URL")
+
+		code := parsed.Query().Get("code")
+		if code != "" {
+			return code
+		}
+	}
+
+	t.Fatalf("Unexpected response status: %d", resp.StatusCode)
+	return ""
+}
+
+// recordTestConsent directly records consent in the database for testing
+func recordTestConsent(t *testing.T, ts *testServer, userID, clientID string, scopes []string) {
+	t.Helper()
+
+	ctx := context.Background()
+	scopeStr := strings.Join(scopes, " ")
+	now := time.Now().Unix()
+
+	_, err := ts.sessionsDB.DB().ExecContext(ctx, `
+		INSERT INTO oauth_consents (id, user_id, client_id, scopes, granted_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, client_id) DO UPDATE SET
+			scopes = excluded.scopes,
+			granted_at = excluded.granted_at
+	`, generateSecureRandom(32), userID, clientID, scopeStr, now)
+	require.NoError(t, err, "Failed to record test consent")
 }

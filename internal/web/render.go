@@ -4,6 +4,7 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/html"
 	"github.com/gomarkdown/markdown/parser"
+	"github.com/microcosm-cc/bluemonday"
 )
 
 // Renderer manages HTML template rendering with caching and custom functions.
@@ -105,15 +107,33 @@ func (r *Renderer) RenderError(w http.ResponseWriter, code int, message string) 
 
 // parseTemplates parses the base template and all page templates.
 func (r *Renderer) parseTemplates(templatesDir string) error {
-	// Parse base.html first
-	basePath := filepath.Join(templatesDir, "base.html")
-	baseContent, err := os.ReadFile(basePath)
+	// Use os.Root to safely scope file access to the templates directory
+	// This prevents path traversal attacks (G304)
+	root, err := os.OpenRoot(templatesDir)
+	if err != nil {
+		return fmt.Errorf("failed to open templates directory: %w", err)
+	}
+	defer root.Close()
+
+	// Parse base.html first using the rooted file access
+	baseFile, err := root.Open("base.html")
+	if err != nil {
+		return fmt.Errorf("failed to open base template: %w", err)
+	}
+	baseContent, err := io.ReadAll(baseFile)
+	baseFile.Close()
 	if err != nil {
 		return fmt.Errorf("failed to read base template: %w", err)
 	}
 
 	// Walk through subdirectories to find page templates
-	err = filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
+	absTemplatesDir, err := filepath.Abs(templatesDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path of templates dir: %w", err)
+	}
+	basePath := filepath.Join(absTemplatesDir, "base.html")
+
+	err = filepath.WalkDir(absTemplatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -129,13 +149,18 @@ func (r *Renderer) parseTemplates(templatesDir string) error {
 		}
 
 		// Get the relative path for the template name
-		relPath, err := filepath.Rel(templatesDir, path)
+		relPath, err := filepath.Rel(absTemplatesDir, path)
 		if err != nil {
 			return fmt.Errorf("failed to get relative path for %s: %w", path, err)
 		}
 
-		// Read the page template
-		pageContent, err := os.ReadFile(path)
+		// Read the page template using the rooted file access (safe from path traversal)
+		pageFile, err := root.Open(relPath)
+		if err != nil {
+			return fmt.Errorf("failed to open template %s: %w", relPath, err)
+		}
+		pageContent, err := io.ReadAll(pageFile)
+		pageFile.Close()
 		if err != nil {
 			return fmt.Errorf("failed to read template %s: %w", relPath, err)
 		}
@@ -235,7 +260,11 @@ func renderMarkdown(s string) template.HTML {
 	// Render to HTML
 	htmlContent := markdown.Render(doc, renderer)
 
-	return template.HTML(htmlContent)
+	// Sanitize HTML to prevent XSS attacks
+	policy := bluemonday.UGCPolicy()
+	sanitized := policy.SanitizeBytes(htmlContent)
+
+	return template.HTML(sanitized)
 }
 
 // add returns the sum of two integers. Used for pagination.

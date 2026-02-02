@@ -17,19 +17,22 @@ type MagicToken struct {
 }
 
 type OauthClient struct {
-	ClientID     string         `json:"client_id"`
-	ClientSecret string         `json:"client_secret"`
-	ClientName   sql.NullString `json:"client_name"`
-	RedirectUris string         `json:"redirect_uris"`
-	CreatedAt    int64          `json:"created_at"`
+	ClientID                string         `json:"client_id"`
+	ClientSecretHash        sql.NullString `json:"client_secret_hash"`
+	ClientName              sql.NullString `json:"client_name"`
+	RedirectUris            string         `json:"redirect_uris"`
+	IsPublic                int64          `json:"is_public"`
+	TokenEndpointAuthMethod sql.NullString `json:"token_endpoint_auth_method"`
+	CreatedAt               int64          `json:"created_at"`
 }
 
 type OauthCode struct {
-	Code                string         `json:"code"`
+	CodeHash            string         `json:"code_hash"`
 	ClientID            string         `json:"client_id"`
 	UserID              string         `json:"user_id"`
 	RedirectUri         string         `json:"redirect_uri"`
 	Scope               sql.NullString `json:"scope"`
+	Resource            sql.NullString `json:"resource"`
 	CodeChallenge       string         `json:"code_challenge"`
 	CodeChallengeMethod sql.NullString `json:"code_challenge_method"`
 	ExpiresAt           int64          `json:"expires_at"`
@@ -45,13 +48,14 @@ type OauthConsent struct {
 }
 
 type OauthToken struct {
-	AccessToken  string         `json:"access_token"`
-	RefreshToken sql.NullString `json:"refresh_token"`
-	ClientID     string         `json:"client_id"`
-	UserID       string         `json:"user_id"`
-	Scope        sql.NullString `json:"scope"`
-	ExpiresAt    int64          `json:"expires_at"`
-	CreatedAt    int64          `json:"created_at"`
+	AccessTokenHash  string         `json:"access_token_hash"`
+	RefreshTokenHash sql.NullString `json:"refresh_token_hash"`
+	ClientID         string         `json:"client_id"`
+	UserID           string         `json:"user_id"`
+	Scope            sql.NullString `json:"scope"`
+	Resource         sql.NullString `json:"resource"`
+	ExpiresAt        int64          `json:"expires_at"`
+	CreatedAt        int64          `json:"created_at"`
 }
 
 type Session struct {

@@ -10,6 +10,7 @@ import (
 	"github.com/gomarkdown/markdown/ast"
 	mdhtml "github.com/gomarkdown/markdown/html"
 	"github.com/gomarkdown/markdown/parser"
+	"github.com/microcosm-cc/bluemonday"
 )
 
 // ensure io is used (required for renderHook signature)
@@ -203,6 +204,10 @@ func RenderMarkdownToHTML(markdownContent, title, description, canonicalURL stri
 	// Render markdown to HTML
 	contentHTML := markdown.Render(doc, renderer)
 
+	// Sanitize HTML to prevent XSS attacks
+	policy := bluemonday.UGCPolicy()
+	sanitizedContent := policy.SanitizeBytes(contentHTML)
+
 	// Escape the meta tag values to prevent XSS
 	escapedTitle := html.EscapeString(title)
 	escapedDescription := html.EscapeString(description)
@@ -216,7 +221,7 @@ func RenderMarkdownToHTML(markdownContent, title, description, canonicalURL stri
 		Title:        escapedTitle,
 		Description:  escapedDescription,
 		CanonicalURL: escapedCanonicalURL,
-		Content:      template.HTML(contentHTML),
+		Content:      template.HTML(sanitizedContent),
 	}
 
 	err := tmpl.Execute(&buf, data)

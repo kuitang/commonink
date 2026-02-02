@@ -3,6 +3,7 @@ package mcp
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -95,5 +96,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Start(addr string) error {
 	http.Handle("/mcp", s)
 	log.Printf("MCP server listening on %s/mcp (Streamable HTTP transport)", addr)
-	return http.ListenAndServe(addr, nil)
+	server := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	return server.ListenAndServe()
 }

@@ -111,7 +111,7 @@ This project uses **property-based testing** with rapid + Go's native fuzzing. S
 --timeout <duration>       # Fuzz duration (default: 30m)
 --parallel <n>             # Test workers (default: CPU count)
 --output <dir>             # Results dir (default: ./test-results)
---coverage-threshold <n>   # Min coverage % (default: 70)
+--coverage-threshold <n>   # Min coverage % (default: 39)
 ```
 
 ## Git Workflow

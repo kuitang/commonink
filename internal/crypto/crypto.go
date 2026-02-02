@@ -107,11 +107,14 @@ func EncryptDEK(kek, dek []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	// Encrypt DEK
-	// GCM Seal appends the ciphertext and auth tag to the nonce slice
-	ciphertext := gcm.Seal(nonce, nonce, dek, nil)
+	// Encrypt DEK and prepend nonce to the output
+	// Output format: nonce (12 bytes) || ciphertext || auth tag (16 bytes)
+	ciphertext := gcm.Seal(nil, nonce, dek, nil)
+	result := make([]byte, len(nonce)+len(ciphertext))
+	copy(result, nonce)
+	copy(result[len(nonce):], ciphertext)
 
-	return ciphertext, nil
+	return result, nil
 }
 
 // DecryptDEK decrypts an encrypted DEK using AES-256-GCM with the provided KEK.

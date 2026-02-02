@@ -802,7 +802,7 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 	}
 
 	// Submit form
-	submitBtn := page.Locator("button[type='submit']")
+	submitBtn := page.Locator("button[type='submit']:has-text('Send reset link')")
 	err = submitBtn.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
@@ -865,7 +865,7 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	}
 
 	page.Locator("input[name='email']").Fill(testEmail)
-	page.Locator("button[type='submit']").Click()
+	page.Locator("button[type='submit']:has-text('Send reset link')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
@@ -923,7 +923,7 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	}
 
 	// Submit the form
-	submitBtn := page.Locator("button[type='submit']")
+	submitBtn := page.Locator("button[type='submit']:has-text('Reset password')")
 	err = submitBtn.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
