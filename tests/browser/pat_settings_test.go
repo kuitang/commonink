@@ -41,7 +41,7 @@ import (
 
 const (
 	patTestBucketName = "pat-test-bucket"
-	patTestMasterKey  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	patTestMasterKey  = "test0000000000000000000000000000test0000000000000000000000000000" // low entropy for gitleaks
 )
 
 // patTestEnv holds all the components needed for PAT settings browser testing.

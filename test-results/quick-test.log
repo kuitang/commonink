@@ -6,153 +6,153 @@ sqlite3.c:226667:18: warning: ‘memcpy’ specified bound 18446744073709551615 
 ?   	github.com/kuitang/agent-notes/cmd/server	[no test files]
 ?   	github.com/kuitang/agent-notes/internal/api	[no test files]
 === RUN   TestSessionID_HighEntropy
-    session_test.go:11: [rapid] OK, passed 100 tests (178.561µs)
+    session_test.go:11: [rapid] OK, passed 10 tests (51.76µs)
 --- PASS: TestSessionID_HighEntropy (0.00s)
 === RUN   TestSessionID_Length
-    session_test.go:37: [rapid] OK, passed 100 tests (100.961µs)
+    session_test.go:37: [rapid] OK, passed 10 tests (30.8µs)
 --- PASS: TestSessionID_Length (0.00s)
 === RUN   TestPassword_HashVerify_Roundtrip
-    user_test.go:11: [rapid] OK, passed 100 tests (29.994952s)
---- PASS: TestPassword_HashVerify_Roundtrip (30.00s)
+    user_test.go:11: [rapid] OK, passed 10 tests (1.801728531s)
+--- PASS: TestPassword_HashVerify_Roundtrip (1.80s)
 === RUN   TestPassword_WrongPassword_FailsVerify
-    user_test.go:28: [rapid] OK, passed 100 tests (31.589577444s)
---- PASS: TestPassword_WrongPassword_FailsVerify (31.59s)
+    user_test.go:28: [rapid] OK, passed 10 tests (1.707192715s)
+--- PASS: TestPassword_WrongPassword_FailsVerify (1.71s)
 === RUN   TestPassword_HashNotDeterministic
-    user_test.go:47: [rapid] OK, passed 100 tests (31.472439283s)
---- PASS: TestPassword_HashNotDeterministic (31.47s)
+    user_test.go:47: [rapid] OK, passed 10 tests (1.612319855s)
+--- PASS: TestPassword_HashNotDeterministic (1.61s)
 === RUN   TestPassword_Validation
-    user_test.go:68: [rapid] OK, passed 100 tests (5.998562ms)
---- PASS: TestPassword_Validation (0.01s)
+    user_test.go:68: [rapid] OK, passed 10 tests (645.844µs)
+--- PASS: TestPassword_Validation (0.00s)
 === RUN   TestPassword_Validation_ValidPasswords
-    user_test.go:85: [rapid] OK, passed 100 tests (371.722µs)
+    user_test.go:85: [rapid] OK, passed 10 tests (101.56µs)
 --- PASS: TestPassword_Validation_ValidPasswords (0.00s)
 PASS
-ok  	github.com/kuitang/agent-notes/internal/auth	93.166s
+ok  	github.com/kuitang/agent-notes/internal/auth	5.163s
 === RUN   TestCrypto_EncryptDecrypt_Roundtrip
-    crypto_test.go:13: [rapid] OK, passed 100 tests (1.576011ms)
+    crypto_test.go:13: [rapid] OK, passed 10 tests (525.124µs)
 --- PASS: TestCrypto_EncryptDecrypt_Roundtrip (0.00s)
 === RUN   TestCrypto_KEK_Deterministic
-    crypto_test.go:36: [rapid] OK, passed 100 tests (1.38505ms)
+    crypto_test.go:36: [rapid] OK, passed 10 tests (129.401µs)
 --- PASS: TestCrypto_KEK_Deterministic (0.00s)
 === RUN   TestCrypto_KEK_DifferentInputs_DifferentOutputs
-    crypto_test.go:53: [rapid] OK, passed 100 tests (7.244211ms)
---- PASS: TestCrypto_KEK_DifferentInputs_DifferentOutputs (0.01s)
+    crypto_test.go:53: [rapid] OK, passed 10 tests (151.081µs)
+--- PASS: TestCrypto_KEK_DifferentInputs_DifferentOutputs (0.00s)
 === RUN   TestCrypto_KEK_DifferentVersions_DifferentOutputs
-    crypto_test.go:73: [rapid] OK, passed 100 tests (1.42049ms)
+    crypto_test.go:73: [rapid] OK, passed 10 tests (144.601µs)
 --- PASS: TestCrypto_KEK_DifferentVersions_DifferentOutputs (0.00s)
 === RUN   TestCrypto_WrongKEK_FailsDecrypt
-    crypto_test.go:91: [rapid] OK, passed 100 tests (19.665779ms)
---- PASS: TestCrypto_WrongKEK_FailsDecrypt (0.02s)
+    crypto_test.go:91: [rapid] OK, passed 10 tests (225.802µs)
+--- PASS: TestCrypto_WrongKEK_FailsDecrypt (0.00s)
 === RUN   TestCrypto_DEK_Length
-    crypto_test.go:118: [rapid] OK, passed 100 tests (203.961µs)
+    crypto_test.go:118: [rapid] OK, passed 10 tests (17.36µs)
 --- PASS: TestCrypto_DEK_Length (0.00s)
 === RUN   TestCrypto_KEK_Length
-    crypto_test.go:132: [rapid] OK, passed 100 tests (1.017007ms)
+    crypto_test.go:132: [rapid] OK, passed 10 tests (105.841µs)
 --- PASS: TestCrypto_KEK_Length (0.00s)
 === RUN   TestCrypto_Encryption_NonDeterministic
-    crypto_test.go:148: [rapid] OK, passed 100 tests (1.576491ms)
+    crypto_test.go:148: [rapid] OK, passed 10 tests (279.322µs)
 --- PASS: TestCrypto_Encryption_NonDeterministic (0.00s)
 === RUN   TestCrypto_InvalidKeySize_RejectsEncrypt
-    crypto_test.go:190: [rapid] OK, passed 100 tests (1.065967ms)
+    crypto_test.go:190: [rapid] OK, passed 10 tests (118.76µs)
 --- PASS: TestCrypto_InvalidKeySize_RejectsEncrypt (0.00s)
 === RUN   TestCrypto_InvalidDEKSize_RejectsEncrypt
-    crypto_test.go:209: [rapid] OK, passed 100 tests (1.087968ms)
+    crypto_test.go:209: [rapid] OK, passed 10 tests (112.161µs)
 --- PASS: TestCrypto_InvalidDEKSize_RejectsEncrypt (0.00s)
 === RUN   TestCrypto_TruncatedCiphertext_FailsDecrypt
-    crypto_test.go:229: [rapid] OK, passed 100 tests (1.243648ms)
+    crypto_test.go:229: [rapid] OK, passed 10 tests (177.681µs)
 --- PASS: TestCrypto_TruncatedCiphertext_FailsDecrypt (0.00s)
 === RUN   TestCrypto_ModifiedCiphertext_FailsDecrypt
-    crypto_test.go:252: [rapid] OK, passed 100 tests (1.281129ms)
---- PASS: TestCrypto_ModifiedCiphertext_FailsDecrypt (0.02s)
+    crypto_test.go:252: [rapid] OK, passed 10 tests (170.362µs)
+--- PASS: TestCrypto_ModifiedCiphertext_FailsDecrypt (0.00s)
 === RUN   TestKeyManager_GetOrCreate_Roundtrip
-    keymanager_test.go:37: [rapid] OK, passed 100 tests (6.935612769s)
---- PASS: TestKeyManager_GetOrCreate_Roundtrip (6.94s)
+    keymanager_test.go:37: [rapid] OK, passed 10 tests (658.371459ms)
+--- PASS: TestKeyManager_GetOrCreate_Roundtrip (0.66s)
 === RUN   TestKeyManager_GetUserDEK_AfterCreate
-    keymanager_test.go:83: [rapid] OK, passed 100 tests (7.833789976s)
---- PASS: TestKeyManager_GetUserDEK_AfterCreate (7.83s)
+    keymanager_test.go:83: [rapid] OK, passed 10 tests (543.608421ms)
+--- PASS: TestKeyManager_GetUserDEK_AfterCreate (0.54s)
 === RUN   TestKeyManager_GetUserDEK_NotFound
-    keymanager_test.go:123: [rapid] OK, passed 100 tests (6.502950596s)
---- PASS: TestKeyManager_GetUserDEK_NotFound (6.50s)
+    keymanager_test.go:123: [rapid] OK, passed 10 tests (544.691149ms)
+--- PASS: TestKeyManager_GetUserDEK_NotFound (0.54s)
 === RUN   TestKeyManager_RotateKEK_PreservesDEK
-    keymanager_test.go:155: [rapid] OK, passed 100 tests (7.321729047s)
---- PASS: TestKeyManager_RotateKEK_PreservesDEK (7.32s)
+    keymanager_test.go:155: [rapid] OK, passed 10 tests (638.984965ms)
+--- PASS: TestKeyManager_RotateKEK_PreservesDEK (0.64s)
 === RUN   TestKeyManager_RotateKEK_NotFound
-    keymanager_test.go:200: [rapid] OK, passed 100 tests (6.912358182s)
---- PASS: TestKeyManager_RotateKEK_NotFound (6.91s)
+    keymanager_test.go:200: [rapid] OK, passed 10 tests (527.896112ms)
+--- PASS: TestKeyManager_RotateKEK_NotFound (0.53s)
 === RUN   TestKeyManager_MultipleRotations
-    keymanager_test.go:232: [rapid] OK, passed 100 tests (9.901838673s)
---- PASS: TestKeyManager_MultipleRotations (9.90s)
+    keymanager_test.go:232: [rapid] OK, passed 10 tests (710.978826ms)
+--- PASS: TestKeyManager_MultipleRotations (0.71s)
 === RUN   TestKeyManager_DifferentUsers_DifferentDEKs
-    keymanager_test.go:280: [rapid] OK, passed 100 tests (6.687901915s)
---- PASS: TestKeyManager_DifferentUsers_DifferentDEKs (6.69s)
+    keymanager_test.go:280: [rapid] OK, passed 10 tests (656.569447ms)
+--- PASS: TestKeyManager_DifferentUsers_DifferentDEKs (0.66s)
 === RUN   TestKeyManager_DifferentMasterKeys_DifferentDEKs
-    keymanager_test.go:323: [rapid] OK, passed 100 tests (7.306635764s)
---- PASS: TestKeyManager_DifferentMasterKeys_DifferentDEKs (7.31s)
+    keymanager_test.go:323: [rapid] OK, passed 10 tests (555.328423ms)
+--- PASS: TestKeyManager_DifferentMasterKeys_DifferentDEKs (0.56s)
 PASS
-ok  	github.com/kuitang/agent-notes/internal/crypto	59.486s
+ok  	github.com/kuitang/agent-notes/internal/crypto	4.855s
 === RUN   TestSessionsDB_Singleton_Properties
-    db_test.go:119: [rapid] OK, passed 100 tests (4.819985034s)
---- PASS: TestSessionsDB_Singleton_Properties (4.82s)
+    db_test.go:119: [rapid] OK, passed 10 tests (607.281704ms)
+--- PASS: TestSessionsDB_Singleton_Properties (0.61s)
 === RUN   TestSessionsDB_Schema_Properties
-    db_test.go:164: [rapid] OK, passed 100 tests (3.821539761s)
---- PASS: TestSessionsDB_Schema_Properties (3.82s)
+    db_test.go:164: [rapid] OK, passed 10 tests (536.917254ms)
+--- PASS: TestSessionsDB_Schema_Properties (0.54s)
 === RUN   TestUserDB_ValidUserID_Properties
-    db_test.go:213: [rapid] OK, passed 100 tests (4.501651611s)
---- PASS: TestUserDB_ValidUserID_Properties (4.50s)
+    db_test.go:213: [rapid] OK, passed 10 tests (655.688281ms)
+--- PASS: TestUserDB_ValidUserID_Properties (0.66s)
 === RUN   TestUserDB_EmptyUserID_Properties
-    db_test.go:241: [rapid] OK, passed 100 tests (3.714786ms)
+    db_test.go:241: [rapid] OK, passed 10 tests (1.596851ms)
 --- PASS: TestUserDB_EmptyUserID_Properties (0.00s)
 === RUN   TestUserDB_Schema_Properties
-    db_test.go:296: [rapid] OK, passed 100 tests (4.36300434s)
---- PASS: TestUserDB_Schema_Properties (4.36s)
+    db_test.go:296: [rapid] OK, passed 10 tests (659.459787ms)
+--- PASS: TestUserDB_Schema_Properties (0.66s)
 === RUN   TestUserDB_MultipleUsers_Isolation_Properties
-    db_test.go:376: [rapid] OK, passed 100 tests (18.424710233s)
---- PASS: TestUserDB_MultipleUsers_Isolation_Properties (18.42s)
+    db_test.go:376: [rapid] OK, passed 10 tests (2.217358144s)
+--- PASS: TestUserDB_MultipleUsers_Isolation_Properties (2.22s)
 === RUN   TestUserDB_FTS5_Sync_Properties
-    db_test.go:473: [rapid] OK, passed 100 tests (6.638228933s)
---- PASS: TestUserDB_FTS5_Sync_Properties (6.64s)
+    db_test.go:473: [rapid] OK, passed 10 tests (672.351637ms)
+--- PASS: TestUserDB_FTS5_Sync_Properties (0.67s)
 === RUN   TestUserDB_ContentSizeLimit_Properties
-    db_test.go:535: [rapid] OK, passed 100 tests (14.02058951s)
---- PASS: TestUserDB_ContentSizeLimit_Properties (14.02s)
+    db_test.go:535: [rapid] OK, passed 10 tests (1.110299324s)
+--- PASS: TestUserDB_ContentSizeLimit_Properties (1.11s)
 === RUN   TestInitSchemas_Properties
-    db_test.go:594: [rapid] OK, passed 100 tests (15.259842267s)
---- PASS: TestInitSchemas_Properties (15.26s)
+    db_test.go:594: [rapid] OK, passed 10 tests (1.273038377s)
+--- PASS: TestInitSchemas_Properties (1.27s)
 === RUN   TestCloseAll_Properties
-    db_test.go:633: [rapid] OK, passed 100 tests (18.757223591s)
---- PASS: TestCloseAll_Properties (18.76s)
+    db_test.go:633: [rapid] OK, passed 10 tests (1.114860677s)
+--- PASS: TestCloseAll_Properties (1.11s)
 === RUN   TestGetHardcodedDEK_Properties
-    db_test.go:664: [rapid] OK, passed 100 tests (53.48µs)
+    db_test.go:664: [rapid] OK, passed 10 tests (20.6µs)
 --- PASS: TestGetHardcodedDEK_Properties (0.00s)
 === RUN   TestUserDB_Encryption_Roundtrip_Properties
-    db_test.go:726: [rapid] OK, passed 100 tests (7.767432572s)
---- PASS: TestUserDB_Encryption_Roundtrip_Properties (7.77s)
+    db_test.go:726: [rapid] OK, passed 10 tests (466.907929ms)
+--- PASS: TestUserDB_Encryption_Roundtrip_Properties (0.47s)
 === RUN   TestSessionsDB_CRUD_Properties
-    db_test.go:804: [rapid] OK, passed 100 tests (6.87531254s)
---- PASS: TestSessionsDB_CRUD_Properties (6.88s)
+    db_test.go:804: [rapid] OK, passed 10 tests (412.39411ms)
+--- PASS: TestSessionsDB_CRUD_Properties (0.41s)
 === RUN   TestUserDB_FTS5_ArbitraryQuery_Properties
-    db_test.go:877: [rapid] OK, passed 100 tests (7.108932764s)
---- PASS: TestUserDB_FTS5_ArbitraryQuery_Properties (7.11s)
+    db_test.go:877: [rapid] OK, passed 10 tests (499.439996ms)
+--- PASS: TestUserDB_FTS5_ArbitraryQuery_Properties (0.50s)
 === RUN   TestUserDB_FTS5_ArbitraryQueryCount_Properties
-    db_test.go:922: [rapid] OK, passed 100 tests (6.231353708s)
---- PASS: TestUserDB_FTS5_ArbitraryQueryCount_Properties (6.23s)
+    db_test.go:922: [rapid] OK, passed 10 tests (359.115939ms)
+--- PASS: TestUserDB_FTS5_ArbitraryQueryCount_Properties (0.36s)
 === RUN   TestMilestone1Setup
---- PASS: TestMilestone1Setup (0.13s)
+--- PASS: TestMilestone1Setup (0.14s)
 === RUN   TestDatabaseEncryption
     integration_test.go:234: Database encryption test passed. File is encrypted with SQLCipher.
---- PASS: TestDatabaseEncryption (0.05s)
+--- PASS: TestDatabaseEncryption (0.04s)
 === RUN   TestMilestone1Constants
 --- PASS: TestMilestone1Constants (0.00s)
 === RUN   TestMilestone1QuickStart
     integration_test.go:337: Milestone 1 quick start test passed!
---- PASS: TestMilestone1QuickStart (0.11s)
+--- PASS: TestMilestone1QuickStart (0.07s)
 === RUN   TestMilestone1FTS5Search
     integration_test.go:419: Milestone 1 FTS5 search test passed!
---- PASS: TestMilestone1FTS5Search (0.13s)
+--- PASS: TestMilestone1FTS5Search (0.08s)
 === RUN   TestConcurrentDatabaseAccess
     integration_test.go:511: Concurrent operations: 100/100 succeeded (100.0%)
---- PASS: TestConcurrentDatabaseAccess (0.21s)
+--- PASS: TestConcurrentDatabaseAccess (0.18s)
 PASS
-ok  	github.com/kuitang/agent-notes/internal/db	(cached)
+ok  	github.com/kuitang/agent-notes/internal/db	11.151s
 ?   	github.com/kuitang/agent-notes/internal/db/sessions	[no test files]
 ?   	github.com/kuitang/agent-notes/internal/db/testutil	[no test files]
 ?   	github.com/kuitang/agent-notes/internal/db/userdb	[no test files]
@@ -160,155 +160,592 @@ ok  	github.com/kuitang/agent-notes/internal/db	(cached)
 ?   	github.com/kuitang/agent-notes/internal/mcp	[no test files]
 === RUN   TestCreate_Roundtrip_Properties
     notes_test.go:116: [rapid] fail file "testdata/rapid/TestCreate_Roundtrip_Properties/TestCreate_Roundtrip_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:116: [rapid] OK, passed 100 tests (1.473348872s)
---- PASS: TestCreate_Roundtrip_Properties (1.47s)
+    notes_test.go:116: [rapid] OK, passed 10 tests (129.666982ms)
+--- PASS: TestCreate_Roundtrip_Properties (0.13s)
 === RUN   TestCreate_RequiresTitle_Properties
     notes_test.go:144: [rapid] fail file "testdata/rapid/TestCreate_RequiresTitle_Properties/TestCreate_RequiresTitle_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:144: [rapid] OK, passed 100 tests (599.413212ms)
---- PASS: TestCreate_RequiresTitle_Properties (0.60s)
+    notes_test.go:144: [rapid] OK, passed 10 tests (56.114911ms)
+--- PASS: TestCreate_RequiresTitle_Properties (0.06s)
 === RUN   TestCreate_AllowsEmptyContent_Properties
     notes_test.go:175: [rapid] fail file "testdata/rapid/TestCreate_AllowsEmptyContent_Properties/TestCreate_AllowsEmptyContent_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:175: [rapid] OK, passed 100 tests (711.65204ms)
---- PASS: TestCreate_AllowsEmptyContent_Properties (0.71s)
+    notes_test.go:175: [rapid] OK, passed 10 tests (81.681408ms)
+--- PASS: TestCreate_AllowsEmptyContent_Properties (0.08s)
 === RUN   TestRead_NonExistent_Properties
     notes_test.go:200: [rapid] fail file "testdata/rapid/TestRead_NonExistent_Properties/TestRead_NonExistent_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:200: [rapid] OK, passed 100 tests (328.970392ms)
---- PASS: TestRead_NonExistent_Properties (0.33s)
+    notes_test.go:200: [rapid] OK, passed 10 tests (113.259268ms)
+--- PASS: TestRead_NonExistent_Properties (0.11s)
 === RUN   TestRead_EmptyID_Properties
-    notes_test.go:223: [rapid] OK, passed 100 tests (600.600581ms)
---- PASS: TestRead_EmptyID_Properties (0.60s)
+    notes_test.go:223: [rapid] OK, passed 10 tests (37.651582ms)
+--- PASS: TestRead_EmptyID_Properties (0.04s)
 === RUN   TestUpdate_FieldsModified_Properties
     notes_test.go:292: [rapid] fail file "testdata/rapid/TestUpdate_FieldsModified_Properties/TestUpdate_FieldsModified_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:292: [rapid] OK, passed 100 tests (710.850195ms)
---- PASS: TestUpdate_FieldsModified_Properties (0.71s)
+    notes_test.go:292: [rapid] OK, passed 10 tests (43.201381ms)
+--- PASS: TestUpdate_FieldsModified_Properties (0.04s)
 === RUN   TestUpdate_NonExistent_Properties
     notes_test.go:320: [rapid] fail file "testdata/rapid/TestUpdate_NonExistent_Properties/TestUpdate_NonExistent_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:320: [rapid] OK, passed 100 tests (418.892143ms)
---- PASS: TestUpdate_NonExistent_Properties (0.42s)
+    notes_test.go:320: [rapid] OK, passed 10 tests (41.411088ms)
+--- PASS: TestUpdate_NonExistent_Properties (0.04s)
 === RUN   TestUpdate_EmptyID_Properties
     notes_test.go:347: [rapid] fail file "testdata/rapid/TestUpdate_EmptyID_Properties/TestUpdate_EmptyID_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:347: [rapid] OK, passed 100 tests (456.427928ms)
---- PASS: TestUpdate_EmptyID_Properties (0.46s)
+    notes_test.go:347: [rapid] OK, passed 10 tests (43.654704ms)
+--- PASS: TestUpdate_EmptyID_Properties (0.04s)
 === RUN   TestDelete_RemovesNote_Properties
     notes_test.go:388: [rapid] fail file "testdata/rapid/TestDelete_RemovesNote_Properties/TestDelete_RemovesNote_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:388: [rapid] OK, passed 100 tests (643.389762ms)
---- PASS: TestDelete_RemovesNote_Properties (0.64s)
+    notes_test.go:388: [rapid] OK, passed 10 tests (53.533252ms)
+--- PASS: TestDelete_RemovesNote_Properties (0.05s)
 === RUN   TestDelete_NonExistent_Properties
     notes_test.go:413: [rapid] fail file "testdata/rapid/TestDelete_NonExistent_Properties/TestDelete_NonExistent_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:413: [rapid] OK, passed 100 tests (649.624246ms)
---- PASS: TestDelete_NonExistent_Properties (0.65s)
+    notes_test.go:413: [rapid] OK, passed 10 tests (43.633584ms)
+--- PASS: TestDelete_NonExistent_Properties (0.04s)
 === RUN   TestDelete_EmptyID_Properties
-    notes_test.go:436: [rapid] OK, passed 100 tests (631.910201ms)
---- PASS: TestDelete_EmptyID_Properties (0.63s)
+    notes_test.go:436: [rapid] OK, passed 10 tests (42.908618ms)
+--- PASS: TestDelete_EmptyID_Properties (0.04s)
 === RUN   TestList_Pagination_Properties
     notes_test.go:498: [rapid] fail file "testdata/rapid/TestList_Pagination_Properties/TestList_Pagination_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:498: [rapid] OK, passed 100 tests (640.758104ms)
---- PASS: TestList_Pagination_Properties (0.64s)
+    notes_test.go:498: [rapid] OK, passed 10 tests (43.05174ms)
+--- PASS: TestList_Pagination_Properties (0.04s)
 === RUN   TestList_MaxLimit_Properties
     notes_test.go:528: [rapid] fail file "testdata/rapid/TestList_MaxLimit_Properties/TestList_MaxLimit_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:528: [rapid] OK, passed 100 tests (394.877015ms)
---- PASS: TestList_MaxLimit_Properties (0.40s)
+    notes_test.go:528: [rapid] OK, passed 10 tests (23.033881ms)
+--- PASS: TestList_MaxLimit_Properties (0.02s)
 === RUN   TestList_DefaultLimit_Properties
     notes_test.go:558: [rapid] fail file "testdata/rapid/TestList_DefaultLimit_Properties/TestList_DefaultLimit_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:558: [rapid] OK, passed 100 tests (785.2544ms)
---- PASS: TestList_DefaultLimit_Properties (0.79s)
+    notes_test.go:558: [rapid] OK, passed 10 tests (21.996873ms)
+--- PASS: TestList_DefaultLimit_Properties (0.02s)
 === RUN   TestSearch_FindsByContent_Properties
     notes_test.go:621: [rapid] fail file "testdata/rapid/TestSearch_FindsByContent_Properties/TestSearch_FindsByContent_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:621: [rapid] OK, passed 100 tests (962.681206ms)
---- PASS: TestSearch_FindsByContent_Properties (0.96s)
+    notes_test.go:621: [rapid] OK, passed 10 tests (60.948944ms)
+--- PASS: TestSearch_FindsByContent_Properties (0.06s)
 === RUN   TestSearch_EmptyQuery_Properties
-    notes_test.go:644: [rapid] OK, passed 100 tests (761.18211ms)
---- PASS: TestSearch_EmptyQuery_Properties (0.76s)
+    notes_test.go:644: [rapid] OK, passed 10 tests (23.191001ms)
+--- PASS: TestSearch_EmptyQuery_Properties (0.02s)
 === RUN   TestSearch_NoMatches_Properties
     notes_test.go:688: [rapid] fail file "testdata/rapid/TestSearch_NoMatches_Properties/TestSearch_NoMatches_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:688: [rapid] OK, passed 100 tests (670.476753ms)
---- PASS: TestSearch_NoMatches_Properties (0.67s)
+    notes_test.go:688: [rapid] OK, passed 10 tests (28.950401ms)
+--- PASS: TestSearch_NoMatches_Properties (0.03s)
 === RUN   TestCRUD_Workflow_Consistency_Properties
     notes_test.go:759: [rapid] fail file "testdata/rapid/TestCRUD_Workflow_Consistency_Properties/TestCRUD_Workflow_Consistency_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:759: [rapid] OK, passed 100 tests (1.05835488s)
---- PASS: TestCRUD_Workflow_Consistency_Properties (1.06s)
+    notes_test.go:759: [rapid] OK, passed 10 tests (45.257715ms)
+--- PASS: TestCRUD_Workflow_Consistency_Properties (0.05s)
 === RUN   TestMultipleNotes_Independence_Properties
     notes_test.go:829: [rapid] fail file "testdata/rapid/TestMultipleNotes_Independence_Properties/TestMultipleNotes_Independence_Properties-20260202103530-3832551.fail" is no longer valid
-    notes_test.go:829: [rapid] OK, passed 100 tests (1.341721552s)
---- PASS: TestMultipleNotes_Independence_Properties (1.35s)
+    notes_test.go:829: [rapid] OK, passed 10 tests (36.762216ms)
+--- PASS: TestMultipleNotes_Independence_Properties (0.04s)
 === RUN   TestPublic_AccessibleAfterSetPublic_Properties
     public_test.go:94: [rapid] fail file "testdata/rapid/TestPublic_AccessibleAfterSetPublic_Properties/TestPublic_AccessibleAfterSetPublic_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:94: [rapid] OK, passed 100 tests (1.870925434s)
---- PASS: TestPublic_AccessibleAfterSetPublic_Properties (1.95s)
+    public_test.go:94: [rapid] OK, passed 10 tests (89.972546ms)
+--- PASS: TestPublic_AccessibleAfterSetPublic_Properties (0.09s)
 === RUN   TestPublic_PrivateReturnsError_Properties
     public_test.go:186: [rapid] fail file "testdata/rapid/TestPublic_PrivateReturnsError_Properties/TestPublic_PrivateReturnsError_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:186: [rapid] OK, passed 100 tests (1.635258498s)
---- PASS: TestPublic_PrivateReturnsError_Properties (1.64s)
+    public_test.go:186: [rapid] OK, passed 10 tests (120.621439ms)
+--- PASS: TestPublic_PrivateReturnsError_Properties (0.13s)
 === RUN   TestPublic_OwnerCanToggle_Properties
     public_test.go:275: [rapid] fail file "testdata/rapid/TestPublic_OwnerCanToggle_Properties/TestPublic_OwnerCanToggle_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:275: [rapid] OK, passed 100 tests (2.24421954s)
---- PASS: TestPublic_OwnerCanToggle_Properties (2.25s)
+    public_test.go:275: [rapid] OK, passed 10 tests (86.142159ms)
+--- PASS: TestPublic_OwnerCanToggle_Properties (0.09s)
 === RUN   TestPublic_ListReturnsOnlyPublic_Properties
     public_test.go:359: [rapid] fail file "testdata/rapid/TestPublic_ListReturnsOnlyPublic_Properties/TestPublic_ListReturnsOnlyPublic_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:359: [rapid] OK, passed 100 tests (1.646551379s)
---- PASS: TestPublic_ListReturnsOnlyPublic_Properties (1.67s)
+    public_test.go:359: [rapid] OK, passed 10 tests (76.984215ms)
+--- PASS: TestPublic_ListReturnsOnlyPublic_Properties (0.08s)
 === RUN   TestPublic_S3ObjectCreatedDeleted_Properties
     public_test.go:450: [rapid] fail file "testdata/rapid/TestPublic_S3ObjectCreatedDeleted_Properties/TestPublic_S3ObjectCreatedDeleted_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:450: [rapid] OK, passed 100 tests (1.637102393s)
---- PASS: TestPublic_S3ObjectCreatedDeleted_Properties (1.65s)
+    public_test.go:450: [rapid] OK, passed 10 tests (111.368495ms)
+--- PASS: TestPublic_S3ObjectCreatedDeleted_Properties (0.11s)
 === RUN   TestPublic_SetPublicNonExistent_Properties
     public_test.go:549: [rapid] fail file "testdata/rapid/TestPublic_SetPublicNonExistent_Properties/TestPublic_SetPublicNonExistent_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:549: [rapid] OK, passed 100 tests (1.728848279s)
---- PASS: TestPublic_SetPublicNonExistent_Properties (1.75s)
+    public_test.go:549: [rapid] OK, passed 10 tests (88.834218ms)
+--- PASS: TestPublic_SetPublicNonExistent_Properties (0.09s)
 === RUN   TestPublic_SetPublicEmptyID_Properties
-    public_test.go:603: [rapid] OK, passed 100 tests (1.193965757s)
---- PASS: TestPublic_SetPublicEmptyID_Properties (1.22s)
+    public_test.go:603: [rapid] OK, passed 10 tests (82.545614ms)
+--- PASS: TestPublic_SetPublicEmptyID_Properties (0.09s)
 === RUN   TestPublic_GetPublicEmptyID_Properties
-    public_test.go:652: [rapid] OK, passed 100 tests (1.297232524s)
---- PASS: TestPublic_GetPublicEmptyID_Properties (1.31s)
+    public_test.go:652: [rapid] OK, passed 10 tests (55.802029ms)
+--- PASS: TestPublic_GetPublicEmptyID_Properties (0.06s)
 === RUN   TestPublic_GetPublicURL_Properties
     public_test.go:701: [rapid] fail file "testdata/rapid/TestPublic_GetPublicURL_Properties/TestPublic_GetPublicURL_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:701: [rapid] OK, passed 100 tests (1.019809733s)
---- PASS: TestPublic_GetPublicURL_Properties (1.04s)
+    public_test.go:701: [rapid] OK, passed 10 tests (62.881798ms)
+--- PASS: TestPublic_GetPublicURL_Properties (0.06s)
 === RUN   TestPublic_ListPagination_Properties
     public_test.go:763: [rapid] fail file "testdata/rapid/TestPublic_ListPagination_Properties/TestPublic_ListPagination_Properties-20260202103530-3832551.fail" is no longer valid
-    public_test.go:763: [rapid] OK, passed 100 tests (2.948625142s)
---- PASS: TestPublic_ListPagination_Properties (2.96s)
+    public_test.go:763: [rapid] OK, passed 10 tests (205.335028ms)
+--- PASS: TestPublic_ListPagination_Properties (0.21s)
 PASS
-ok  	github.com/kuitang/agent-notes/internal/notes	31.824s
+ok  	github.com/kuitang/agent-notes/internal/notes	2.038s
 ?   	github.com/kuitang/agent-notes/internal/oauth	[no test files]
 === RUN   TestRateLimiter_RequestsWithinLimit
-    limiter_test.go:72: [rapid] OK, passed 100 tests (1.41401ms)
+    limiter_test.go:72: [rapid] OK, passed 10 tests (326.842µs)
 --- PASS: TestRateLimiter_RequestsWithinLimit (0.00s)
 === RUN   TestRateLimiter_ExceedingLimitBlocked
-    limiter_test.go:118: [rapid] OK, passed 100 tests (1.017847ms)
+    limiter_test.go:118: [rapid] OK, passed 10 tests (143.121µs)
 --- PASS: TestRateLimiter_ExceedingLimitBlocked (0.00s)
 === RUN   TestRateLimiter_UserIndependence
-    limiter_test.go:166: [rapid] OK, passed 100 tests (1.40653ms)
+    limiter_test.go:166: [rapid] OK, passed 10 tests (191.242µs)
 --- PASS: TestRateLimiter_UserIndependence (0.00s)
 === RUN   TestRateLimiter_PaidUsersHigherLimits
-    limiter_test.go:227: [rapid] OK, passed 100 tests (2.389258ms)
---- PASS: TestRateLimiter_PaidUsersHigherLimits (0.01s)
+    limiter_test.go:227: [rapid] OK, passed 10 tests (300.042µs)
+--- PASS: TestRateLimiter_PaidUsersHigherLimits (0.00s)
 === RUN   TestRateLimiter_IdleLimiterCleanup
-    limiter_test.go:281: [rapid] OK, passed 100 tests (1.588555016s)
---- PASS: TestRateLimiter_IdleLimiterCleanup (1.59s)
+    limiter_test.go:281: [rapid] OK, passed 10 tests (156.502129ms)
+--- PASS: TestRateLimiter_IdleLimiterCleanup (0.16s)
 === RUN   TestRateLimiter_ActiveLimiterNotCleaned
-    limiter_test.go:340: [rapid] OK, passed 100 tests (6.094706654s)
---- PASS: TestRateLimiter_ActiveLimiterNotCleaned (6.09s)
+    limiter_test.go:340: [rapid] OK, passed 10 tests (607.93363ms)
+--- PASS: TestRateLimiter_ActiveLimiterNotCleaned (0.61s)
 === RUN   TestRateLimiter_ConcurrentAccess
-    limiter_test.go:417: [rapid] OK, passed 100 tests (17.733686ms)
---- PASS: TestRateLimiter_ConcurrentAccess (0.02s)
+    limiter_test.go:417: [rapid] OK, passed 10 tests (2.119334ms)
+--- PASS: TestRateLimiter_ConcurrentAccess (0.00s)
 === RUN   TestRateLimiter_GetLimiterConsistency
-    limiter_test.go:456: [rapid] OK, passed 100 tests (13.020333ms)
---- PASS: TestRateLimiter_GetLimiterConsistency (0.01s)
+    limiter_test.go:456: [rapid] OK, passed 10 tests (113.121µs)
+--- PASS: TestRateLimiter_GetLimiterConsistency (0.00s)
 === RUN   TestRateLimiter_TierChangeCreatesNewLimiter
-    limiter_test.go:502: [rapid] OK, passed 100 tests (748.165µs)
+    limiter_test.go:502: [rapid] OK, passed 10 tests (85.2µs)
 --- PASS: TestRateLimiter_TierChangeCreatesNewLimiter (0.00s)
 === RUN   TestRateLimiter_LenReturnsCorrectCount
-    limiter_test.go:550: [rapid] OK, passed 100 tests (4.716594ms)
+    limiter_test.go:550: [rapid] OK, passed 10 tests (598.484µs)
 --- PASS: TestRateLimiter_LenReturnsCorrectCount (0.00s)
 === RUN   TestRateLimiter_DefaultConfigValid
-    limiter_test.go:593: [rapid] OK, passed 100 tests (4.531192ms)
+    limiter_test.go:593: [rapid] OK, passed 10 tests (110.481µs)
 --- PASS: TestRateLimiter_DefaultConfigValid (0.00s)
 === RUN   TestRateLimiter_StopGracefulShutdown
-    limiter_test.go:639: [rapid] OK, passed 100 tests (2.042294ms)
+    limiter_test.go:639: [rapid] OK, passed 10 tests (298.522µs)
 --- PASS: TestRateLimiter_StopGracefulShutdown (0.00s)
 PASS
-ok  	github.com/kuitang/agent-notes/internal/ratelimit	(cached)
+ok  	github.com/kuitang/agent-notes/internal/ratelimit	0.792s
 ?   	github.com/kuitang/agent-notes/internal/s3client	[no test files]
 ?   	github.com/kuitang/agent-notes/internal/web	[no test files]
+=== RUN   TestAuth_SessionLifecycle_Property
+    auth_test.go:94: [rapid] OK, passed 10 tests (69.720805ms)
+--- PASS: TestAuth_SessionLifecycle_Property (0.13s)
+=== RUN   TestAuth_MagicLink_Property
+    auth_test.go:172: [rapid] OK, passed 10 tests (87.293407ms)
+--- PASS: TestAuth_MagicLink_Property (0.13s)
+=== RUN   TestAuth_MagicLink_SingleUse_Property
+    auth_test.go:271: [rapid] OK, passed 10 tests (75.113683ms)
+--- PASS: TestAuth_MagicLink_SingleUse_Property (0.12s)
+=== RUN   TestAuth_Password_HashVerify_Roundtrip_Property
+    auth_test.go:326: [rapid] OK, passed 10 tests (1.835834892s)
+--- PASS: TestAuth_Password_HashVerify_Roundtrip_Property (1.84s)
+=== RUN   TestAuth_Password_WrongPassword_Fails_Property
+    auth_test.go:363: [rapid] OK, passed 10 tests (1.696978608s)
+--- PASS: TestAuth_Password_WrongPassword_Fails_Property (1.70s)
+=== RUN   TestAuth_Password_Hash_NonDeterministic_Property
+    auth_test.go:403: [rapid] OK, passed 10 tests (2.799324479s)
+--- PASS: TestAuth_Password_Hash_NonDeterministic_Property (2.80s)
+=== RUN   TestAuth_Password_WeakPassword_Rejected_Property
+    auth_test.go:449: [rapid] OK, passed 10 tests (132.361µs)
+--- PASS: TestAuth_Password_WeakPassword_Rejected_Property (0.00s)
+=== RUN   TestAuth_Password_StrongPassword_Accepted_Property
+    auth_test.go:486: [rapid] OK, passed 10 tests (49.44µs)
+--- PASS: TestAuth_Password_StrongPassword_Accepted_Property (0.00s)
+=== RUN   TestAuth_PasswordReset_Flow_Property
+    auth_test.go:516: [rapid] OK, passed 10 tests (805.864168ms)
+--- PASS: TestAuth_PasswordReset_Flow_Property (0.86s)
+=== RUN   TestAuth_PasswordReset_SingleUse_Property
+    auth_test.go:603: [rapid] OK, passed 10 tests (889.880874ms)
+--- PASS: TestAuth_PasswordReset_SingleUse_Property (0.92s)
+=== RUN   TestAuth_PasswordReset_WeakPassword_Rejected_Property
+    auth_test.go:666: [rapid] OK, passed 10 tests (36.912577ms)
+--- PASS: TestAuth_PasswordReset_WeakPassword_Rejected_Property (0.10s)
+=== RUN   TestAuth_SameEmail_SameUser_Property
+    auth_test.go:729: [rapid] OK, passed 10 tests (101.281µs)
+--- PASS: TestAuth_SameEmail_SameUser_Property (0.03s)
+=== RUN   TestAuth_DifferentEmails_DifferentUsers_Property
+    auth_test.go:780: [rapid] OK, passed 10 tests (129.521µs)
+--- PASS: TestAuth_DifferentEmails_DifferentUsers_Property (0.05s)
+=== RUN   TestAuth_GoogleLogin_Flow_Property
+    auth_test.go:830: [rapid] OK, passed 10 tests (25.311776ms)
+--- PASS: TestAuth_GoogleLogin_Flow_Property (0.07s)
+=== RUN   TestAuth_GoogleLogin_Error_Property
+    auth_test.go:936: [rapid] OK, passed 10 tests (146.081µs)
+--- PASS: TestAuth_GoogleLogin_Error_Property (0.04s)
+=== RUN   TestAuth_Session_UniqueIDs_Property
+    auth_test.go:977: [rapid] OK, passed 10 tests (122.077369ms)
+--- PASS: TestAuth_Session_UniqueIDs_Property (0.16s)
+=== RUN   TestAuth_Session_DeleteByUser_Property
+    auth_test.go:1039: [rapid] OK, passed 10 tests (143.197196ms)
+--- PASS: TestAuth_Session_DeleteByUser_Property (0.18s)
+=== RUN   TestAuth_MagicToken_Invalid_Rejected_Property
+    auth_test.go:1108: [rapid] OK, passed 10 tests (477.763µs)
+--- PASS: TestAuth_MagicToken_Invalid_Rejected_Property (0.04s)
+=== RUN   TestAuth_Session_Invalid_Rejected_Property
+    auth_test.go:1142: [rapid] OK, passed 10 tests (418.283µs)
+--- PASS: TestAuth_Session_Invalid_Rejected_Property (0.05s)
+=== RUN   TestAuth_OIDC_Reset_Property
+    auth_test.go:1175: [rapid] OK, passed 10 tests (264.202µs)
+--- PASS: TestAuth_OIDC_Reset_Property (0.00s)
+PASS
+ok  	github.com/kuitang/agent-notes/tests/auth	9.236s
+flag provided but not defined: -rapid.checks
+Usage of /tmp/go-build645528426/b401/browser.test:
+  -test.bench regexp
+    	run only benchmarks matching regexp
+  -test.benchmem
+    	print memory allocations for benchmarks
+  -test.benchtime d
+    	run each benchmark for duration d or N times if `d` is of the form Nx (default 1s)
+  -test.blockprofile file
+    	write a goroutine blocking profile to file
+  -test.blockprofilerate rate
+    	set blocking profile rate (see runtime.SetBlockProfileRate) (default 1)
+  -test.count n
+    	run tests and benchmarks n times (default 1)
+  -test.coverprofile file
+    	write a coverage profile to file
+  -test.cpu list
+    	comma-separated list of cpu counts to run each test with
+  -test.cpuprofile file
+    	write a cpu profile to file
+  -test.failfast
+    	do not start new tests after the first test failure
+  -test.fullpath
+    	show full file names in error messages
+  -test.fuzz regexp
+    	run the fuzz test matching regexp
+  -test.fuzzcachedir string
+    	directory where interesting fuzzing inputs are stored (for use only by cmd/go)
+  -test.fuzzminimizetime value
+    	time to spend minimizing a value after finding a failing input (default 1m0s)
+  -test.fuzztime value
+    	time to spend fuzzing; default is to run indefinitely
+  -test.fuzzworker
+    	coordinate with the parent process to fuzz random values (for use only by cmd/go)
+  -test.gocoverdir string
+    	write coverage intermediate files to this directory
+  -test.list regexp
+    	list tests, examples, and benchmarks matching regexp then exit
+  -test.memprofile file
+    	write an allocation profile to file
+  -test.memprofilerate rate
+    	set memory allocation profiling rate (see runtime.MemProfileRate)
+  -test.mutexprofile string
+    	write a mutex contention profile to the named file after execution
+  -test.mutexprofilefraction int
+    	if >= 0, calls runtime.SetMutexProfileFraction() (default 1)
+  -test.outputdir dir
+    	write profiles to dir
+  -test.paniconexit0
+    	panic on call to os.Exit(0)
+  -test.parallel n
+    	run at most n tests in parallel (default 4)
+  -test.run regexp
+    	run only tests and examples matching regexp
+  -test.short
+    	run smaller test suite to save time
+  -test.shuffle string
+    	randomize the execution order of tests and benchmarks (default "off")
+  -test.skip regexp
+    	do not list or run tests matching regexp
+  -test.testlogfile file
+    	write test action log to file (for use only by cmd/go)
+  -test.timeout d
+    	panic test binary after duration d (default 0, timeout disabled)
+  -test.trace file
+    	write an execution trace to file
+  -test.v
+    	verbose: print additional output
+FAIL	github.com/kuitang/agent-notes/tests/browser	0.072s
+=== RUN   TestArithmetic_Commutative_Properties
+    example_test.go:27: [rapid] OK, passed 10 tests (33.92µs)
+--- PASS: TestArithmetic_Commutative_Properties (0.00s)
+=== RUN   TestArithmetic_Associative_Properties
+    example_test.go:51: [rapid] OK, passed 10 tests (24.92µs)
+--- PASS: TestArithmetic_Associative_Properties (0.00s)
+=== RUN   TestNotesAPI_Create_Roundtrip_Properties
+    notes_api_test.go:295: [rapid] OK, passed 10 tests (79.672834ms)
+--- PASS: TestNotesAPI_Create_Roundtrip_Properties (0.08s)
+=== RUN   TestNotesAPI_Create_RequiresTitle_Properties
+    notes_api_test.go:332: [rapid] OK, passed 10 tests (97.74164ms)
+--- PASS: TestNotesAPI_Create_RequiresTitle_Properties (0.10s)
+=== RUN   TestNotesAPI_Get_NonExistent_Properties
+    notes_api_test.go:361: [rapid] OK, passed 10 tests (81.640648ms)
+--- PASS: TestNotesAPI_Get_NonExistent_Properties (0.08s)
+=== RUN   TestNotesAPI_Update_Properties
+    notes_api_test.go:429: [rapid] OK, passed 10 tests (84.429988ms)
+--- PASS: TestNotesAPI_Update_Properties (0.08s)
+=== RUN   TestNotesAPI_Update_NonExistent_Properties
+    notes_api_test.go:459: [rapid] OK, passed 10 tests (50.905354ms)
+--- PASS: TestNotesAPI_Update_NonExistent_Properties (0.05s)
+=== RUN   TestNotesAPI_Delete_Properties
+    notes_api_test.go:504: [rapid] OK, passed 10 tests (73.154869ms)
+--- PASS: TestNotesAPI_Delete_Properties (0.07s)
+=== RUN   TestNotesAPI_Delete_NonExistent_Properties
+    notes_api_test.go:533: [rapid] OK, passed 10 tests (43.223981ms)
+--- PASS: TestNotesAPI_Delete_NonExistent_Properties (0.04s)
+=== RUN   TestNotesAPI_List_Pagination_Properties
+    notes_api_test.go:591: [rapid] OK, passed 10 tests (70.049047ms)
+--- PASS: TestNotesAPI_List_Pagination_Properties (0.07s)
+=== RUN   TestNotesAPI_Search_Properties
+    notes_api_test.go:650: [rapid] OK, passed 10 tests (42.041733ms)
+--- PASS: TestNotesAPI_Search_Properties (0.04s)
+=== RUN   TestNotesAPI_Search_EmptyQuery_Properties
+    notes_api_test.go:677: [rapid] OK, passed 10 tests (46.684365ms)
+--- PASS: TestNotesAPI_Search_EmptyQuery_Properties (0.05s)
+=== RUN   TestNotesAPI_CRUD_Workflow_Properties
+    notes_api_test.go:740: [rapid] OK, passed 10 tests (45.220195ms)
+--- PASS: TestNotesAPI_CRUD_Workflow_Properties (0.05s)
+=== RUN   TestNotesAPI_Create_AllowsEmptyContent_Properties
+    notes_api_test.go:775: [rapid] OK, passed 10 tests (32.702668ms)
+--- PASS: TestNotesAPI_Create_AllowsEmptyContent_Properties (0.03s)
+=== RUN   TestNotesAPI_Search_NoMatches_Properties
+    notes_api_test.go:819: [rapid] OK, passed 10 tests (50.649873ms)
+--- PASS: TestNotesAPI_Search_NoMatches_Properties (0.05s)
+=== RUN   TestNotesAPI_MultipleNotes_Independence_Properties
+    notes_api_test.go:881: [rapid] OK, passed 10 tests (80.126277ms)
+--- PASS: TestNotesAPI_MultipleNotes_Independence_Properties (0.08s)
+=== RUN   TestNotesAPI_List_Offset_Properties
+    notes_api_test.go:928: [rapid] OK, passed 10 tests (64.415688ms)
+--- PASS: TestNotesAPI_List_Offset_Properties (0.06s)
+=== RUN   TestNotesAPI_Update_PartialUpdate_Properties
+    notes_api_test.go:976: [rapid] OK, passed 10 tests (41.234567ms)
+--- PASS: TestNotesAPI_Update_PartialUpdate_Properties (0.04s)
+=== RUN   TestChatGPTOAuthConformance
+=== RUN   TestChatGPTOAuthConformance/Step1_ProtectedResourceMetadata
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:365: [chatgpt] Step 1: Fetching protected resource metadata
+    oauth_auth_test.go:386:   [OK] resource: https://127.0.0.1:38991
+    oauth_auth_test.go:387:   [OK] authorization_servers: [https://127.0.0.1:38991]
+=== RUN   TestChatGPTOAuthConformance/Step2_AuthServerMetadata
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:392: [chatgpt] Step 2: Fetching authorization server metadata
+    oauth_auth_test.go:416:   [OK] authorization_endpoint: https://127.0.0.1:38991/oauth/authorize
+    oauth_auth_test.go:417:   [OK] token_endpoint: https://127.0.0.1:38991/oauth/token
+    oauth_auth_test.go:418:   [OK] registration_endpoint: https://127.0.0.1:38991/oauth/register
+    oauth_auth_test.go:419:   [OK] code_challenge_methods_supported includes S256
+=== RUN   TestChatGPTOAuthConformance/Step3_DynamicClientRegistration
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:424: [chatgpt] Step 3: Dynamic Client Registration
+    oauth_auth_test.go:440:   [INFO] Registering as CONFIDENTIAL client (token_endpoint_auth_method=client_secret_post)
+    oauth_auth_test.go:467:   [OK] client_id: eOKPyQAww-1ZenHkvGRozpSE9m_GFahZG-GzEnlzfgU
+    oauth_auth_test.go:472:   [OK] client_secret: [REDACTED]
+=== RUN   TestChatGPTOAuthConformance/Step4_PKCE
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:480: [chatgpt] Step 4a: Generating PKCE challenge
+    oauth_auth_test.go:487:   [OK] code_verifier: c68f4c104a269d2a...
+    oauth_auth_test.go:488:   [OK] code_challenge (S256): fQdTQDiLqk5PHHCli-IrG7NIrF4w2pQmr30rShQDO-w
+=== RUN   TestChatGPTOAuthConformance/Step5_6_TokenExchange_And_Verification
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:493: [chatgpt] Step 4b: Building authorization URL
+    oauth_auth_test.go:509:   [OK] Authorization URL: https://127.0.0.1:38991/oauth/authorize?client_id=eOKPyQAww-1ZenHkvGRozpSE9m_GFahZG-GzEnlzfgU&code_challenge=fQdTQDiLqk5PHHCli-IrG7NIrF4w2pQmr30rShQDO-w&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector_platform_oauth_redirect&resource=https%3A%2F%2F127.0.0.1%3A38991&response_type=code&scope=notes%3Aread+notes%3Awrite&state=c8eacbd94e9cf8ca
+=== NAME  TestChatGPTOAuthConformance/Step5_6_TokenExchange_And_Verification
+    oauth_auth_test.go:1279: Initial authorization response status: 200
+    oauth_auth_test.go:1279: Consent page body length: 15111
+    oauth_auth_test.go:1279: Consent response status: 302
+    oauth_auth_test.go:1279: Consent redirect: https://chatgpt.com/connector_platform_oauth_redirect?code=vDcHqrI5ox6fM9KYG3UyTIeXqxv4Mb3Wt8OeAOy41cE&state=c8eacbd94e9cf8ca
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:516: [chatgpt] Step 5: Token exchange
+    oauth_auth_test.go:532:   [INFO] Including client_secret (confidential client)
+    oauth_auth_test.go:556:   [OK] access_token: [REDACTED]
+    oauth_auth_test.go:557:   [OK] token_type: Bearer
+    oauth_auth_test.go:558:   [OK] expires_in: 3600
+    oauth_auth_test.go:567: [chatgpt] Step 6: Verify token works on MCP endpoint
+    oauth_auth_test.go:587:   [OK] MCP request with Bearer token succeeded
+=== RUN   TestChatGPTOAuthConformance/Step7_AuthTrigger
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:592: [chatgpt] Step 7: Verify auth trigger response
+    oauth_auth_test.go:613:   [OK] 401 response includes WWW-Authenticate header
+=== RUN   TestChatGPTOAuthConformance/Negative_NoPKCE
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:622: [chatgpt] Negative Test: Authorization without PKCE must fail
+    oauth_auth_test.go:639:   [OK] Authorization without PKCE correctly rejected
+=== RUN   TestChatGPTOAuthConformance/Negative_InvalidRedirectURI
+=== NAME  TestChatGPTOAuthConformance
+    oauth_auth_test.go:644: [chatgpt] Negative Test: DCR with invalid redirect_uri must fail
+    oauth_auth_test.go:665:   [OK] DCR with invalid redirect_uri correctly rejected
+--- PASS: TestChatGPTOAuthConformance (0.77s)
+    --- PASS: TestChatGPTOAuthConformance/Step1_ProtectedResourceMetadata (0.01s)
+    --- PASS: TestChatGPTOAuthConformance/Step2_AuthServerMetadata (0.00s)
+    --- PASS: TestChatGPTOAuthConformance/Step3_DynamicClientRegistration (0.30s)
+    --- PASS: TestChatGPTOAuthConformance/Step4_PKCE (0.00s)
+    --- PASS: TestChatGPTOAuthConformance/Step5_6_TokenExchange_And_Verification (0.38s)
+    --- PASS: TestChatGPTOAuthConformance/Step7_AuthTrigger (0.01s)
+    --- PASS: TestChatGPTOAuthConformance/Negative_NoPKCE (0.01s)
+    --- PASS: TestChatGPTOAuthConformance/Negative_InvalidRedirectURI (0.01s)
+=== RUN   TestClaudeOAuthConformance
+=== RUN   TestClaudeOAuthConformance/Step1_ProtectedResourceMetadata
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:365: [claude] Step 1: Fetching protected resource metadata
+    oauth_auth_test.go:386:   [OK] resource: https://127.0.0.1:40435
+    oauth_auth_test.go:387:   [OK] authorization_servers: [https://127.0.0.1:40435]
+=== RUN   TestClaudeOAuthConformance/Step2_AuthServerMetadata
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:392: [claude] Step 2: Fetching authorization server metadata
+    oauth_auth_test.go:416:   [OK] authorization_endpoint: https://127.0.0.1:40435/oauth/authorize
+    oauth_auth_test.go:417:   [OK] token_endpoint: https://127.0.0.1:40435/oauth/token
+    oauth_auth_test.go:418:   [OK] registration_endpoint: https://127.0.0.1:40435/oauth/register
+    oauth_auth_test.go:419:   [OK] code_challenge_methods_supported includes S256
+=== RUN   TestClaudeOAuthConformance/Step3_DynamicClientRegistration_PublicClient
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:424: [claude] Step 3: Dynamic Client Registration
+    oauth_auth_test.go:438:   [INFO] Registering as PUBLIC client (token_endpoint_auth_method=none)
+    oauth_auth_test.go:467:   [OK] client_id: kQCe1JId4Nv_oJbUW_BKzLLV70-f5hMbmicq-iPWKYU
+    oauth_auth_test.go:474:   [OK] Registered as public client (client_secret not required for token exchange)
+=== RUN   TestClaudeOAuthConformance/Step4_PKCE
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:480: [claude] Step 4a: Generating PKCE challenge
+    oauth_auth_test.go:487:   [OK] code_verifier: 38837a70be3fdde1...
+    oauth_auth_test.go:488:   [OK] code_challenge (S256): veDUzC-hwpoR9pPBf0wIn8wZRqtpaR-96vi1RRzO35U
+=== RUN   TestClaudeOAuthConformance/Step5_6_TokenExchange_And_Verification
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:493: [claude] Step 4b: Building authorization URL
+    oauth_auth_test.go:509:   [OK] Authorization URL: https://127.0.0.1:40435/oauth/authorize?client_id=kQCe1JId4Nv_oJbUW_BKzLLV70-f5hMbmicq-iPWKYU&code_challenge=veDUzC-hwpoR9pPBf0wIn8wZRqtpaR-96vi1RRzO35U&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&resource=https%3A%2F%2F127.0.0.1%3A40435&response_type=code&scope=notes%3Aread+notes%3Awrite&state=d57e57b3b04bc491
+=== NAME  TestClaudeOAuthConformance/Step5_6_TokenExchange_And_Verification
+    oauth_auth_test.go:1345: Initial authorization response status: 200
+    oauth_auth_test.go:1345: Consent page body length: 15087
+    oauth_auth_test.go:1345: Consent response status: 302
+    oauth_auth_test.go:1345: Consent redirect: https://claude.ai/api/mcp/auth_callback?code=390cTlaCksyU-F6-Jl0LnsWLxFncfcphOys146GrtbI&state=d57e57b3b04bc491
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:516: [claude] Step 5: Token exchange
+    oauth_auth_test.go:534:   [INFO] NO client_secret (public client with PKCE)
+    oauth_auth_test.go:556:   [OK] access_token: [REDACTED]
+    oauth_auth_test.go:557:   [OK] token_type: Bearer
+    oauth_auth_test.go:558:   [OK] expires_in: 3600
+    oauth_auth_test.go:561:   [OK] Token exchange succeeded WITHOUT client_secret (PKCE provided proof)
+    oauth_auth_test.go:567: [claude] Step 6: Verify token works on MCP endpoint
+    oauth_auth_test.go:587:   [OK] MCP request with Bearer token succeeded
+=== RUN   TestClaudeOAuthConformance/Step7_AuthTrigger
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:592: [claude] Step 7: Verify auth trigger response
+    oauth_auth_test.go:613:   [OK] 401 response includes WWW-Authenticate header
+=== RUN   TestClaudeOAuthConformance/Negative_NoPKCE
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:622: [claude] Negative Test: Authorization without PKCE must fail
+    oauth_auth_test.go:639:   [OK] Authorization without PKCE correctly rejected
+=== RUN   TestClaudeOAuthConformance/Negative_InvalidRedirectURI
+=== NAME  TestClaudeOAuthConformance
+    oauth_auth_test.go:644: [claude] Negative Test: DCR with invalid redirect_uri must fail
+    oauth_auth_test.go:665:   [OK] DCR with invalid redirect_uri correctly rejected
+--- PASS: TestClaudeOAuthConformance (0.11s)
+    --- PASS: TestClaudeOAuthConformance/Step1_ProtectedResourceMetadata (0.01s)
+    --- PASS: TestClaudeOAuthConformance/Step2_AuthServerMetadata (0.00s)
+    --- PASS: TestClaudeOAuthConformance/Step3_DynamicClientRegistration_PublicClient (0.00s)
+    --- PASS: TestClaudeOAuthConformance/Step4_PKCE (0.00s)
+    --- PASS: TestClaudeOAuthConformance/Step5_6_TokenExchange_And_Verification (0.03s)
+    --- PASS: TestClaudeOAuthConformance/Step7_AuthTrigger (0.01s)
+    --- PASS: TestClaudeOAuthConformance/Negative_NoPKCE (0.01s)
+    --- PASS: TestClaudeOAuthConformance/Negative_InvalidRedirectURI (0.01s)
+=== RUN   TestBothClientsCompatibility
+=== RUN   TestBothClientsCompatibility/ChatGPT_ConfidentialClient
+    oauth_auth_test.go:365: [chatgpt] Step 1: Fetching protected resource metadata
+    oauth_auth_test.go:386:   [OK] resource: https://127.0.0.1:35321
+    oauth_auth_test.go:387:   [OK] authorization_servers: [https://127.0.0.1:35321]
+    oauth_auth_test.go:392: [chatgpt] Step 2: Fetching authorization server metadata
+    oauth_auth_test.go:416:   [OK] authorization_endpoint: https://127.0.0.1:35321/oauth/authorize
+    oauth_auth_test.go:417:   [OK] token_endpoint: https://127.0.0.1:35321/oauth/token
+    oauth_auth_test.go:418:   [OK] registration_endpoint: https://127.0.0.1:35321/oauth/register
+    oauth_auth_test.go:419:   [OK] code_challenge_methods_supported includes S256
+    oauth_auth_test.go:424: [chatgpt] Step 3: Dynamic Client Registration
+    oauth_auth_test.go:440:   [INFO] Registering as CONFIDENTIAL client (token_endpoint_auth_method=client_secret_post)
+    oauth_auth_test.go:467:   [OK] client_id: hqK_wgeiteZ0krdPHZ7MBvHowZYgx5zdP9oelInmjvQ
+    oauth_auth_test.go:472:   [OK] client_secret: [REDACTED]
+    oauth_auth_test.go:480: [chatgpt] Step 4a: Generating PKCE challenge
+    oauth_auth_test.go:487:   [OK] code_verifier: 339bf9df447c9ef7...
+    oauth_auth_test.go:488:   [OK] code_challenge (S256): eXZuDA1_hfnpAobose9QFRlpYs-6lDVl4TV8PGhLL8w
+=== RUN   TestBothClientsCompatibility/Claude_PublicClient
+    oauth_auth_test.go:365: [claude] Step 1: Fetching protected resource metadata
+    oauth_auth_test.go:386:   [OK] resource: https://127.0.0.1:35321
+    oauth_auth_test.go:387:   [OK] authorization_servers: [https://127.0.0.1:35321]
+    oauth_auth_test.go:392: [claude] Step 2: Fetching authorization server metadata
+    oauth_auth_test.go:416:   [OK] authorization_endpoint: https://127.0.0.1:35321/oauth/authorize
+    oauth_auth_test.go:417:   [OK] token_endpoint: https://127.0.0.1:35321/oauth/token
+    oauth_auth_test.go:418:   [OK] registration_endpoint: https://127.0.0.1:35321/oauth/register
+    oauth_auth_test.go:419:   [OK] code_challenge_methods_supported includes S256
+    oauth_auth_test.go:424: [claude] Step 3: Dynamic Client Registration
+    oauth_auth_test.go:438:   [INFO] Registering as PUBLIC client (token_endpoint_auth_method=none)
+    oauth_auth_test.go:467:   [OK] client_id: ia23pQOHolUvjcFXyLLCHeHB2tAI0TYDZ7vQm9hbYxg
+    oauth_auth_test.go:474:   [OK] Registered as public client (client_secret not required for token exchange)
+    oauth_auth_test.go:480: [claude] Step 4a: Generating PKCE challenge
+    oauth_auth_test.go:487:   [OK] code_verifier: 0d3f4a0fe78e138f...
+    oauth_auth_test.go:488:   [OK] code_challenge (S256): aHw8a5SuvEvhb1iKIBLTz6xGRrg8KRBkueUx7cpKNzs
+    oauth_auth_test.go:1390: Claude registered as public client - token exchange will use PKCE only
+--- PASS: TestBothClientsCompatibility (0.37s)
+    --- PASS: TestBothClientsCompatibility/ChatGPT_ConfidentialClient (0.31s)
+    --- PASS: TestBothClientsCompatibility/Claude_PublicClient (0.01s)
+=== RUN   TestOAuth_FullFlow_Properties
+    oauth_auth_test.go:1441: [rapid] OK, passed 10 tests (461.123µs)
+--- PASS: TestOAuth_FullFlow_Properties (0.00s)
+=== RUN   TestOAuth_PKCE_Properties
+    oauth_auth_test.go:1475: [rapid] OK, passed 10 tests (963.926µs)
+--- PASS: TestOAuth_PKCE_Properties (0.00s)
+=== RUN   TestOAuth_RefreshToken_Properties
+    oauth_auth_test.go:1561: [rapid] OK, passed 10 tests (3.704318818s)
+--- PASS: TestOAuth_RefreshToken_Properties (3.70s)
+=== RUN   TestAuth_Registration_Properties
+    oauth_auth_test.go:1632: [rapid] OK, passed 10 tests (1.393487099s)
+--- PASS: TestAuth_Registration_Properties (1.39s)
+=== RUN   TestAuth_Registration_WeakPassword_Properties
+    oauth_auth_test.go:1666: [rapid] OK, passed 10 tests (577.155697ms)
+--- PASS: TestAuth_Registration_WeakPassword_Properties (0.58s)
+=== RUN   TestAuth_Login_Properties
+    oauth_auth_test.go:1718: [rapid] OK, passed 10 tests (1.393133576s)
+--- PASS: TestAuth_Login_Properties (1.39s)
+=== RUN   TestAuth_MagicLink_Properties
+    oauth_auth_test.go:1765: [rapid] OK, passed 10 tests (548.255976ms)
+--- PASS: TestAuth_MagicLink_Properties (0.55s)
+=== RUN   TestAuth_PasswordReset_Properties
+    oauth_auth_test.go:1807: [rapid] OK, passed 10 tests (581.128165ms)
+--- PASS: TestAuth_PasswordReset_Properties (0.58s)
+=== RUN   TestAuth_Session_Properties
+    oauth_auth_test.go:1884: [rapid] OK, passed 10 tests (1.44502966s)
+--- PASS: TestAuth_Session_Properties (1.45s)
+=== RUN   TestOAuth_StatePreservation_Properties
+    oauth_auth_test.go:2006: [rapid] OK, passed 10 tests (932.18717ms)
+--- PASS: TestOAuth_StatePreservation_Properties (0.93s)
+=== RUN   TestOAuth_TokenFormat_Properties
+    oauth_auth_test.go:2067: [rapid] OK, passed 10 tests (472.558089ms)
+--- PASS: TestOAuth_TokenFormat_Properties (0.47s)
+=== RUN   TestPATAPI_Roundtrip_Properties
+    pat_api_test.go:482: [rapid] OK, passed 10 tests (1.963098148s)
+--- PASS: TestPATAPI_Roundtrip_Properties (1.96s)
+=== RUN   TestPATAPI_Revocation_Properties
+    pat_api_test.go:543: [rapid] OK, passed 10 tests (1.679954417s)
+--- PASS: TestPATAPI_Revocation_Properties (1.68s)
+=== RUN   TestPATAPI_PasswordReAuth_Properties
+    pat_api_test.go:635: [rapid] OK, passed 10 tests (2.170611755s)
+--- PASS: TestPATAPI_PasswordReAuth_Properties (2.17s)
+=== RUN   TestPATAPI_Uniqueness_Properties
+    pat_api_test.go:715: [rapid] OK, passed 10 tests (3.034883937s)
+--- PASS: TestPATAPI_Uniqueness_Properties (3.03s)
+=== RUN   TestPATAPI_Format_Properties
+    pat_api_test.go:779: [rapid] OK, passed 10 tests (1.641628475s)
+--- PASS: TestPATAPI_Format_Properties (1.64s)
+=== RUN   TestPATAPI_Isolation_Properties
+    pat_api_test.go:873: [rapid] OK, passed 10 tests (2.760001666s)
+--- PASS: TestPATAPI_Isolation_Properties (2.76s)
+=== RUN   TestPATAPI_InvalidToken_Properties
+    pat_api_test.go:941: [rapid] OK, passed 10 tests (958.214515ms)
+--- PASS: TestPATAPI_InvalidToken_Properties (0.96s)
+=== RUN   TestPATAPI_TokenName_EdgeCases_Properties
+    pat_api_test.go:1002: [rapid] OK, passed 10 tests (1.341523507s)
+--- PASS: TestPATAPI_TokenName_EdgeCases_Properties (1.34s)
+=== RUN   TestPATAPI_Scope_Properties
+    pat_api_test.go:1049: [rapid] OK, passed 10 tests (1.612603116s)
+--- PASS: TestPATAPI_Scope_Properties (1.61s)
+=== RUN   TestPATAPI_Expiration_Properties
+    pat_api_test.go:1100: [rapid] OK, passed 10 tests (1.587551342s)
+--- PASS: TestPATAPI_Expiration_Properties (1.59s)
+=== RUN   TestPublicNotesAPI_PrivateReturns404
+--- PASS: TestPublicNotesAPI_PrivateReturns404 (0.01s)
+=== RUN   TestPublicNotesAPI_PublishedAccessible
+--- PASS: TestPublicNotesAPI_PublishedAccessible (0.02s)
+=== RUN   TestPublicNotesAPI_UnpublishedReturns404
+--- PASS: TestPublicNotesAPI_UnpublishedReturns404 (0.01s)
+=== RUN   TestPublicNotesAPI_ToggleConsistency
+--- PASS: TestPublicNotesAPI_ToggleConsistency (0.01s)
+=== RUN   TestPublicNotesAPI_PublishNonExistent
+--- PASS: TestPublicNotesAPI_PublishNonExistent (0.01s)
+=== RUN   TestPublicNotesAPI_NonExistentUser
+--- PASS: TestPublicNotesAPI_NonExistentUser (0.01s)
+=== RUN   TestPublicNotesAPI_S3ObjectCreated
+--- PASS: TestPublicNotesAPI_S3ObjectCreated (0.01s)
+=== RUN   TestRateLimitAPI_WithinBurst_Returns200
+--- PASS: TestRateLimitAPI_WithinBurst_Returns200 (0.01s)
+=== RUN   TestRateLimitAPI_ExceedBurst_Returns429
+--- PASS: TestRateLimitAPI_ExceedBurst_Returns429 (0.00s)
+=== RUN   TestRateLimitAPI_UserIndependence
+--- PASS: TestRateLimitAPI_UserIndependence (0.00s)
+=== RUN   TestRateLimitAPI_PaidVsFree
+--- PASS: TestRateLimitAPI_PaidVsFree (0.00s)
+=== RUN   TestRateLimitAPI_UnauthenticatedBypass
+--- PASS: TestRateLimitAPI_UnauthenticatedBypass (0.00s)
+PASS
+ok  	github.com/kuitang/agent-notes/tests/e2e	32.406s
+FAIL

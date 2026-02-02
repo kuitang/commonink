@@ -32,7 +32,7 @@ import (
 
 const (
 	publicNotesTestBucketName = "test-bucket-public-notes"
-	publicNotesTestMasterKey  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes
+	publicNotesTestMasterKey  = "test0000000000000000000000000000test0000000000000000000000000000" // 64 hex chars = 32 bytes, low entropy for gitleaks
 )
 
 // publicNotesTestServer encapsulates the test server and all its dependencies for public notes tests.

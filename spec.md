@@ -677,7 +677,7 @@ PATs allow users to authenticate programmatically without going through the OAut
 **Response** (token shown ONCE, never stored in plaintext):
 ```json
 {
-  "token": "pat_a1b2c3d4e5f6...",
+  "token": "pat_xxx...xxx",
   "token_id": "tok_abc123",
   "name": "My CLI Token",
   "scope": "read_write",
@@ -726,7 +726,7 @@ PATs can be used as Bearer tokens for MCP and API requests:
 ```bash
 curl -X POST https://your-domain.com/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer pat_a1b2c3d4e5f6..." \
+  -H "Authorization: Bearer $YOUR_PAT_TOKEN" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
