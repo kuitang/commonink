@@ -1,6 +1,6 @@
 // Package openai provides conformance tests for OpenAI function calling integration.
 // These tests verify that OpenAI's gpt-5-mini model can correctly use function calling
-// to interact with our notes HTTP API.
+// via the Responses API to interact with our notes HTTP API.
 package openai
 
 import (
@@ -21,7 +21,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
+	"github.com/openai/openai-go/responses"
 	"pgregory.net/rapid"
 )
 
@@ -34,16 +34,16 @@ const (
 )
 
 // =============================================================================
-// Tool Definitions - These match our HTTP API endpoints
+// Tool Definitions for Responses API
 // =============================================================================
 
-// Define JSON Schema types for tool parameters
+// Define tool parameters using the Responses API format
 var (
-	toolCreateNote = openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
+	toolCreateNote = responses.ToolUnionParam{
+		OfFunction: &responses.FunctionToolParam{
 			Name:        "create_note",
 			Description: openai.String("Create a new note with a title and optional content"),
-			Parameters: shared.FunctionParameters{
+			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"title": map[string]any{
@@ -55,16 +55,18 @@ var (
 						"description": "The content/body of the note (optional)",
 					},
 				},
-				"required": []string{"title"},
+				"required":             []string{"title"},
+				"additionalProperties": false,
 			},
+			// Note: Strict mode requires all properties in required array
 		},
 	}
 
-	toolReadNote = openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
+	toolReadNote = responses.ToolUnionParam{
+		OfFunction: &responses.FunctionToolParam{
 			Name:        "read_note",
 			Description: openai.String("Read a note by its ID"),
-			Parameters: shared.FunctionParameters{
+			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -72,16 +74,18 @@ var (
 						"description": "The unique ID of the note to read",
 					},
 				},
-				"required": []string{"id"},
+				"required":             []string{"id"},
+				"additionalProperties": false,
 			},
+			// Note: Strict mode requires all properties in required array
 		},
 	}
 
-	toolUpdateNote = openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
+	toolUpdateNote = responses.ToolUnionParam{
+		OfFunction: &responses.FunctionToolParam{
 			Name:        "update_note",
 			Description: openai.String("Update an existing note's title and/or content"),
-			Parameters: shared.FunctionParameters{
+			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -97,16 +101,18 @@ var (
 						"description": "The new content (optional)",
 					},
 				},
-				"required": []string{"id"},
+				"required":             []string{"id"},
+				"additionalProperties": false,
 			},
+			// Note: Strict mode requires all properties in required array
 		},
 	}
 
-	toolDeleteNote = openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
+	toolDeleteNote = responses.ToolUnionParam{
+		OfFunction: &responses.FunctionToolParam{
 			Name:        "delete_note",
 			Description: openai.String("Delete a note by its ID"),
-			Parameters: shared.FunctionParameters{
+			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id": map[string]any{
@@ -114,16 +120,18 @@ var (
 						"description": "The unique ID of the note to delete",
 					},
 				},
-				"required": []string{"id"},
+				"required":             []string{"id"},
+				"additionalProperties": false,
 			},
+			// Note: Strict mode requires all properties in required array
 		},
 	}
 
-	toolListNotes = openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
+	toolListNotes = responses.ToolUnionParam{
+		OfFunction: &responses.FunctionToolParam{
 			Name:        "list_notes",
 			Description: openai.String("List all notes with optional pagination"),
-			Parameters: shared.FunctionParameters{
+			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"limit": map[string]any{
@@ -135,16 +143,18 @@ var (
 						"description": "Number of notes to skip (default 0)",
 					},
 				},
-				"required": []string{},
+				"required":             []string{},
+				"additionalProperties": false,
 			},
+			// Note: Strict mode requires all properties in required array
 		},
 	}
 
-	toolSearchNotes = openai.ChatCompletionToolParam{
-		Function: shared.FunctionDefinitionParam{
+	toolSearchNotes = responses.ToolUnionParam{
+		OfFunction: &responses.FunctionToolParam{
 			Name:        "search_notes",
 			Description: openai.String("Search notes by query using full-text search"),
-			Parameters: shared.FunctionParameters{
+			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{
@@ -152,13 +162,15 @@ var (
 						"description": "The search query to find notes",
 					},
 				},
-				"required": []string{"query"},
+				"required":             []string{"query"},
+				"additionalProperties": false,
 			},
+			// Note: Strict mode requires all properties in required array
 		},
 	}
 
 	// allTools contains all available tool definitions
-	allTools = []openai.ChatCompletionToolParam{
+	allTools = []responses.ToolUnionParam{
 		toolCreateNote,
 		toolReadNote,
 		toolUpdateNote,
@@ -175,9 +187,10 @@ var (
 // testEnv holds the test environment including server and client
 type testEnv struct {
 	server     *httptest.Server
-	client     openai.Client
+	client     *openai.Client
 	httpClient *http.Client
 	baseURL    string
+	notesSvc   *notes.Service // Direct DB access for verification
 	cleanup    func()
 }
 
@@ -185,10 +198,10 @@ type testEnv struct {
 func setupTestEnv(t testing.TB) *testEnv {
 	t.Helper()
 
-	// Skip if no API key
+	// FAIL if no API key - do not skip
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set, skipping OpenAI conformance test")
+		t.Fatal("OPENAI_API_KEY not set - this test must run, not skip")
 	}
 
 	// Create temp directory for test database
@@ -224,9 +237,10 @@ func setupTestEnv(t testing.TB) *testEnv {
 
 	env := &testEnv{
 		server:     server,
-		client:     openaiClient,
+		client:     &openaiClient,
 		httpClient: server.Client(),
 		baseURL:    server.URL,
+		notesSvc:   notesSvc,
 		cleanup: func() {
 			server.Close()
 			db.CloseAll()
@@ -430,60 +444,102 @@ func (env *testEnv) executeSearchNotes(ctx context.Context, args json.RawMessage
 	return string(respBody), nil
 }
 
-// runConversation runs a conversation with OpenAI and executes any tool calls
-func (env *testEnv) runConversation(ctx context.Context, prompt string) (string, error) {
-	messages := []openai.ChatCompletionMessageParamUnion{
-		openai.SystemMessage("You are a helpful assistant that manages notes. " +
-			"Use the provided tools to create, read, update, delete, list, and search notes. " +
-			"Always use the tools when the user asks you to manage notes."),
-		openai.UserMessage(prompt),
+// ToolCall represents a tool call made during conversation
+type ToolCall struct {
+	Name      string
+	Arguments string
+}
+
+// Conversation maintains state for multi-turn conversations
+type Conversation struct {
+	LastResponseID string
+}
+
+// runConversation runs a single conversation turn using the Responses API
+// Pass conv to maintain multi-turn state, or nil for one-shot mode
+// Returns the final text response and list of tool calls made
+func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Conversation) (string, []ToolCall, error) {
+	var toolCalls []ToolCall
+
+	// Build the initial request using Responses API
+	params := responses.ResponseNewParams{
+		Model:        OpenAIModel,
+		Instructions: openai.String("You are a helpful assistant that manages notes. Use the provided tools to create, read, update, delete, list, and search notes. Always use the tools when the user asks you to manage notes."),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: openai.String(prompt),
+		},
+		Tools: allTools,
+	}
+
+	// Continue existing conversation if provided
+	if conv != nil && conv.LastResponseID != "" {
+		params.PreviousResponseID = openai.String(conv.LastResponseID)
 	}
 
 	// Run conversation loop until model stops making tool calls
 	maxIterations := 10
+	var previousResponseID string
+
 	for i := 0; i < maxIterations; i++ {
-		response, err := env.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:    OpenAIModel,
-			Messages: messages,
-			Tools:    allTools,
-		})
+		// Set previous response ID for conversation continuity
+		if previousResponseID != "" {
+			params.PreviousResponseID = openai.String(previousResponseID)
+		}
+
+		response, err := env.client.Responses.New(ctx, params)
 		if err != nil {
-			return "", fmt.Errorf("OpenAI API error: %w", err)
+			return "", toolCalls, fmt.Errorf("OpenAI Responses API error: %w", err)
 		}
 
-		if len(response.Choices) == 0 {
-			return "", fmt.Errorf("no choices in response")
-		}
+		// Store response ID for next iteration
+		previousResponseID = response.ID
 
-		choice := response.Choices[0]
+		// Check for function calls in the output
+		hasFunctionCalls := false
+		var functionCallOutputs []responses.ResponseInputItemUnionParam
 
-		// If the model finished, return the content
-		if choice.FinishReason == "stop" {
-			return choice.Message.Content, nil
-		}
+		for _, output := range response.Output {
+			if output.Type == "function_call" {
+				hasFunctionCalls = true
 
-		// If there are tool calls, execute them
-		if len(choice.Message.ToolCalls) > 0 {
-			// Add assistant message with tool calls
-			messages = append(messages, openai.AssistantMessage(choice.Message.Content))
+				// Track the tool call
+				toolCalls = append(toolCalls, ToolCall{
+					Name:      output.Name,
+					Arguments: output.Arguments,
+				})
 
-			// Execute each tool call and add results
-			for _, toolCall := range choice.Message.ToolCalls {
-				result, err := env.executeTool(ctx, toolCall.Function.Name, json.RawMessage(toolCall.Function.Arguments))
+				// Execute the tool call
+				result, err := env.executeTool(ctx, output.Name, json.RawMessage(output.Arguments))
 				if err != nil {
 					// Return error as tool result so the model can handle it
 					result = fmt.Sprintf(`{"error": "%s"}`, err.Error())
 				}
 
-				messages = append(messages, openai.ToolMessage(toolCall.ID, result))
+				// Add function call output for the next request
+				functionCallOutputs = append(functionCallOutputs, responses.ResponseInputItemParamOfFunctionCallOutput(output.CallID, result))
 			}
-		} else {
-			// No tool calls and not stopped - return whatever we have
-			return choice.Message.Content, nil
+		}
+
+		// If no function calls, we're done - save state and return
+		if !hasFunctionCalls {
+			if conv != nil {
+				conv.LastResponseID = previousResponseID
+			}
+			return response.OutputText(), toolCalls, nil
+		}
+
+		// Prepare next request with function call outputs
+		params = responses.ResponseNewParams{
+			Model:              OpenAIModel,
+			PreviousResponseID: openai.String(previousResponseID),
+			Input: responses.ResponseNewParamsInputUnion{
+				OfInputItemList: functionCallOutputs,
+			},
+			Tools: allTools,
 		}
 	}
 
-	return "", fmt.Errorf("max iterations reached without completion")
+	return "", toolCalls, fmt.Errorf("max iterations reached without completion")
 }
 
 // =============================================================================
@@ -502,7 +558,7 @@ func testOpenAI_CreateNote_Properties(t *rapid.T, env *testEnv) {
 
 	prompt := fmt.Sprintf("Create a note with title '%s' and content '%s'", title, content)
 
-	response, err := env.runConversation(ctx, prompt)
+	response, _, err := env.runConversation(ctx, prompt, nil)
 	if err != nil {
 		t.Fatalf("Conversation failed: %v", err)
 	}
@@ -537,7 +593,7 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 
 	// Step 1: Create note
 	createPrompt := fmt.Sprintf("Create a note titled '%s' with content '%s'. Tell me the ID of the created note.", title, content)
-	createResp, err := env.runConversation(ctx, createPrompt)
+	createResp, _, err := env.runConversation(ctx, createPrompt, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -572,7 +628,7 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 
 	// Step 2: Read note
 	readPrompt := fmt.Sprintf("Read the note with ID '%s' and tell me its title and content.", noteID)
-	readResp, err := env.runConversation(ctx, readPrompt)
+	readResp, _, err := env.runConversation(ctx, readPrompt, nil)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -580,7 +636,7 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 
 	// Step 3: Update note
 	updatePrompt := fmt.Sprintf("Update the note with ID '%s' and change its title to '%s'.", noteID, updatedTitle)
-	updateResp, err := env.runConversation(ctx, updatePrompt)
+	updateResp, _, err := env.runConversation(ctx, updatePrompt, nil)
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -603,7 +659,7 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 
 	// Step 4: Delete note
 	deletePrompt := fmt.Sprintf("Delete the note with ID '%s'.", noteID)
-	deleteResp, err := env.runConversation(ctx, deletePrompt)
+	deleteResp, _, err := env.runConversation(ctx, deletePrompt, nil)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -637,7 +693,7 @@ func testOpenAI_ListNotes_Properties(t *rapid.T, env *testEnv) {
 
 	// Ask OpenAI to list notes
 	listPrompt := "List all my notes"
-	listResp, err := env.runConversation(ctx, listPrompt)
+	listResp, _, err := env.runConversation(ctx, listPrompt, nil)
 	if err != nil {
 		t.Fatalf("List conversation failed: %v", err)
 	}
@@ -677,7 +733,7 @@ func testOpenAI_SearchNotes_Properties(t *rapid.T, env *testEnv) {
 
 	// Ask OpenAI to search for the note
 	searchPrompt := fmt.Sprintf("Search for notes containing '%s'", uniqueTerm)
-	searchResp, err := env.runConversation(ctx, searchPrompt)
+	searchResp, _, err := env.runConversation(ctx, searchPrompt, nil)
 	if err != nil {
 		t.Fatalf("Search conversation failed: %v", err)
 	}
@@ -791,7 +847,7 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	// Test 1: Create a note
 	t.Run("Create", func(t *testing.T) {
 		prompt := "Create a note titled 'Integration Test Note' with content 'This is a test note for integration testing'"
-		resp, err := env.runConversation(ctx, prompt)
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -818,7 +874,7 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	// Test 2: Read the note
 	t.Run("Read", func(t *testing.T) {
 		prompt := fmt.Sprintf("Read the note with ID '%s' and describe its contents", noteID)
-		resp, err := env.runConversation(ctx, prompt)
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("Read failed: %v", err)
 		}
@@ -828,7 +884,7 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	// Test 3: Update the note
 	t.Run("Update", func(t *testing.T) {
 		prompt := fmt.Sprintf("Update the note with ID '%s' and change its content to 'Updated content for integration test'", noteID)
-		resp, err := env.runConversation(ctx, prompt)
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("Update failed: %v", err)
 		}
@@ -838,7 +894,7 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	// Test 4: List notes
 	t.Run("List", func(t *testing.T) {
 		prompt := "List all my notes and tell me how many there are"
-		resp, err := env.runConversation(ctx, prompt)
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("List failed: %v", err)
 		}
@@ -848,7 +904,7 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	// Test 5: Search notes
 	t.Run("Search", func(t *testing.T) {
 		prompt := "Search for notes containing 'integration'"
-		resp, err := env.runConversation(ctx, prompt)
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("Search failed: %v", err)
 		}
@@ -858,7 +914,7 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	// Test 6: Delete the note
 	t.Run("Delete", func(t *testing.T) {
 		prompt := fmt.Sprintf("Delete the note with ID '%s'", noteID)
-		resp, err := env.runConversation(ctx, prompt)
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("Delete failed: %v", err)
 		}
@@ -889,19 +945,24 @@ func TestOpenAI_ToolDefinitions(t *testing.T) {
 	}
 
 	for i, tool := range allTools {
-		if tool.Function.Name != expectedTools[i] {
+		if tool.OfFunction == nil {
+			t.Errorf("Tool %d is not a function tool", i)
+			continue
+		}
+
+		if tool.OfFunction.Name != expectedTools[i] {
 			t.Errorf("Tool %d: expected name '%s', got '%s'",
-				i, expectedTools[i], tool.Function.Name)
+				i, expectedTools[i], tool.OfFunction.Name)
 		}
 
 		// Verify each tool has a description
-		if tool.Function.Description.Value == "" {
-			t.Errorf("Tool '%s' has no description", tool.Function.Name)
+		if tool.OfFunction.Description.Value == "" {
+			t.Errorf("Tool '%s' has no description", tool.OfFunction.Name)
 		}
 
 		// Verify each tool has parameters
-		if tool.Function.Parameters == nil {
-			t.Errorf("Tool '%s' has no parameters", tool.Function.Name)
+		if tool.OfFunction.Parameters == nil {
+			t.Errorf("Tool '%s' has no parameters", tool.OfFunction.Name)
 		}
 	}
 }
@@ -914,9 +975,9 @@ func TestOpenAI_ToolDefinitions(t *testing.T) {
 // Note: Due to the expense of OpenAI API calls, fuzz testing is limited.
 // The property-based tests with rapid provide better coverage.
 func FuzzOpenAI_CreateNote_Properties(f *testing.F) {
-	// Skip if no API key
+	// FAIL if no API key - do not skip
 	if os.Getenv("OPENAI_API_KEY") == "" {
-		f.Skip("OPENAI_API_KEY not set, skipping OpenAI fuzz test")
+		f.Fatal("OPENAI_API_KEY not set - this test must run, not skip")
 	}
 
 	// Add seed corpus
@@ -959,7 +1020,7 @@ func FuzzOpenAI_CreateNote_Properties(f *testing.F) {
 
 		env := &testEnv{
 			server:     server,
-			client:     openaiClient,
+			client:     &openaiClient,
 			httpClient: server.Client(),
 			baseURL:    server.URL,
 			cleanup:    func() {},
