@@ -18,13 +18,15 @@
                            [Milestone 2 Complete]
                            (Auth + Encryption)
                                     │
-         ┌──────────────────────────┼──────────────────────────┐
-         │                          │                          │
-   [Rate Limiter]          [Public Notes Logic]         [OAuth Consent Logic]
-         │                          │                          │
-         └──────────────────────────┼──────────────────────────┘
+    ┌────────────────┬──────────────┼──────────────┬───────────────────┐
+    │                │              │              │                   │
+[Rate Limiter] [ObjectStorage  [Markdown     [Public Notes   [OAuth Consent
+               Interface+Mock]  Renderer]     Logic]          Logic]
+    │                │              │              │                   │
+    └────────────────┴──────────────┼──────────────┴───────────────────┘
                                     │
                         [Rate Limit Middleware]
+                        [Sessions DB Queries]
                                     │
               ┌─────────────────────┼─────────────────────────┐
               │                     │                         │
@@ -36,6 +38,7 @@
                             (frontend-design skill)
                                     │
                           [Wire into main.go]
+                          (inject MockObjectStorage)
                                     │
                 ┌───────────────────┼───────────────────────────┐
                 │                   │                           │
@@ -46,6 +49,8 @@
                           [Master Test Script]
                                     │
                                 [Commit]
+
+Note: TigrisStorage implementation deferred to deployment (see DEPLOYMENT_ARCHITECTURE.md)
 ```
 
 ---
@@ -58,6 +63,13 @@
 - [x] Mock auth flows tested
 
 ### Layer 1 (Parallel - No Dependencies)
+
+**Reference**: See `DEPLOYMENT_ARCHITECTURE.md` for comprehensive details on:
+- Tigris global object storage architecture
+- Local development with MinIO (Docker)
+- URL structure and SEO
+- Production deployment to Fly.io
+- Cost breakdown
 
 1. **Rate Limiter** (`internal/ratelimit/limiter.go`)
    - Use `golang.org/x/time/rate` (stdlib)
@@ -88,15 +100,66 @@
    - `Cleanup()` - Remove idle limiters (background goroutine)
    - Per-user rate limiting (not per-IP)
 
-2. **Public Notes Logic** (`internal/notes/public.go`)
+2. **Public Notes Storage Interface** (`internal/storage/`)
+
+   **Following M2/M4 dependency injection pattern:**
+
+   - `service.go` - Interface:
+     ```go
+     type ObjectStorage interface {
+         // PutObject uploads content with content-type
+         PutObject(ctx context.Context, key string, content []byte, contentType string) error
+         // GetObject retrieves content
+         GetObject(ctx context.Context, key string) ([]byte, error)
+         // DeleteObject removes content
+         DeleteObject(ctx context.Context, key string) error
+         // GetPublicURL returns the publicly accessible URL
+         GetPublicURL(key string) string
+     }
+     ```
+
+   - `mock.go` - Mock implementation (for M3 tests):
+     ```go
+     type MockObjectStorage struct {
+         mu      sync.RWMutex
+         Objects map[string][]byte
+         BaseURL string  // e.g., "http://localhost:8080/public"
+     }
+     func NewMockObjectStorage(baseURL string) *MockObjectStorage
+     func (m *MockObjectStorage) PutObject(ctx, key, content, contentType) error
+     func (m *MockObjectStorage) GetObject(ctx, key) ([]byte, error)
+     func (m *MockObjectStorage) DeleteObject(ctx, key) error
+     func (m *MockObjectStorage) GetPublicURL(key string) string
+     ```
+
+   - `tigris.go` - Real Tigris/S3 implementation (deferred to M4/deployment):
+     ```go
+     type TigrisStorage struct {
+         client     *s3.Client
+         bucketName string
+         publicURL  string  // e.g., "https://notes.domain.com"
+     }
+     func NewTigrisStorage(endpoint, accessKey, secretKey, bucket, publicURL string) (*TigrisStorage, error)
+     ```
+
+3. **Public Notes Logic** (`internal/notes/public.go`)
    - Add to notes service:
-     - `SetPublic(noteID, isPublic)` - Toggle public flag
+     - `SetPublic(noteID, isPublic)` - Toggle flag + upload/delete from storage
      - `GetPublic(noteID)` - Get note if public (no auth required)
      - `ListPublicByUser(userID)` - List user's public notes
    - Public note URL: `/public/{user_id}/{note_id}`
    - Update DB schema if needed (is_public flag already in spec)
 
-3. **OAuth Consent Logic** (`internal/auth/consent.go`)
+4. **Markdown Renderer** (`internal/notes/render.go`)
+   - `RenderMarkdownToHTML(markdown, title, description, canonicalURL) []byte`
+   - Uses `github.com/gomarkdown/markdown`
+   - Includes SEO meta tags:
+     - Open Graph (og:title, og:description, og:url)
+     - Twitter Cards
+     - Canonical URL
+   - Minimal CSS inline (no external dependencies)
+
+5. **OAuth Consent Logic** (`internal/auth/consent.go`)
    - For OAuth 2.1 provider (AI clients connecting to us)
    - `ConsentService` struct:
      - `GetPendingConsent(userID, clientID)` - Check if consent needed
@@ -107,14 +170,14 @@
 
 ### Layer 2 (Depends on Layer 1)
 
-4. **Rate Limit Middleware** (`internal/ratelimit/middleware.go`)
+6. **Rate Limit Middleware** (`internal/ratelimit/middleware.go`)
    - `RateLimitMiddleware(limiter, getUserID, getIsPaid)`
    - Returns 429 Too Many Requests when limit exceeded
    - Includes `Retry-After` header
    - Includes `X-RateLimit-Remaining` header
    - Different limits for free vs paid (check user subscription status)
 
-5. **Sessions DB Queries for Consent** (`internal/db/sql/sessions_consent.sql`)
+7. **Sessions DB Queries for Consent** (`internal/db/sql/sessions_consent.sql`)
    - `CreateConsent(user_id, client_id, scopes, granted_at)`
    - `GetConsent(user_id, client_id)`
    - `DeleteConsent(user_id, client_id)`
@@ -129,7 +192,7 @@
 - Mobile responsive
 - Dark mode support (via Tailwind)
 
-6. **Web UI: Auth Pages** (`web/templates/auth/`)
+8. **Web UI: Auth Pages** (`web/templates/auth/`)
    - `login.html` - All three login options:
      - "Sign in with Google" button
      - Email + "Send Magic Link" form
@@ -146,7 +209,7 @@
    - `password_reset_confirm.html` - New password form
    - `error.html` - Auth error display
 
-7. **Web UI: Notes Pages** (`web/templates/notes/`)
+9. **Web UI: Notes Pages** (`web/templates/notes/`)
    - `list.html` - Notes list:
      - Note title + preview
      - Created/updated timestamps
@@ -168,7 +231,7 @@
      - Author attribution
      - "View more from this author" link
 
-8. **Web UI: OAuth Consent** (`web/templates/oauth/`)
+10. **Web UI: OAuth Consent** (`web/templates/oauth/`)
    - `consent.html` - OAuth consent screen:
      - App name + icon (from client registration)
      - Requested scopes with descriptions:
@@ -179,7 +242,7 @@
    - `consent_denied.html` - User denied consent
    - `consent_granted.html` - Success, redirecting...
 
-9. **Base Template** (`web/templates/base.html`)
+11. **Base Template** (`web/templates/base.html`)
    - Tailwind CSS CDN include
    - Navigation header:
      - Logo/app name
@@ -190,7 +253,7 @@
 
 ### Layer 4 (Depends on Layer 3)
 
-10. **Template Renderer** (`internal/web/render.go`)
+12. **Template Renderer** (`internal/web/render.go`)
     - `Renderer` struct with template cache
     - `NewRenderer(templatesDir)` - Parse all templates
     - `Render(w, templateName, data)` - Execute template
@@ -200,7 +263,7 @@
       - `truncate(s string, n int)` - Preview text
       - `markdown(s string)` - Render markdown (optional)
 
-11. **Web Handlers** (`internal/web/handlers.go`)
+13. **Web Handlers** (`internal/web/handlers.go`)
     - `WebHandler` struct: renderer, notesService, authService
     - **Landing**:
       - `GET /` - If logged in → notes list, else → login
@@ -221,37 +284,53 @@
 
 ### Layer 5 (Depends on Layer 4)
 
-12. **Update main.go**
+14. **Update main.go**
     - Initialize rate limiter with config
     - Add rate limit middleware to API routes
     - Initialize template renderer
+    - **Initialize ObjectStorage (M2/M4 DI pattern)**:
+      ```go
+      var objectStore storage.ObjectStorage
+      if cfg.UseMockStorage {
+          objectStore = storage.NewMockObjectStorage(cfg.PublicNotesURL)
+      } else {
+          objectStore, err = storage.NewTigrisStorage(
+              cfg.S3Endpoint,
+              cfg.S3AccessKey,
+              cfg.S3SecretKey,
+              cfg.S3Bucket,
+              cfg.PublicNotesURL,
+          )
+      }
+      ```
     - Register web routes
     - Mount static files if any
     - Configure routes:
       - `/` - Landing
       - `/login`, `/register`, etc. - Auth pages
       - `/notes/*` - Notes web UI
-      - `/public/*` - Public notes
+      - `/public/*` - Public notes (serves from ObjectStorage or fallback)
       - `/oauth/consent` - OAuth consent
       - `/api/*` - JSON API (existing, rate limited)
       - `/mcp` - MCP server (existing, rate limited)
 
 ### Layer 6 (Parallel, Depends on Layer 5)
 
-13. **Rate Limit Property Tests** (`internal/ratelimit/*_test.go`)
+15. **Rate Limit Property Tests** (`internal/ratelimit/*_test.go`)
     - Property: Requests within limit succeed
     - Property: Requests exceeding limit return 429
     - Property: Different users have independent limits
     - Property: Paid users have higher limits
     - Property: Idle limiters cleaned up
 
-14. **Public Notes Property Tests** (`internal/notes/public_test.go`)
+16. **Public Notes Property Tests** (`internal/notes/public_test.go`)
     - Property: Public note accessible without auth
     - Property: Private note requires auth
     - Property: Owner can toggle public/private
     - Property: Non-owner cannot toggle
+    - Property: Markdown renders to valid HTML with SEO tags
 
-15. **Playwright Browser Tests** (`tests/browser/`)
+17. **Playwright Browser Tests** (`tests/browser/`)
     - `auth_flow_test.go` - Login/register/logout flows
     - `notes_crud_test.go` - Create/edit/delete notes via UI
     - `public_notes_test.go` - Public note viewing
@@ -261,7 +340,7 @@
 
 ### Layer 7 (Depends on Layer 6)
 
-16. **Master Test Script** (`scripts/milestone3-test.sh`)
+18. **Master Test Script** (`scripts/milestone3-test.sh`)
     - Build server
     - Run rate limit tests
     - Run public notes tests
@@ -334,8 +413,13 @@ Components:
 │   │   ├── limiter.go          # Rate limiter implementation
 │   │   ├── middleware.go       # HTTP middleware
 │   │   └── limiter_test.go     # Property tests
+│   ├── storage/                 # Object storage (M2/M4 DI pattern)
+│   │   ├── service.go          # ObjectStorage interface
+│   │   ├── mock.go             # Mock implementation (in-memory)
+│   │   └── tigris.go           # Real Tigris/S3 (deferred to deployment)
 │   ├── notes/
-│   │   └── public.go           # Public notes logic
+│   │   ├── public.go           # Public notes logic
+│   │   └── render.go           # Markdown → HTML with SEO
 │   ├── auth/
 │   │   └── consent.go          # OAuth consent service
 │   ├── web/
@@ -407,6 +491,17 @@ RATE_LIMIT_FREE_BURST=20
 RATE_LIMIT_PAID_RPS=1000
 RATE_LIMIT_PAID_BURST=2000
 RATE_LIMIT_CLEANUP_INTERVAL=1h
+
+# Object Storage (M3 uses mock by default)
+USE_MOCK_STORAGE=true                     # true for M3, false for production
+PUBLIC_NOTES_URL=http://localhost:8080/public
+
+# Tigris/S3 (only needed when USE_MOCK_STORAGE=false)
+# See DEPLOYMENT_ARCHITECTURE.md for production setup
+AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev
+AWS_ACCESS_KEY_ID=<your-tigris-access-key>
+AWS_SECRET_ACCESS_KEY=<your-tigris-secret-key>
+BUCKET_NAME=agent-notes
 ```
 
 ---
@@ -426,6 +521,9 @@ RATE_LIMIT_CLEANUP_INTERVAL=1h
 - [ ] Public note URL works: `/public/{user_id}/{note_id}`
 - [ ] Private notes require auth
 - [ ] Owner can toggle public/private
+- [ ] Markdown rendered to HTML with SEO meta tags (Open Graph, Twitter Cards)
+- [ ] ObjectStorage interface works with MockObjectStorage
+- [ ] HTML uploaded/deleted correctly on publish/unpublish
 
 ### Web UI
 - [ ] All auth pages render correctly
@@ -472,8 +570,16 @@ Repeat for each page type (notes list, note view, OAuth consent, etc.)
 ## Dependencies to Add
 
 ```go
-// go.mod - no new external dependencies needed
-// stdlib rate limiting: golang.org/x/time/rate (already available)
+// go.mod additions for Milestone 3
+require (
+    golang.org/x/time v0.5.0               // Rate limiting (stdlib extension)
+    github.com/gomarkdown/markdown v0.0.0-20241205020045-f7e15b2f3e62  // Markdown rendering
+    github.com/aws/aws-sdk-go-v2/config    // S3 client config (for Tigris)
+    github.com/aws/aws-sdk-go-v2/service/s3 // S3 client (for Tigris)
+)
+
+// Note: AWS SDK only used by TigrisStorage (deferred to deployment)
+// MockObjectStorage has no external dependencies
 ```
 
 ---

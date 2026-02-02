@@ -13,6 +13,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
 	github.com/openai/openai-go v1.12.0
+	github.com/playwright-community/playwright-go v0.5200.1
 	golang.org/x/crypto v0.47.0
 	golang.org/x/time v0.14.0
 	pgregory.net/rapid v1.2.0
@@ -35,6 +36,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.6 // indirect
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
+	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect

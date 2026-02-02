@@ -1,5 +1,5 @@
 // Remote Notes MicroSaaS - Main Server Entry Point
-// Milestone 2: Authentication, encryption, and per-user databases
+// Milestone 3: Web UI, rate limiting, and public notes
 
 package main
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,12 +18,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/johannesboyne/gofakes3"
+	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/internal/mcp"
 	"github.com/kuitang/agent-notes/internal/notes"
+	"github.com/kuitang/agent-notes/internal/ratelimit"
+	"github.com/kuitang/agent-notes/internal/s3client"
+	"github.com/kuitang/agent-notes/internal/web"
 )
 
 const (
@@ -31,11 +41,14 @@ const (
 
 	// ShutdownTimeout is the graceful shutdown timeout
 	ShutdownTimeout = 30 * time.Second
+
+	// DefaultBucketName is the default S3 bucket for mock storage
+	DefaultBucketName = "remote-notes"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("Remote Notes MicroSaaS - Starting server (Milestone 2)...")
+	log.Println("Remote Notes MicroSaaS - Starting server (Milestone 3)...")
 
 	// Get listen address from environment or use default
 	addr := os.Getenv("LISTEN_ADDR")
@@ -72,7 +85,29 @@ func main() {
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	log.Println("Key manager initialized")
 
-	// Initialize services (using mocks for M2)
+	// Initialize rate limiter
+	rateLimiter := ratelimit.NewRateLimiter(ratelimit.DefaultConfig)
+	log.Println("Rate limiter initialized with default config")
+
+	// Initialize S3 client
+	s3Client, s3Cleanup := initS3Client()
+	if s3Cleanup != nil {
+		defer s3Cleanup()
+	}
+	log.Println("S3 client initialized")
+
+	// Initialize template renderer
+	templatesDir := os.Getenv("TEMPLATES_DIR")
+	if templatesDir == "" {
+		templatesDir = "./web/templates"
+	}
+	renderer, err := web.NewRenderer(templatesDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize template renderer: %v", err)
+	}
+	log.Printf("Template renderer initialized with templates from %s", templatesDir)
+
+	// Initialize services (using mocks for M2/M3)
 	emailService := email.NewMockEmailService()
 	oidcClient := auth.NewMockOIDCClient()
 
@@ -81,43 +116,79 @@ func main() {
 		baseURL = "http://localhost" + addr
 	}
 
+	publicNotesURL := os.Getenv("PUBLIC_NOTES_URL")
+	if publicNotesURL == "" {
+		publicNotesURL = baseURL + "/public"
+	}
+
 	userService := auth.NewUserService(sessionsDB, emailService, baseURL)
 	sessionService := auth.NewSessionService(sessionsDB)
+	consentService := auth.NewConsentService(sessionsDB)
+
+	// Initialize public notes service
+	publicNotes := notes.NewPublicNoteService(s3Client)
 
 	// Initialize auth middleware and handlers
 	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
 	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
 
+	// Initialize web handler with all services
+	webHandler := web.NewWebHandler(
+		renderer,
+		nil, // notesService is created per-request with user's DB
+		publicNotes,
+		userService,
+		sessionService,
+		consentService,
+		s3Client,
+		baseURL,
+	)
+
 	// Create HTTP mux
 	mux := http.NewServeMux()
 
-	// Health check endpoint (no auth required)
+	// Health check endpoint (no auth required, no rate limiting)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy","service":"remote-notes","milestone":2}`))
+		w.Write([]byte(`{"status":"healthy","service":"remote-notes","milestone":3}`))
 	})
 
-	// Register auth routes (no auth required for these)
-	authHandler.RegisterRoutes(mux)
-	log.Println("Auth routes registered at /auth/*")
+	// Register web UI routes (handles /, /login, /register, /notes/*, /public/*, /oauth/consent)
+	webHandler.RegisterRoutes(mux, authMiddleware)
+	log.Println("Web UI routes registered")
 
-	// Create authenticated notes handler
+	// Register auth API routes (no auth required for these)
+	authHandler.RegisterRoutes(mux)
+	log.Println("Auth API routes registered at /auth/*")
+
+	// Rate limiting middleware - extracts user ID and paid status from request
+	getUserID := func(r *http.Request) string {
+		return auth.GetUserID(r.Context())
+	}
+	getIsPaid := func(r *http.Request) bool {
+		// TODO: Check subscription status from user record
+		// For now, all users are free tier
+		return false
+	}
+	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
+
+	// Create authenticated notes handler with rate limiting
 	notesHandler := &AuthenticatedNotesHandler{}
 
-	// Register protected notes API routes
-	mux.Handle("GET /notes", authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.ListNotes)))
-	mux.Handle("POST /notes", authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.CreateNote)))
-	mux.Handle("GET /notes/{id}", authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.GetNote)))
-	mux.Handle("PUT /notes/{id}", authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.UpdateNote)))
-	mux.Handle("DELETE /notes/{id}", authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.DeleteNote)))
-	mux.Handle("POST /notes/search", authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.SearchNotes)))
-	log.Println("Protected notes API routes registered at /notes")
+	// Register protected notes API routes with rate limiting
+	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.ListNotes))))
+	mux.Handle("POST /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.CreateNote))))
+	mux.Handle("GET /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.GetNote))))
+	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.UpdateNote))))
+	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.DeleteNote))))
+	mux.Handle("POST /api/notes/search", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.SearchNotes))))
+	log.Println("Protected notes API routes registered at /api/notes with rate limiting")
 
-	// Create and mount MCP server (requires auth)
+	// Create and mount MCP server (requires auth + rate limiting)
 	mcpHandler := &AuthenticatedMCPHandler{}
-	mux.Handle("/mcp", authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP)))
-	log.Println("MCP server mounted at /mcp (protected)")
+	mux.Handle("/mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
+	log.Println("MCP server mounted at /mcp (protected with rate limiting)")
 
 	// Create HTTP server
 	server := &http.Server{
@@ -135,24 +206,39 @@ func main() {
 	go func() {
 		log.Printf("Server listening on %s", addr)
 		log.Println("Endpoints:")
-		log.Println("  GET  /health                      - Health check (no auth)")
-		log.Println("  GET  /auth/google                 - Google OIDC login")
-		log.Println("  GET  /auth/google/callback        - Google OIDC callback")
-		log.Println("  POST /auth/magic                  - Request magic link")
-		log.Println("  GET  /auth/magic/verify           - Verify magic link")
-		log.Println("  POST /auth/register               - Email/password registration")
-		log.Println("  POST /auth/login                  - Email/password login")
-		log.Println("  POST /auth/password/reset         - Request password reset")
-		log.Println("  POST /auth/password/reset/confirm - Confirm password reset")
-		log.Println("  POST /auth/logout                 - Logout")
-		log.Println("  GET  /auth/whoami                 - Current user info")
-		log.Println("  GET  /notes                       - List notes (protected)")
-		log.Println("  POST /notes                       - Create note (protected)")
-		log.Println("  GET  /notes/{id}                  - Get note (protected)")
-		log.Println("  PUT  /notes/{id}                  - Update note (protected)")
-		log.Println("  DELETE /notes/{id}                - Delete note (protected)")
-		log.Println("  POST /notes/search                - Search notes (protected)")
-		log.Println("  POST /mcp                         - MCP endpoint (protected)")
+		log.Println("  Web UI:")
+		log.Println("    GET  /                           - Landing (redirects)")
+		log.Println("    GET  /login                      - Login page")
+		log.Println("    GET  /register                   - Registration page")
+		log.Println("    GET  /password-reset             - Password reset page")
+		log.Println("    GET  /notes                      - Notes list (protected)")
+		log.Println("    GET  /notes/new                  - New note form (protected)")
+		log.Println("    GET  /notes/{id}                 - View note (protected)")
+		log.Println("    GET  /notes/{id}/edit            - Edit note form (protected)")
+		log.Println("    GET  /public/{user_id}/{note_id} - Public note view")
+		log.Println("    GET  /oauth/consent              - OAuth consent page (protected)")
+		log.Println("  Auth API:")
+		log.Println("    GET  /auth/google                - Google OIDC login")
+		log.Println("    GET  /auth/google/callback       - Google OIDC callback")
+		log.Println("    POST /auth/magic                 - Request magic link")
+		log.Println("    GET  /auth/magic/verify          - Verify magic link")
+		log.Println("    POST /auth/register              - Email/password registration")
+		log.Println("    POST /auth/login                 - Email/password login")
+		log.Println("    POST /auth/password/reset        - Request password reset")
+		log.Println("    POST /auth/password/reset/confirm - Confirm password reset")
+		log.Println("    POST /auth/logout                - Logout")
+		log.Println("    GET  /auth/whoami                - Current user info")
+		log.Println("  Notes API (rate limited):")
+		log.Println("    GET  /api/notes                  - List notes (protected)")
+		log.Println("    POST /api/notes                  - Create note (protected)")
+		log.Println("    GET  /api/notes/{id}             - Get note (protected)")
+		log.Println("    PUT  /api/notes/{id}             - Update note (protected)")
+		log.Println("    DELETE /api/notes/{id}           - Delete note (protected)")
+		log.Println("    POST /api/notes/search           - Search notes (protected)")
+		log.Println("  MCP (rate limited):")
+		log.Println("    POST /mcp                        - MCP endpoint (protected)")
+		log.Println("  Health:")
+		log.Println("    GET  /health                     - Health check")
 		log.Println("")
 		log.Println("Server ready to accept connections")
 		serverErr <- server.ListenAndServe()
@@ -176,6 +262,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 	defer cancel()
 
+	// Stop rate limiter cleanup goroutine
+	log.Println("Stopping rate limiter...")
+	rateLimiter.Stop()
+
 	// Shutdown HTTP server
 	log.Println("Shutting down HTTP server...")
 	if err := server.Shutdown(ctx); err != nil {
@@ -191,6 +281,99 @@ func main() {
 	log.Println("Server shutdown complete")
 }
 
+// initS3Client initializes the S3 client based on environment variables.
+// If USE_MOCK_S3=true (default), creates an in-memory mock S3 server.
+// Otherwise, creates a real S3 client with Tigris configuration.
+func initS3Client() (*s3client.Client, func()) {
+	useMockS3 := os.Getenv("USE_MOCK_S3")
+	if useMockS3 == "" {
+		useMockS3 = "true" // Default to mock for development
+	}
+
+	if useMockS3 == "true" {
+		log.Println("Using mock S3 (gofakes3) for development")
+		return createMockS3Client()
+	}
+
+	log.Println("Using real S3 client (Tigris)")
+	return createRealS3Client(), nil
+}
+
+// createMockS3Client creates an in-memory S3 client using gofakes3.
+func createMockS3Client() (*s3client.Client, func()) {
+	// Create in-memory S3 backend
+	backend := s3mem.New()
+	faker := gofakes3.New(backend)
+
+	// Create test HTTP server
+	ts := httptest.NewServer(faker.Server())
+
+	// Create S3 client configured for the mock server
+	ctx := context.Background()
+	sdkConfig, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
+		),
+	)
+	if err != nil {
+		log.Fatalf("Failed to load AWS config for mock S3: %v", err)
+	}
+
+	s3Client := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(ts.URL)
+		o.UsePathStyle = true // Required for gofakes3
+	})
+
+	// Create the bucket
+	bucketName := os.Getenv("S3_BUCKET")
+	if bucketName == "" {
+		bucketName = DefaultBucketName
+	}
+
+	_, err = s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucketName),
+	})
+	if err != nil {
+		log.Fatalf("Failed to create mock S3 bucket: %v", err)
+	}
+
+	publicURL := ts.URL + "/" + bucketName
+	client := s3client.NewFromS3Client(s3Client, bucketName, publicURL)
+
+	cleanup := func() {
+		ts.Close()
+	}
+
+	return client, cleanup
+}
+
+// createRealS3Client creates a real S3 client for production use with Tigris.
+func createRealS3Client() *s3client.Client {
+	ctx := context.Background()
+
+	cfg := s3client.Config{
+		Endpoint:        os.Getenv("S3_ENDPOINT"),          // e.g., "https://fly.storage.tigris.dev"
+		Region:          os.Getenv("S3_REGION"),            // e.g., "auto"
+		AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),     // Tigris access key
+		SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"), // Tigris secret key
+		BucketName:      os.Getenv("S3_BUCKET"),            // e.g., "remote-notes"
+		PublicURL:       os.Getenv("S3_PUBLIC_URL"),        // e.g., "https://remote-notes.fly.storage.tigris.dev"
+		UsePathStyle:    false,                             // Tigris uses virtual-hosted style
+	}
+
+	if cfg.BucketName == "" {
+		cfg.BucketName = DefaultBucketName
+	}
+
+	client, err := s3client.New(ctx, cfg)
+	if err != nil {
+		log.Fatalf("Failed to create S3 client: %v", err)
+	}
+
+	return client
+}
+
 // AuthenticatedNotesHandler wraps notes operations with auth context
 type AuthenticatedNotesHandler struct{}
 
@@ -202,7 +385,7 @@ func (h *AuthenticatedNotesHandler) getService(r *http.Request) (*notes.Service,
 	return notes.NewService(userDB), nil
 }
 
-// ListNotes handles GET /notes - returns a paginated list of notes
+// ListNotes handles GET /api/notes - returns a paginated list of notes
 func (h *AuthenticatedNotesHandler) ListNotes(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
@@ -235,7 +418,7 @@ func (h *AuthenticatedNotesHandler) ListNotes(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, result)
 }
 
-// GetNote handles GET /notes/{id} - returns a single note by ID
+// GetNote handles GET /api/notes/{id} - returns a single note by ID
 func (h *AuthenticatedNotesHandler) GetNote(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
@@ -262,7 +445,7 @@ func (h *AuthenticatedNotesHandler) GetNote(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, note)
 }
 
-// CreateNote handles POST /notes - creates a new note
+// CreateNote handles POST /api/notes - creates a new note
 func (h *AuthenticatedNotesHandler) CreateNote(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
@@ -290,7 +473,7 @@ func (h *AuthenticatedNotesHandler) CreateNote(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusCreated, note)
 }
 
-// UpdateNote handles PUT /notes/{id} - updates an existing note
+// UpdateNote handles PUT /api/notes/{id} - updates an existing note
 func (h *AuthenticatedNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
@@ -323,7 +506,7 @@ func (h *AuthenticatedNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, note)
 }
 
-// DeleteNote handles DELETE /notes/{id} - deletes a note
+// DeleteNote handles DELETE /api/notes/{id} - deletes a note
 func (h *AuthenticatedNotesHandler) DeleteNote(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
@@ -355,7 +538,7 @@ type SearchRequest struct {
 	Query string `json:"query"`
 }
 
-// SearchNotes handles POST /notes/search - searches notes using FTS5
+// SearchNotes handles POST /api/notes/search - searches notes using FTS5
 func (h *AuthenticatedNotesHandler) SearchNotes(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {

@@ -1,0 +1,95 @@
+{{template "base" .}}
+
+{{define "content"}}
+<div class="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Header -->
+        <div class="mb-8">
+            <a href="{{if .Note}}/notes/{{.Note.ID}}{{else}}/notes{{end}}"
+               class="inline-flex items-center text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-4 transition-colors duration-200">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                </svg>
+                {{if .Note}}Back to note{{else}}Back to notes{{end}}
+            </a>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
+                {{if .Note}}Edit Note{{else}}Create New Note{{end}}
+            </h1>
+        </div>
+
+        <!-- Form -->
+        <form method="POST" action="{{if .Note}}/notes/{{.Note.ID}}{{else}}/notes{{end}}"
+              class="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+            <div class="p-6 space-y-6">
+                <!-- Title Input -->
+                <div>
+                    <label for="title" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Title
+                    </label>
+                    <input type="text"
+                           id="title"
+                           name="title"
+                           value="{{if .Note}}{{.Note.Title}}{{end}}"
+                           placeholder="Enter note title..."
+                           class="w-full px-4 py-3 text-lg border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors duration-200"
+                           autofocus>
+                </div>
+
+                <!-- Content Textarea -->
+                <div>
+                    <label for="content" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Content
+                        <span class="text-gray-500 dark:text-gray-400 font-normal ml-2">(Markdown supported)</span>
+                    </label>
+                    <textarea id="content"
+                              name="content"
+                              rows="20"
+                              placeholder="Write your note here..."
+                              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors duration-200 resize-y font-mono text-sm leading-relaxed"
+                              style="min-height: 400px;">{{if .Note}}{{.Note.Content}}{{end}}</textarea>
+                    <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                        Use Markdown for formatting: **bold**, *italic*, # headings, - lists, [links](url), etc.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
+                <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
+                    <a href="{{if .Note}}/notes/{{.Note.ID}}{{else}}/notes{{end}}"
+                       class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                        Cancel
+                    </a>
+                    <button type="submit"
+                            class="inline-flex items-center justify-center px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        {{if .Note}}Save Changes{{else}}Create Note{{end}}
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <!-- Keyboard Shortcuts Hint -->
+        <div class="mt-6 text-center">
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+                <kbd class="px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono">Ctrl</kbd>
+                +
+                <kbd class="px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono">Enter</kbd>
+                to save
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- Keyboard shortcut handler -->
+<script>
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            document.querySelector('form').submit();
+        }
+    });
+</script>
+{{end}}

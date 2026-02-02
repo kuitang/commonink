@@ -2,7 +2,9 @@ version: "2"
 sql:
   # Sessions database (unencrypted, shared)
   - schema: "sql/sessions_schema.sql"
-    queries: "sql/sessions_queries.sql"
+    queries:
+      - "sql/sessions_queries.sql"
+      - "sql/sessions_consent.sql"
     engine: "sqlite"
     gen:
       go:

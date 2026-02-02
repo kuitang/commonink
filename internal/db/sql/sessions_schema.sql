@@ -64,3 +64,14 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
+
+-- OAuth consents table: user consent records for OAuth clients
+CREATE TABLE IF NOT EXISTS oauth_consents (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    scopes TEXT NOT NULL,  -- space-separated scope string
+    granted_at INTEGER NOT NULL,
+    UNIQUE(user_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_consents_user_id ON oauth_consents(user_id);

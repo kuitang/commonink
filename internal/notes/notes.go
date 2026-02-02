@@ -70,6 +70,7 @@ func (s *Service) Create(params CreateNoteParams) (*Note, error) {
 		ID:        noteID,
 		Title:     params.Title,
 		Content:   params.Content,
+		IsPublic:  false,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}, nil
@@ -95,6 +96,7 @@ func (s *Service) Read(id string) (*Note, error) {
 		ID:        dbNote.ID,
 		Title:     dbNote.Title,
 		Content:   dbNote.Content,
+		IsPublic:  dbNote.IsPublic.Valid && dbNote.IsPublic.Int64 == 1,
 		CreatedAt: time.Unix(dbNote.CreatedAt, 0).UTC(),
 		UpdatedAt: time.Unix(dbNote.UpdatedAt, 0).UTC(),
 	}, nil
@@ -144,6 +146,7 @@ func (s *Service) Update(id string, params UpdateNoteParams) (*Note, error) {
 		ID:        id,
 		Title:     newTitle,
 		Content:   newContent,
+		IsPublic:  existing.IsPublic.Valid && existing.IsPublic.Int64 == 1,
 		CreatedAt: time.Unix(existing.CreatedAt, 0).UTC(),
 		UpdatedAt: time.Unix(nowUnix, 0).UTC(),
 	}, nil
@@ -209,6 +212,7 @@ func (s *Service) List(limit, offset int) (*NoteListResult, error) {
 			ID:        dbNote.ID,
 			Title:     dbNote.Title,
 			Content:   dbNote.Content,
+			IsPublic:  dbNote.IsPublic.Valid && dbNote.IsPublic.Int64 == 1,
 			CreatedAt: time.Unix(dbNote.CreatedAt, 0).UTC(),
 			UpdatedAt: time.Unix(dbNote.UpdatedAt, 0).UTC(),
 		})
@@ -243,6 +247,7 @@ func (s *Service) Search(query string) (*SearchResults, error) {
 				ID:        dbResult.ID,
 				Title:     dbResult.Title,
 				Content:   dbResult.Content,
+				IsPublic:  dbResult.IsPublic == 1,
 				CreatedAt: time.Unix(dbResult.CreatedAt, 0).UTC(),
 				UpdatedAt: time.Unix(dbResult.UpdatedAt, 0).UTC(),
 			},
