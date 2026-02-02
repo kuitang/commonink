@@ -51,3 +51,4 @@ filebrowser.db
 
 # Test results
 test-results/
+internal/db/data/

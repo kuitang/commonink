@@ -1,0 +1,52 @@
+// This is a demo program showing how to use the database layer for Milestone 1
+// To run: CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" go run demo.go
+
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/kuitang/agent-notes/internal/db"
+)
+
+func main() {
+	// Initialize database for test-user-001 (hardcoded for Milestone 1)
+	err := db.InitSchemas("test-user-001")
+	if err != nil {
+		log.Fatalf("Failed to initialize: %v", err)
+	}
+
+	// Get user database
+	userDB, err := db.OpenUserDB("test-user-001")
+	if err != nil {
+		log.Fatalf("Failed to open user database: %v", err)
+	}
+
+	// Insert a test note
+	now := time.Now().Unix()
+	_, err = userDB.Exec(
+		"INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		"demo-note", "Demo Note", "This is a demo note for Milestone 1.", now, now,
+	)
+	if err != nil {
+		log.Fatalf("Failed to insert note: %v", err)
+	}
+
+	// Read it back
+	var title, content string
+	err = userDB.QueryRow("SELECT title, content FROM notes WHERE id = ?", "demo-note").Scan(&title, &content)
+	if err != nil {
+		log.Fatalf("Failed to read note: %v", err)
+	}
+
+	fmt.Printf("✓ Successfully created and read note\n")
+	fmt.Printf("  Title: %s\n", title)
+	fmt.Printf("  Content: %s\n", content)
+
+	// Clean up
+	db.CloseAll()
+
+	fmt.Println("\n✓ Database layer is ready for Milestone 1!")
+}

@@ -1,0 +1,136 @@
+package db
+
+// SQL schema definitions for the database layer.
+// Per spec.md, we have two types of databases:
+// 1. sessions.db - Shared, unencrypted bootstrap data
+// 2. {user_id}.db - Per-user, encrypted with SQLCipher
+
+// SessionsDBSchema contains all the SQL statements for the shared sessions database.
+const SessionsDBSchema = `
+-- Sessions table: stores active user sessions
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+-- Magic tokens table: passwordless authentication tokens
+CREATE TABLE IF NOT EXISTS magic_tokens (
+    token_hash TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    user_id TEXT,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_magic_tokens_email ON magic_tokens(email);
+
+-- User keys table: encrypted DEKs for per-user databases
+CREATE TABLE IF NOT EXISTS user_keys (
+    user_id TEXT PRIMARY KEY,
+    kek_version INTEGER NOT NULL DEFAULT 1,
+    encrypted_dek BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    rotated_at INTEGER
+);
+
+-- OAuth clients table: registered OAuth 2.1 clients
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id TEXT PRIMARY KEY,
+    client_secret TEXT NOT NULL,
+    client_name TEXT,
+    redirect_uris TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- OAuth tokens table: access and refresh tokens
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    access_token TEXT PRIMARY KEY,
+    refresh_token TEXT,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    scope TEXT,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_client ON oauth_tokens(user_id, client_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh ON oauth_tokens(refresh_token);
+
+-- OAuth authorization codes table: temporary codes for token exchange
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope TEXT,
+    code_challenge TEXT NOT NULL,
+    code_challenge_method TEXT DEFAULT 'S256',
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+`
+
+// UserDBSchema contains all the SQL statements for per-user encrypted databases.
+const UserDBSchema = `
+-- Account table: user account information
+CREATE TABLE IF NOT EXISTS account (
+    user_id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
+    google_sub TEXT,
+    created_at INTEGER NOT NULL,
+    subscription_status TEXT DEFAULT 'free',
+    subscription_id TEXT,
+    db_size_bytes INTEGER DEFAULT 0,
+    last_login INTEGER
+);
+
+-- Notes table: main notes storage with 1MB content limit
+CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL CHECK(length(content) <= 1048576),
+    is_public INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_is_public ON notes(is_public);
+
+-- FTS5 virtual table for full-text search
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_notes USING fts5(
+    title,
+    content,
+    content='notes',
+    content_rowid='rowid'
+);
+
+-- Trigger: sync FTS index on INSERT
+CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+    INSERT INTO fts_notes(rowid, title, content)
+    VALUES (new.rowid, new.title, new.content);
+END;
+
+-- Trigger: sync FTS index on DELETE
+CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+    DELETE FROM fts_notes WHERE rowid = old.rowid;
+END;
+
+-- Trigger: sync FTS index on UPDATE
+CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+    UPDATE fts_notes SET title = new.title, content = new.content
+    WHERE rowid = new.rowid;
+END;
+
+-- API keys table: programmatic access keys
+CREATE TABLE IF NOT EXISTS api_keys (
+    key_id TEXT PRIMARY KEY,
+    key_hash TEXT NOT NULL,
+    scope TEXT DEFAULT 'read_write',
+    created_at INTEGER NOT NULL,
+    last_used INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_last_used ON api_keys(last_used);
+`
