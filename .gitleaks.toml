@@ -1,0 +1,13 @@
+title = "gitleaks config"
+
+[allowlist]
+description = "Ignore placeholder tokens in documentation"
+paths = [
+    '''DEPLOYMENT_ARCHITECTURE\.md''',
+    '''notes/testing-tools\.md''',
+    '''notes/design\.md''',
+]
+regexes = [
+    '''INITIAL_ACCESS_TOKEN''',
+    '''YOUR_TOKEN''',
+]

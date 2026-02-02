@@ -1,0 +1,13 @@
+# github.com/mutecomm/go-sqlcipher
+sqlite3.c: In function ‘sqlite3SelectNew’:
+sqlite3.c:120891:10: warning: function may return address of local variable [-Wreturn-local-addr]
+120891 |   return pNew;
+       |          ^~~~
+sqlite3.c:120852:10: note: declared here
+120852 |   Select standin;
+       |          ^~~~~~~
+?   	github.com/kuitang/agent-notes/cmd/server	[no test files]
+=== RUN   TestExample
+--- PASS: TestExample (0.00s)
+PASS
+ok  	github.com/kuitang/agent-notes/tests/e2e	0.004s

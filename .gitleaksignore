@@ -1,0 +1,7 @@
+# Documentation examples with placeholder tokens
+DEPLOYMENT_ARCHITECTURE.md:*:generic-api-key
+notes/testing-tools.md:*:generic-api-key
+notes/design.md:*:generic-api-key
+DEPLOYMENT_ARCHITECTURE.md:*:curl-auth-header
+notes/testing-tools.md:*:curl-auth-header
+notes/design.md:*:curl-auth-header
