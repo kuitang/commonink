@@ -53,6 +53,16 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 
 **DO NOT use `/usr/bin/go`** - it's an outdated system Go (1.19).
 
+### API Keys (REQUIRED for CI)
+
+**OpenAI API Key** - Required for e2e conformance tests:
+```bash
+# Source the key before running tests
+source ~/openai_key.sh
+```
+
+The CI scripts and tests will use `OPENAI_API_KEY` from the environment.
+
 ## Test Strategy Overview
 
 This project uses **property-based testing** with rapid + Go's native fuzzing. See `notes/testing-strategy.md` for philosophy.

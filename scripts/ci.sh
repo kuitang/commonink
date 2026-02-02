@@ -12,6 +12,11 @@ if command -v goenv &> /dev/null; then
     eval "$(goenv init -)"
 fi
 
+# Source API keys (required for e2e tests)
+if [[ -f "$HOME/openai_key.sh" ]]; then
+    source "$HOME/openai_key.sh"
+fi
+
 # Build tags required for SQLCipher FTS5 support
 BUILD_TAGS="-tags fts5"
 
@@ -26,7 +31,7 @@ NC='\033[0m' # No Color
 OUTPUT_DIR="./test-results"
 PARALLEL=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 FUZZ_TIMEOUT="30m"
-COVERAGE_THRESHOLD=10
+COVERAGE_THRESHOLD=50
 
 # Parse arguments
 LEVEL=${1:-}

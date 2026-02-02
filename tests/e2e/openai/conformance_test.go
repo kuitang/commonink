@@ -198,10 +198,10 @@ type testEnv struct {
 func setupTestEnv(t testing.TB) *testEnv {
 	t.Helper()
 
-	// Skip if no API key - CI can run without OpenAI integration
+	// Get API key from env - source ~/openai_key.sh before running tests
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set - skipping OpenAI integration test")
+		t.Fatal("OPENAI_API_KEY not set - run: source ~/openai_key.sh")
 	}
 
 	// Create temp directory for test database
@@ -1109,9 +1109,9 @@ func TestOpenAI_ToolDefinitions(t *testing.T) {
 // Note: Due to the expense of OpenAI API calls, fuzz testing is limited.
 // The property-based tests with rapid provide better coverage.
 func FuzzOpenAI_CreateNote_Properties(f *testing.F) {
-	// Skip if no API key - CI can run without OpenAI integration
+	// Get API key from env - source ~/openai_key.sh before running tests
 	if os.Getenv("OPENAI_API_KEY") == "" {
-		f.Skip("OPENAI_API_KEY not set - skipping OpenAI fuzz test")
+		f.Fatal("OPENAI_API_KEY not set - run: source ~/openai_key.sh")
 	}
 
 	// Add seed corpus
