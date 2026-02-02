@@ -536,7 +536,7 @@ curl -X POST https://your-oauth-server.com/register \
 # Registration with authentication
 curl -X POST https://your-oauth-server.com/register \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer INITIAL_ACCESS_TOKEN" \
+  -H "Authorization: Bearer <INITIAL_ACCESS_TOKEN>" \
   -d '{
     "redirect_uris": ["https://client.example.com/callback"],
     "client_name": "Protected Test Client"

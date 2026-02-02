@@ -48,4 +48,6 @@ build/
 
 # File Browser
 filebrowser.db
-filebrowser.db
+
+# Test results
+test-results/

@@ -1094,7 +1094,7 @@ curl https://agent-notes.fly.dev/health
 ```bash
 # Create a test note (authenticated request)
 curl -X POST https://notes.domain.com/api/notes \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Test Public Note",

@@ -100,27 +100,18 @@ START_SERVER=true ./bin/server
 
 ### MCP Conformance Tests
 ```bash
-# Install MCP Inspector
-npm install -g @modelcontextprotocol/inspector
-
-# Start your server
-./bin/server &
-
-# Test MCP endpoints
-npx @modelcontextprotocol/conformance server --url http://localhost:8080/mcp
-
-# Visual inspector
-npx @modelcontextprotocol/inspector
+# Run conformance tests (server must be running at localhost:8080)
+./scripts/mcp-conformance.sh
 ```
 
 ### OAuth 2.1 Conformance
-See `notes/testing-tools.md` for OpenID Conformance Suite setup (Docker).
-
 ```bash
-# Quick PKCE test
-curl -X POST http://localhost:8080/oauth/register \
-  -H "Content-Type: application/json" \
-  -d '{"redirect_uris": ["http://localhost:3000/callback"], "client_name": "Test"}'
+# Run automated conformance tests (Docker required)
+./scripts/oauth-conformance-test.sh
+
+# Manual testing via OpenID suite (keep suite running)
+KEEP_RUNNING=true ./scripts/oauth-conformance-test.sh
+# Then open: https://localhost:8443
 ```
 
 ### Mock OIDC Provider (for Google Sign-In tests)
@@ -356,7 +347,7 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 | Fuzz | `./scripts/ci.sh fuzz` |
 | Build | `go build ./cmd/server` |
 | Format | `go fmt ./...` |
-| MCP test | `npx @modelcontextprotocol/conformance server --url http://localhost:8080/mcp` |
+| MCP test | `./scripts/mcp-conformance.sh` |
 
 ---
 

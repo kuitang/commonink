@@ -558,6 +558,185 @@ See `notes/testing-strategy.md` for full details. Summary:
 
 See `notes/testing-tools.md` for detailed tool usage.
 
+### External Service Testing (LemonSqueezy & Resend)
+
+#### LemonSqueezy Payment Testing
+
+**Official Test Mode**: LemonSqueezy provides full test mode support without requiring real payments.
+
+**Test Environment Setup**:
+- Create separate test mode API keys in LemonSqueezy dashboard
+- Test keys only interact with test mode data
+- Use test credit cards (never real card numbers):
+  - Visa: 4242 4242 4242 4242
+  - Mastercard: 5555 5555 5555 4444
+  - Insufficient funds: 4000 0000 0000 9995
+  - Expired card: 4000 0000 0000 0069
+
+**Testing Approaches**:
+
+1. **Unit Tests** (Interface Wrapper Pattern):
+```go
+// internal/payment/service.go
+type PaymentService interface {
+    CreateCheckout(userID, planID string) (*Checkout, error)
+    GetSubscription(id string) (*Subscription, error)
+}
+
+// tests/payment/mock_service.go
+type MockPaymentService struct {
+    CreateCheckoutFunc func(userID, planID string) (*Checkout, error)
+}
+```
+
+2. **Integration Tests** (Test Mode API):
+```go
+// tests/e2e/payment_test.go
+func testPaymentIntegration(t *rapid.T) {
+    client := lemonsqueezy.New(
+        lemonsqueezy.WithAPIKey(os.Getenv("LEMON_TEST_API_KEY")),
+    )
+    // Tests run against real test mode API
+}
+```
+
+3. **HTTP Mocking** (When test mode insufficient):
+```go
+import "github.com/jarcoal/httpmock"
+
+func TestPaymentWebhook(t *testing.T) {
+    httpmock.Activate(t)
+    defer httpmock.DeactivateAndReset()
+
+    httpmock.RegisterResponder("POST",
+        "https://api.lemonsqueezy.com/v1/checkouts",
+        httpmock.NewJsonResponderOrPanic(200, checkoutResponse))
+}
+```
+
+**Webhook Testing**:
+- Test mode sends webhooks for all events
+- Use LemonSqueezy dashboard to manually trigger test webhooks
+- Verify webhook signature validation in tests
+
+#### Resend Email Testing
+
+**Official Test Mode**: Resend provides test email addresses and sandbox domain for testing without real email setup.
+
+**Test Environment Setup**:
+- No domain verification required for testing
+- Use sandbox domain: `[email protected]`
+- Set `testMode: true` (default) to restrict delivery to test addresses only
+- Create test API key in Resend dashboard
+
+**Test Email Addresses**:
+- `delivered@resend.dev` - Successful delivery
+- `bounced@resend.dev` - Simulate SMTP 550 rejection
+- `complained@resend.dev` - Spam/complaint scenario
+- `suppressed@resend.dev` - Previously bounced address
+- Labeling supported: `delivered+user1@resend.dev`, `delivered+flow2@resend.dev`
+
+**Testing Approaches**:
+
+1. **Unit Tests** (Interface Wrapper Pattern):
+```go
+// internal/email/service.go
+type EmailService interface {
+    Send(to, subject, html string) error
+    SendTemplate(to string, template string, data interface{}) error
+}
+
+// tests/email/mock_service.go
+type MockEmailService struct {
+    SendFunc func(to, subject, html string) error
+}
+```
+
+2. **Integration Tests** (Test Email Addresses):
+```go
+// tests/e2e/email_test.go
+func testEmailDelivery(t *rapid.T) {
+    client := resend.NewClient(os.Getenv("RESEND_TEST_API_KEY"))
+
+    // Test successful delivery
+    err := client.Emails.Send(&resend.SendEmailRequest{
+        From:    "noreply@yourdomain.com",
+        To:      []string{"delivered@resend.dev"},
+        Subject: "Test Email",
+        Html:    "<p>Test content</p>",
+    })
+
+    // Verify via webhooks or API
+}
+
+func testEmailBounce(t *testing.T) {
+    // Send to bounced@resend.dev
+    // Verify bounce handling
+}
+```
+
+3. **HTTP Mocking** (Unit tests):
+```go
+func TestEmailRetry(t *testing.T) {
+    httpmock.Activate(t)
+    defer httpmock.DeactivateAndReset()
+
+    // Simulate API failure
+    httpmock.RegisterResponder("POST",
+        "https://api.resend.com/emails",
+        httpmock.NewStringResponder(500, "Internal Server Error"))
+
+    // Test retry logic
+}
+```
+
+**Webhook Testing**:
+- Configure webhook URL in Resend dashboard
+- Test delivery, bounce, complaint events
+- Use labeling to track different test scenarios
+
+#### General HTTP Mocking Libraries
+
+When official test modes are insufficient or for isolated unit tests:
+
+**Option A: `github.com/jarcoal/httpmock`** (Recommended for external API mocking)
+- Transport-level HTTP interception
+- Pattern matching for URLs (regex support)
+- Call count tracking
+- Easy response stubbing
+
+**Option B: `net/http/httptest`** (Stdlib, for testing handlers)
+- Create test HTTP servers
+- Good for testing HTTP handlers, not clients
+- No external dependencies
+
+**Option C: Interface Wrappers** (Recommended for complex services)
+- Define service interfaces
+- Mock implementations for tests
+- Production implementations use real clients
+- Best for property-based testing with rapid
+
+#### Testing Strategy Summary
+
+| Service | Unit Tests | Integration Tests | E2E Tests |
+|---------|-----------|-------------------|-----------|
+| **LemonSqueezy** | Interface wrapper | Test mode API + test cards | Test mode webhooks |
+| **Resend** | Interface wrapper | Test email addresses | Webhook verification |
+
+**Environment Variables for Testing**:
+```bash
+# .env.test
+LEMON_TEST_API_KEY=test_xxx
+RESEND_TEST_API_KEY=re_xxx
+TEST_MODE=true
+```
+
+**CI/CD Integration**:
+- Store test API keys as GitHub secrets
+- Use test mode for all CI runs
+- Mock external services for unit tests (fast)
+- Use real test APIs for integration tests (slower but comprehensive)
+
 ---
 
 ## Deployment

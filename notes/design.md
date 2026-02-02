@@ -448,7 +448,7 @@ FUNCTION validate_id_token(token):
    - ChatGPT uses YOUR token for MCP requests
 
 5. On MCP request:
-   - ChatGPT sends: Authorization: Bearer YOUR_TOKEN
+   - ChatGPT sends: Authorization: Bearer <YOUR_TOKEN>
    - You validate YOUR token
    - You identify which user this token belongs to
    - You return that user's notes

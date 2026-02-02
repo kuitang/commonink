@@ -53,7 +53,7 @@ if [[ ! "$LEVEL" =~ ^(quick|full|fuzz)$ ]]; then
     echo ""
     echo "Levels:"
     echo "  quick   - rapid property tests only (~30 seconds)"
-    echo "  full    - rapid + Playwright + coverage (~5 minutes)"
+    echo "  full    - rapid + Playwright + coverage + MCP/OAuth conformance (~5 minutes)"
     echo "  fuzz    - coverage-guided fuzzing (~30+ minutes)"
     echo ""
     echo "Options:"
@@ -96,9 +96,9 @@ if [[ "$LEVEL" == "quick" ]]; then
     exit 0
 fi
 
-# Full level: rapid + Playwright + coverage
+# Full level: rapid + Playwright + coverage + MCP/OAuth conformance
 if [[ "$LEVEL" == "full" ]]; then
-    echo -e "${GREEN}Running full tests (rapid + Playwright + coverage)...${NC}"
+    echo -e "${GREEN}Running full tests (rapid + Playwright + coverage + MCP/OAuth conformance)...${NC}"
 
     # Install Playwright if needed
     if ! command -v playwright &> /dev/null; then
@@ -110,6 +110,24 @@ if [[ "$LEVEL" == "full" ]]; then
     echo -e "${BLUE}Running tests with coverage...${NC}"
     go test -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/coverage.out" ./... \
         2>&1 | tee "$OUTPUT_DIR/full-test.log"
+
+    # Run MCP conformance tests
+    echo -e "${BLUE}Running MCP conformance tests...${NC}"
+    if bash scripts/mcp-conformance.sh 2>&1 | tee "$OUTPUT_DIR/mcp-conformance.log"; then
+        echo -e "${GREEN}✓ MCP conformance tests passed${NC}"
+    else
+        echo -e "${YELLOW}⚠ MCP conformance tests failed (may be expected if server not fully implemented)${NC}"
+        # Don't fail CI on MCP conformance failure yet - server may not be implemented
+    fi
+
+    # Run OAuth 2.1 conformance tests
+    echo -e "${BLUE}Running OAuth 2.1 conformance tests...${NC}"
+    if bash scripts/oauth-conformance-test.sh "$OUTPUT_DIR/oauth-conformance" 2>&1 | tee "$OUTPUT_DIR/oauth-conformance.log"; then
+        echo -e "${GREEN}✓ OAuth 2.1 conformance tests passed${NC}"
+    else
+        echo -e "${YELLOW}⚠ OAuth 2.1 conformance tests failed (expected until OAuth is implemented)${NC}"
+        # Don't fail CI on OAuth conformance failure yet - server may not be implemented
+    fi
 
     # Generate coverage report
     echo -e "${BLUE}Generating coverage report...${NC}"
@@ -136,6 +154,8 @@ if [[ "$LEVEL" == "full" ]]; then
     echo -e "  - Coverage HTML: $OUTPUT_DIR/coverage.html"
     echo -e "  - Coverage summary: $OUTPUT_DIR/coverage-summary.txt"
     echo -e "  - Coverage gaps: $OUTPUT_DIR/coverage-gaps.txt"
+    echo -e "  - MCP conformance: $OUTPUT_DIR/mcp-conformance.log"
+    echo -e "  - OAuth conformance: $OUTPUT_DIR/oauth-conformance/oauth-conformance-report.txt"
     exit 0
 fi
 
