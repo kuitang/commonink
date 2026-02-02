@@ -66,27 +66,27 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.HandleFunc("POST /auth/password-reset-confirm", h.HandlePasswordResetConfirm)
 	mux.HandleFunc("GET /register", h.HandleRegisterPage)
 
-	// Notes CRUD (auth required)
-	mux.Handle("GET /notes", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleNotesList)))
-	mux.Handle("GET /notes/new", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleNewNotePage)))
-	mux.Handle("POST /notes", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleCreateNote)))
-	mux.Handle("GET /notes/{id}", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleViewNote)))
-	mux.Handle("GET /notes/{id}/edit", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleEditNotePage)))
-	mux.Handle("POST /notes/{id}", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleUpdateNote)))
-	mux.Handle("POST /notes/{id}/delete", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleDeleteNote)))
-	mux.Handle("POST /notes/{id}/publish", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleTogglePublish)))
+	// Notes CRUD (auth required - redirect to login for web pages)
+	mux.Handle("GET /notes", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNotesList)))
+	mux.Handle("GET /notes/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewNotePage)))
+	mux.Handle("POST /notes", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateNote)))
+	mux.Handle("GET /notes/{id}", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleViewNote)))
+	mux.Handle("GET /notes/{id}/edit", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleEditNotePage)))
+	mux.Handle("POST /notes/{id}", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleUpdateNote)))
+	mux.Handle("POST /notes/{id}/delete", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleDeleteNote)))
+	mux.Handle("POST /notes/{id}/publish", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTogglePublish)))
 
 	// Public notes (no auth required)
 	mux.HandleFunc("GET /public/{user_id}/{note_id}", h.HandlePublicNote)
 
-	// OAuth consent (auth required)
-	mux.Handle("GET /oauth/consent", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleConsentPage)))
-	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleConsentDecision)))
+	// OAuth consent (auth required - redirect to login for web pages)
+	mux.Handle("GET /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleConsentPage)))
+	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleConsentDecision)))
 
-	// Settings - Token management (auth required)
-	mux.Handle("GET /settings/tokens", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleTokenSettings)))
-	mux.Handle("POST /settings/tokens", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleCreateToken)))
-	mux.Handle("POST /settings/tokens/{id}/revoke", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleRevokeToken)))
+	// Settings - Token management (auth required - redirect to login for web pages)
+	mux.Handle("GET /settings/tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTokenSettings)))
+	mux.Handle("POST /settings/tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateToken)))
+	mux.Handle("POST /settings/tokens/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeToken)))
 }
 
 // PageData contains common data passed to all templates.

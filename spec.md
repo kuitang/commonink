@@ -18,7 +18,7 @@ MCP-first notes service enabling AI context sharing across Claude, ChatGPT, and 
 ### Key Libraries
 See `notes/go-libraries-2026.md` for versions.
 - MCP: `github.com/modelcontextprotocol/go-sdk v1.2.0`
-- OAuth Provider: `github.com/ory/fosite v0.49.0`
+- OAuth Provider: Custom implementation with `github.com/go-jose/go-jose/v4` (Ed25519 JWT signing)
 - OIDC Client: `github.com/coreos/go-oidc/v3 v3.17.0`
 - SQLite: `github.com/mutecomm/go-sqlcipher` (with CGO)
 - HTTP: stdlib `net/http` (Go 1.22+ routing)

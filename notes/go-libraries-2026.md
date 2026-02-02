@@ -71,6 +71,16 @@ import "golang.org/x/oauth2"
 - Supports RFC 8414 (OAuth 2.0 Authorization Server Metadata)
 - Can be used with MCP servers for OAuth protection
 
+**Project Decision: Custom Implementation**
+
+This project uses a **custom OAuth 2.1 provider** (`internal/oauth/`) instead of fosite because:
+1. **DCR**: Fosite does not support RFC 7591 Dynamic Client Registration out of the box (required by MCP/ChatGPT/Claude)
+2. **Metadata Endpoints**: Fosite does not provide RFC 8414 (Auth Server Metadata) or RFC 9728 (Protected Resource Metadata) endpoints
+3. **Ed25519 JWT**: Fosite has limited EdDSA support; our implementation uses `go-jose/go-jose/v4` directly
+4. **Complexity**: Adding fosite would still require custom implementations for the above, negating its benefits
+
+The custom implementation (~900 lines) provides full MCP authorization spec compliance.
+
 ---
 
 ## 3. Google OIDC Client - "Sign in with Google"

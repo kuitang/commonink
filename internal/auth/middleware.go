@@ -101,6 +101,52 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAuthWithRedirect is middleware for web pages that redirects to login
+// instead of returning 401 when authentication fails.
+// Use this for HTML pages, use RequireAuth for API endpoints.
+func (m *Middleware) RequireAuthWithRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var userID string
+		var userDB *db.UserDB
+
+		// Try session cookie authentication
+		sessionID, err := GetFromRequest(r)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		// Validate session
+		userID, err = m.sessionService.Validate(r.Context(), sessionID)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		// Get or create user DEK and open database
+		dek, err := m.keyManager.GetOrCreateUserDEK(userID)
+		if err != nil {
+			fmt.Printf("[AUTH] GetOrCreateUserDEK failed for user %s: %v\n", userID, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Open user database with DEK
+		userDB, err = db.OpenUserDBWithDEK(userID, dek)
+		if err != nil {
+			fmt.Printf("[AUTH] OpenUserDBWithDEK failed for user %s: %v\n", userID, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Add user info to context
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
+		ctx = context.WithValue(ctx, userDBKey, userDB)
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // authenticateWithPAT validates a PAT and returns the user ID and their database.
 func (m *Middleware) authenticateWithPAT(ctx context.Context, token string) (string, *db.UserDB, error) {
 	// Parse the PAT to extract user ID and token part

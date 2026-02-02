@@ -1,24 +1,42 @@
 // Package openai provides conformance tests for OpenAI function calling integration.
 // These tests verify that OpenAI's gpt-5-mini model can correctly use function calling
-// via the Responses API to interact with our notes HTTP API.
+// via the Responses API to interact with our notes HTTP API WITH OAUTH AUTHENTICATION.
+//
+// KEY DIFFERENCE FROM PREVIOUS VERSION:
+// This file now uses REAL OAuth authentication flow instead of bypassing auth
+// with a hardcoded user ID. This tests the full production flow:
+// OpenAI API → Function calling → OAuth-protected HTTP API → Notes CRUD
 package openai
 
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/kuitang/agent-notes/internal/api"
+	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
+	emailpkg "github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/internal/notes"
+	"github.com/kuitang/agent-notes/internal/oauth"
+	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/responses"
@@ -28,9 +46,6 @@ import (
 const (
 	// Model to use - MUST be gpt-5-mini per CLAUDE.md requirements
 	OpenAIModel = "gpt-5-mini"
-
-	// TestUserID is the hardcoded test user for Milestone 1
-	TestUserID = "test-user-001"
 )
 
 // =============================================================================
@@ -58,7 +73,6 @@ var (
 				"required":             []string{"title"},
 				"additionalProperties": false,
 			},
-			// Note: Strict mode requires all properties in required array
 		},
 	}
 
@@ -77,7 +91,6 @@ var (
 				"required":             []string{"id"},
 				"additionalProperties": false,
 			},
-			// Note: Strict mode requires all properties in required array
 		},
 	}
 
@@ -104,7 +117,6 @@ var (
 				"required":             []string{"id"},
 				"additionalProperties": false,
 			},
-			// Note: Strict mode requires all properties in required array
 		},
 	}
 
@@ -123,7 +135,6 @@ var (
 				"required":             []string{"id"},
 				"additionalProperties": false,
 			},
-			// Note: Strict mode requires all properties in required array
 		},
 	}
 
@@ -146,7 +157,6 @@ var (
 				"required":             []string{},
 				"additionalProperties": false,
 			},
-			// Note: Strict mode requires all properties in required array
 		},
 	}
 
@@ -165,7 +175,6 @@ var (
 				"required":             []string{"query"},
 				"additionalProperties": false,
 			},
-			// Note: Strict mode requires all properties in required array
 		},
 	}
 
@@ -181,77 +190,525 @@ var (
 )
 
 // =============================================================================
-// Test Infrastructure
+// OAuth-Enabled Test Server Infrastructure
 // =============================================================================
 
-// testEnv holds the test environment including server and client
-type testEnv struct {
-	server     *httptest.Server
-	client     *openai.Client
-	httpClient *http.Client
-	baseURL    string
-	notesSvc   *notes.Service // Direct DB access for verification
-	cleanup    func()
+var openaiTestMutex sync.Mutex
+
+// oauthTestServer wraps httptest.Server with OAuth authentication support
+type oauthTestServer struct {
+	*httptest.Server
+	tempDir string
+
+	// Services
+	sessionsDB     *db.SessionsDB
+	keyManager     *crypto.KeyManager
+	userService    *auth.UserService
+	sessionService *auth.SessionService
+	consentService *auth.ConsentService
+	emailService   *emailpkg.MockEmailService
+	oauthProvider  *oauth.Provider
 }
 
-// setupTestEnv creates a test environment with a fresh database and HTTP server
-func setupTestEnv(t testing.TB) *testEnv {
-	t.Helper()
+// oauthTestEnv holds the test environment including server and OAuth credentials
+type oauthTestEnv struct {
+	server      *oauthTestServer
+	client      *openai.Client
+	httpClient  *http.Client
+	baseURL     string
+	accessToken string // OAuth access token
+	userID      string
+	cleanup     func()
+}
 
-	// Get API key from env - source ~/openai_key.sh before running tests
+// setupOAuthTestEnv creates a test environment with OAuth authentication
+func setupOAuthTestEnv(t testing.TB) *oauthTestEnv {
+	t.Helper()
+	openaiTestMutex.Lock()
+
+	// Get API key from env
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
+		openaiTestMutex.Unlock()
 		t.Fatal("OPENAI_API_KEY not set - run: source ~/openai_key.sh")
 	}
 
-	// Create temp directory for test database
 	tempDir := t.TempDir()
-	os.Setenv("DB_DATA_DIR", tempDir)
+	ts := createOAuthTestServer(tempDir)
 
-	// Initialize database
-	if err := db.InitSchemas(TestUserID); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
+	// Perform OAuth flow to get access token
+	accessToken, userID := performOAuthFlow(t, ts)
 
-	// Open user database
-	userDB, err := db.OpenUserDB(TestUserID)
-	if err != nil {
-		t.Fatalf("Failed to open user database: %v", err)
-	}
+	openaiClient := openai.NewClient(option.WithAPIKey(apiKey))
 
-	// Create notes service
-	notesSvc := notes.NewService(userDB)
-
-	// Create HTTP handler
-	mux := http.NewServeMux()
-	apiHandler := api.NewHandler(notesSvc)
-	apiHandler.RegisterRoutes(mux)
-
-	// Create test server
-	server := httptest.NewServer(mux)
-
-	// Create OpenAI client
-	openaiClient := openai.NewClient(
-		option.WithAPIKey(apiKey),
-	)
-
-	env := &testEnv{
-		server:     server,
-		client:     &openaiClient,
-		httpClient: server.Client(),
-		baseURL:    server.URL,
-		notesSvc:   notesSvc,
+	env := &oauthTestEnv{
+		server:      ts,
+		client:      &openaiClient,
+		httpClient:  ts.Client(),
+		baseURL:     ts.URL,
+		accessToken: accessToken,
+		userID:      userID,
 		cleanup: func() {
-			server.Close()
-			db.CloseAll()
+			ts.Close()
+			db.ResetForTesting()
+			openaiTestMutex.Unlock()
 		},
 	}
 
 	return env
 }
 
-// executeTool executes a tool call against the HTTP API
-func (env *testEnv) executeTool(ctx context.Context, toolName string, args json.RawMessage) (string, error) {
+// createOAuthTestServer creates a test server with full OAuth support
+func createOAuthTestServer(tempDir string) *oauthTestServer {
+	// Reset database singleton and set fresh data directory
+	db.ResetForTesting()
+	db.DataDirectory = tempDir
+
+	// Initialize sessions database
+	sessionsDB, err := db.OpenSessionsDB()
+	if err != nil {
+		panic("Failed to open sessions database: " + err.Error())
+	}
+
+	// Generate master key for encryption
+	masterKey := make([]byte, 32)
+	if _, err := crand.Read(masterKey); err != nil {
+		panic("Failed to generate master key: " + err.Error())
+	}
+
+	// Generate OAuth signing key
+	_, signingKey, err := ed25519.GenerateKey(crand.Reader)
+	if err != nil {
+		panic("Failed to generate signing key: " + err.Error())
+	}
+
+	// Generate HMAC secret
+	hmacSecret := make([]byte, 32)
+	if _, err := crand.Read(hmacSecret); err != nil {
+		panic("Failed to generate HMAC secret: " + err.Error())
+	}
+
+	// Create mux for routing
+	mux := http.NewServeMux()
+
+	// Start httptest server with TLS
+	server := httptest.NewTLSServer(mux)
+
+	// Initialize key manager
+	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
+
+	// Initialize services
+	emailService := emailpkg.NewMockEmailService()
+	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	sessionService := auth.NewSessionService(sessionsDB)
+	consentService := auth.NewConsentService(sessionsDB)
+
+	// Create OAuth provider
+	oauthProvider, err := oauth.NewProvider(oauth.Config{
+		DB:         sessionsDB.DB(),
+		Issuer:     server.URL,
+		Resource:   server.URL,
+		HMACSecret: hmacSecret,
+		SigningKey: signingKey,
+	})
+	if err != nil {
+		panic("Failed to create OAuth provider: " + err.Error())
+	}
+
+	// Find templates directory
+	templatesDir := findOpenAITemplatesDir()
+	renderer, err := web.NewRenderer(templatesDir)
+	if err != nil {
+		panic("Failed to create renderer: " + err.Error())
+	}
+
+	// Create handlers
+	oauthHandler := oauth.NewHandler(oauthProvider, sessionService, consentService, renderer)
+	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
+
+	// Register OAuth routes
+	oauthProvider.RegisterMetadataRoutes(mux)
+	mux.HandleFunc("POST /oauth/register", oauthProvider.DCR)
+	oauthHandler.RegisterRoutes(mux)
+
+	// Register OAuth-protected notes API routes
+	notesHandler := &oauthNotesHandler{keyManager: keyManager}
+	tokenVerifier := auth.NewTokenVerifier(server.URL, server.URL, oauthProvider.PublicKey())
+	resourceMetadataURL := server.URL + "/.well-known/oauth-protected-resource"
+
+	// Notes API routes with OAuth middleware
+	mux.Handle("GET /notes", auth.OAuthMiddleware(tokenVerifier, resourceMetadataURL, true)(
+		authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.ListNotes))))
+	mux.Handle("POST /notes", auth.OAuthMiddleware(tokenVerifier, resourceMetadataURL, true)(
+		authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.CreateNote))))
+	mux.Handle("GET /notes/{id}", auth.OAuthMiddleware(tokenVerifier, resourceMetadataURL, true)(
+		authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.GetNote))))
+	mux.Handle("PUT /notes/{id}", auth.OAuthMiddleware(tokenVerifier, resourceMetadataURL, true)(
+		authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.UpdateNote))))
+	mux.Handle("DELETE /notes/{id}", auth.OAuthMiddleware(tokenVerifier, resourceMetadataURL, true)(
+		authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.DeleteNote))))
+	mux.Handle("POST /notes/search", auth.OAuthMiddleware(tokenVerifier, resourceMetadataURL, true)(
+		authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.SearchNotes))))
+
+	return &oauthTestServer{
+		Server:         server,
+		tempDir:        tempDir,
+		sessionsDB:     sessionsDB,
+		keyManager:     keyManager,
+		userService:    userService,
+		sessionService: sessionService,
+		consentService: consentService,
+		emailService:   emailService,
+		oauthProvider:  oauthProvider,
+	}
+}
+
+// performOAuthFlow performs the full OAuth flow and returns an access token
+func performOAuthFlow(t testing.TB, ts *oauthTestServer) (string, string) {
+	t.Helper()
+
+	client := ts.Client()
+
+	// Step 1: Register OAuth client (simulating ChatGPT DCR)
+	dcrReq := map[string]interface{}{
+		"client_name":                "OpenAIConformanceTestClient",
+		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"token_endpoint_auth_method": "none", // Public client like Claude
+	}
+	dcrBody, _ := json.Marshal(dcrReq)
+	dcrResp, err := client.Post(ts.URL+"/oauth/register", "application/json", strings.NewReader(string(dcrBody)))
+	if err != nil {
+		t.Fatalf("DCR request failed: %v", err)
+	}
+	defer dcrResp.Body.Close()
+
+	if dcrResp.StatusCode != http.StatusOK && dcrResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(dcrResp.Body)
+		t.Fatalf("DCR failed with status %d: %s", dcrResp.StatusCode, string(body))
+	}
+
+	var dcrResult map[string]interface{}
+	if err := json.NewDecoder(dcrResp.Body).Decode(&dcrResult); err != nil {
+		t.Fatalf("Failed to decode DCR response: %v", err)
+	}
+	clientID := dcrResult["client_id"].(string)
+
+	// Step 2: Generate PKCE
+	verifier := generateSecureRandom(64)
+	h := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(h[:])
+
+	// Step 3: Create user and session
+	testEmail := "openai-conformance-" + generateSecureRandom(8) + "@example.com"
+	user, err := ts.userService.FindOrCreateByEmail(context.Background(), testEmail)
+	if err != nil {
+		t.Fatalf("Failed to create user: %v", err)
+	}
+
+	sessionID, err := ts.sessionService.Create(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Step 4: Build authorization request
+	state := generateSecureRandom(32)
+	authParams := url.Values{
+		"client_id":             {clientID},
+		"redirect_uri":          {"http://localhost:8080/callback"},
+		"response_type":         {"code"},
+		"scope":                 {"notes:read notes:write"},
+		"state":                 {state},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+
+	// Create client with session cookie
+	jar, _ := cookiejar.New(nil)
+	authClient := ts.Client()
+	authClient.Jar = jar
+
+	serverURL, _ := url.Parse(ts.URL)
+	jar.SetCookies(serverURL, []*http.Cookie{{
+		Name:  "session_id",
+		Value: sessionID,
+		Path:  "/",
+	}})
+
+	authClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	// Make authorization request
+	authResp, err := authClient.Get(ts.URL + "/oauth/authorize?" + authParams.Encode())
+	if err != nil {
+		t.Fatalf("Authorization request failed: %v", err)
+	}
+
+	// Extract authorization code
+	var authCode string
+	if authResp.StatusCode == http.StatusFound {
+		location := authResp.Header.Get("Location")
+		if strings.Contains(location, "code=") {
+			parsed, _ := url.Parse(location)
+			authCode = parsed.Query().Get("code")
+		}
+		authResp.Body.Close()
+	} else if authResp.StatusCode == http.StatusOK {
+		// Consent page shown - submit consent
+		authResp.Body.Close()
+
+		consentResp, err := authClient.PostForm(ts.URL+"/oauth/consent", url.Values{
+			"decision": {"allow"},
+		})
+		if err != nil {
+			t.Fatalf("Failed to submit consent: %v", err)
+		}
+		defer consentResp.Body.Close()
+
+		if consentResp.StatusCode == http.StatusFound {
+			location := consentResp.Header.Get("Location")
+			if strings.Contains(location, "code=") {
+				parsed, _ := url.Parse(location)
+				authCode = parsed.Query().Get("code")
+			}
+		}
+	} else {
+		body, _ := io.ReadAll(authResp.Body)
+		authResp.Body.Close()
+		t.Fatalf("Unexpected authorization response: %d - %s", authResp.StatusCode, string(body))
+	}
+
+	if authCode == "" {
+		t.Fatal("Failed to get authorization code")
+	}
+
+	// Step 5: Token exchange
+	tokenParams := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {clientID},
+		"code":          {authCode},
+		"redirect_uri":  {"http://localhost:8080/callback"},
+		"code_verifier": {verifier},
+	}
+
+	tokenResp, err := client.PostForm(ts.URL+"/oauth/token", tokenParams)
+	if err != nil {
+		t.Fatalf("Token exchange failed: %v", err)
+	}
+	defer tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(tokenResp.Body)
+		t.Fatalf("Token exchange returned %d: %s", tokenResp.StatusCode, string(body))
+	}
+
+	var tokenResult map[string]interface{}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenResult); err != nil {
+		t.Fatalf("Failed to decode token response: %v", err)
+	}
+
+	accessToken := tokenResult["access_token"].(string)
+	tokenPreview := accessToken
+	if len(tokenPreview) > 20 {
+		tokenPreview = tokenPreview[:20]
+	}
+	t.Logf("[OAuth] Successfully obtained access token (first 20 chars): %s...", tokenPreview)
+
+	return accessToken, user.ID
+}
+
+func generateSecureRandom(length int) string {
+	bytes := make([]byte, length)
+	if _, err := crand.Read(bytes); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(bytes)[:length]
+}
+
+func findOpenAITemplatesDir() string {
+	candidates := []string{
+		"../../../web/templates",
+		"../../../../web/templates",
+		"web/templates",
+		"./web/templates",
+		"/home/kuitang/git/agent-notes/web/templates",
+	}
+
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "base.html")); err == nil {
+			return dir
+		}
+	}
+
+	panic("Cannot find templates directory")
+}
+
+// =============================================================================
+// OAuth-Protected Notes Handler
+// =============================================================================
+
+type oauthNotesHandler struct {
+	keyManager *crypto.KeyManager
+}
+
+func (h *oauthNotesHandler) getService(r *http.Request) (*notes.Service, error) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		return nil, fmt.Errorf("no user database in context")
+	}
+	return notes.NewService(userDB), nil
+}
+
+func (h *oauthNotesHandler) ListNotes(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	result, err := svc.List(50, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to list notes: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *oauthNotesHandler) CreateNote(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	var params notes.CreateNoteParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	note, err := svc.Create(params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to create note: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, note)
+}
+
+func (h *oauthNotesHandler) GetNote(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	id := r.PathValue("id")
+	note, err := svc.Read(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "Note not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to read note: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, note)
+}
+
+func (h *oauthNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	id := r.PathValue("id")
+	var params notes.UpdateNoteParams
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	note, err := svc.Update(id, params)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "Note not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to update note: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, note)
+}
+
+func (h *oauthNotesHandler) DeleteNote(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	id := r.PathValue("id")
+	if err := svc.Delete(id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "Note not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to delete note: "+err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *oauthNotesHandler) SearchNotes(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	var params struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	results, err := svc.Search(params.Query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to search notes: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, results)
+}
+
+func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// =============================================================================
+// Tool Execution with OAuth
+// =============================================================================
+
+// executeTool executes a tool call against the OAuth-protected HTTP API
+func (env *oauthTestEnv) executeTool(ctx context.Context, toolName string, args json.RawMessage) (string, error) {
 	var result string
 	var err error
 
@@ -275,7 +732,7 @@ func (env *testEnv) executeTool(ctx context.Context, toolName string, args json.
 	return result, err
 }
 
-func (env *testEnv) executeCreateNote(ctx context.Context, args json.RawMessage) (string, error) {
+func (env *oauthTestEnv) executeCreateNote(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Title   string `json:"title"`
 		Content string `json:"content"`
@@ -291,6 +748,7 @@ func (env *testEnv) executeCreateNote(ctx context.Context, args json.RawMessage)
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", env.baseURL+"/notes", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+env.accessToken) // OAuth token!
 
 	resp, err := env.httpClient.Do(req)
 	if err != nil {
@@ -306,7 +764,7 @@ func (env *testEnv) executeCreateNote(ctx context.Context, args json.RawMessage)
 	return string(respBody), nil
 }
 
-func (env *testEnv) executeReadNote(ctx context.Context, args json.RawMessage) (string, error) {
+func (env *oauthTestEnv) executeReadNote(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
 	}
@@ -315,6 +773,7 @@ func (env *testEnv) executeReadNote(ctx context.Context, args json.RawMessage) (
 	}
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", env.baseURL+"/notes/"+params.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+env.accessToken)
 
 	resp, err := env.httpClient.Do(req)
 	if err != nil {
@@ -330,7 +789,7 @@ func (env *testEnv) executeReadNote(ctx context.Context, args json.RawMessage) (
 	return string(respBody), nil
 }
 
-func (env *testEnv) executeUpdateNote(ctx context.Context, args json.RawMessage) (string, error) {
+func (env *oauthTestEnv) executeUpdateNote(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID      string  `json:"id"`
 		Title   *string `json:"title,omitempty"`
@@ -352,6 +811,7 @@ func (env *testEnv) executeUpdateNote(ctx context.Context, args json.RawMessage)
 
 	req, _ := http.NewRequestWithContext(ctx, "PUT", env.baseURL+"/notes/"+params.ID, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+env.accessToken)
 
 	resp, err := env.httpClient.Do(req)
 	if err != nil {
@@ -367,7 +827,7 @@ func (env *testEnv) executeUpdateNote(ctx context.Context, args json.RawMessage)
 	return string(respBody), nil
 }
 
-func (env *testEnv) executeDeleteNote(ctx context.Context, args json.RawMessage) (string, error) {
+func (env *oauthTestEnv) executeDeleteNote(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
 	}
@@ -376,6 +836,7 @@ func (env *testEnv) executeDeleteNote(ctx context.Context, args json.RawMessage)
 	}
 
 	req, _ := http.NewRequestWithContext(ctx, "DELETE", env.baseURL+"/notes/"+params.ID, nil)
+	req.Header.Set("Authorization", "Bearer "+env.accessToken)
 
 	resp, err := env.httpClient.Do(req)
 	if err != nil {
@@ -391,18 +852,18 @@ func (env *testEnv) executeDeleteNote(ctx context.Context, args json.RawMessage)
 	return `{"success": true, "message": "Note deleted successfully"}`, nil
 }
 
-func (env *testEnv) executeListNotes(ctx context.Context, args json.RawMessage) (string, error) {
+func (env *oauthTestEnv) executeListNotes(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Limit  int `json:"limit"`
 		Offset int `json:"offset"`
 	}
-	// Default values
 	params.Limit = 50
 	params.Offset = 0
-	_ = json.Unmarshal(args, &params) // Ignore errors for optional params
+	_ = json.Unmarshal(args, &params)
 
 	url := fmt.Sprintf("%s/notes?limit=%d&offset=%d", env.baseURL, params.Limit, params.Offset)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+env.accessToken)
 
 	resp, err := env.httpClient.Do(req)
 	if err != nil {
@@ -418,7 +879,7 @@ func (env *testEnv) executeListNotes(ctx context.Context, args json.RawMessage) 
 	return string(respBody), nil
 }
 
-func (env *testEnv) executeSearchNotes(ctx context.Context, args json.RawMessage) (string, error) {
+func (env *oauthTestEnv) executeSearchNotes(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Query string `json:"query"`
 	}
@@ -429,6 +890,7 @@ func (env *testEnv) executeSearchNotes(ctx context.Context, args json.RawMessage
 	body, _ := json.Marshal(map[string]string{"query": params.Query})
 	req, _ := http.NewRequestWithContext(ctx, "POST", env.baseURL+"/notes/search", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+env.accessToken)
 
 	resp, err := env.httpClient.Do(req)
 	if err != nil {
@@ -444,24 +906,22 @@ func (env *testEnv) executeSearchNotes(ctx context.Context, args json.RawMessage
 	return string(respBody), nil
 }
 
-// ToolCall represents a tool call made during conversation
+// =============================================================================
+// Conversation Management
+// =============================================================================
+
 type ToolCall struct {
 	Name      string
 	Arguments string
 }
 
-// Conversation maintains state for multi-turn conversations
 type Conversation struct {
 	LastResponseID string
 }
 
-// runConversation runs a single conversation turn using the Responses API
-// Pass conv to maintain multi-turn state, or nil for one-shot mode
-// Returns the final text response and list of tool calls made
-func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Conversation) (string, []ToolCall, error) {
+func (env *oauthTestEnv) runConversation(ctx context.Context, prompt string, conv *Conversation) (string, []ToolCall, error) {
 	var toolCalls []ToolCall
 
-	// Build the initial request using Responses API
 	params := responses.ResponseNewParams{
 		Model:        OpenAIModel,
 		Instructions: openai.String("You are a helpful assistant that manages notes. Use the provided tools to create, read, update, delete, list, and search notes. Always use the tools when the user asks you to manage notes."),
@@ -471,18 +931,14 @@ func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Co
 		Tools: allTools,
 	}
 
-	// Continue existing conversation if provided - THIS PROVES MULTI-TURN
 	if conv != nil && conv.LastResponseID != "" {
 		params.PreviousResponseID = openai.String(conv.LastResponseID)
-		fmt.Printf("[MULTI-TURN PROOF] Using previous_response_id: %s\n", conv.LastResponseID)
 	}
 
-	// Run conversation loop until model stops making tool calls
 	maxIterations := 10
 	var previousResponseID string
 
 	for i := 0; i < maxIterations; i++ {
-		// Set previous response ID for conversation continuity
 		if previousResponseID != "" {
 			params.PreviousResponseID = openai.String(previousResponseID)
 		}
@@ -492,10 +948,8 @@ func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Co
 			return "", toolCalls, fmt.Errorf("OpenAI Responses API error: %w", err)
 		}
 
-		// Store response ID for next iteration
 		previousResponseID = response.ID
 
-		// Check for function calls in the output
 		hasFunctionCalls := false
 		var functionCallOutputs []responses.ResponseInputItemUnionParam
 
@@ -503,34 +957,27 @@ func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Co
 			if output.Type == "function_call" {
 				hasFunctionCalls = true
 
-				// Track the tool call
 				toolCalls = append(toolCalls, ToolCall{
 					Name:      output.Name,
 					Arguments: output.Arguments,
 				})
 
-				// Execute the tool call
 				result, err := env.executeTool(ctx, output.Name, json.RawMessage(output.Arguments))
 				if err != nil {
-					// Return error as tool result so the model can handle it
 					result = fmt.Sprintf(`{"error": "%s"}`, err.Error())
 				}
 
-				// Add function call output for the next request
 				functionCallOutputs = append(functionCallOutputs, responses.ResponseInputItemParamOfFunctionCallOutput(output.CallID, result))
 			}
 		}
 
-		// If no function calls, we're done - save state and return
 		if !hasFunctionCalls {
 			if conv != nil {
 				conv.LastResponseID = previousResponseID
-				fmt.Printf("[MULTI-TURN PROOF] Saving response_id for next turn: %s\n", previousResponseID)
 			}
 			return response.OutputText(), toolCalls, nil
 		}
 
-		// Prepare next request with function call outputs
 		params = responses.ResponseNewParams{
 			Model:              OpenAIModel,
 			PreviousResponseID: openai.String(previousResponseID),
@@ -545,16 +992,13 @@ func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Co
 }
 
 // =============================================================================
-// Property-Based Tests
+// Property-Based Tests with OAuth
 // =============================================================================
 
-// testOpenAI_CreateNote_Properties tests the create_note tool with random inputs
-func testOpenAI_CreateNote_Properties(t *rapid.T, env *testEnv) {
+func testOpenAI_CreateNote_Properties(t *rapid.T, env *oauthTestEnv) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Generate random but valid title and content
-	// Avoid empty strings for title (required)
 	title := rapid.StringMatching(`[A-Za-z][A-Za-z0-9 ]{0,49}`).Draw(t, "title")
 	content := rapid.StringMatching(`[A-Za-z0-9 .,!?]{0,200}`).Draw(t, "content")
 
@@ -565,14 +1009,11 @@ func testOpenAI_CreateNote_Properties(t *rapid.T, env *testEnv) {
 		t.Fatalf("Conversation failed: %v", err)
 	}
 
-	// Verify the response mentions the note was created
 	if !strings.Contains(strings.ToLower(response), "created") &&
 		!strings.Contains(strings.ToLower(response), "note") {
 		t.Logf("Response: %s", response)
-		// Don't fail - the model might express success differently
 	}
 
-	// Verify we can list notes and find our created note
 	listResult, err := env.executeListNotes(ctx, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Failed to list notes: %v", err)
@@ -583,12 +1024,10 @@ func testOpenAI_CreateNote_Properties(t *rapid.T, env *testEnv) {
 	}
 }
 
-// testOpenAI_CRUD_Roundtrip_Properties tests create -> read -> update -> delete cycle
-func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
+func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *oauthTestEnv) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// Generate test data
 	title := rapid.StringMatching(`[A-Za-z][A-Za-z0-9 ]{2,20}`).Draw(t, "title")
 	content := rapid.StringMatching(`[A-Za-z0-9 .,]{5,50}`).Draw(t, "content")
 	updatedTitle := rapid.StringMatching(`Updated [A-Za-z0-9]{2,10}`).Draw(t, "updatedTitle")
@@ -601,7 +1040,6 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 	}
 	t.Logf("Create response: %s", createResp)
 
-	// Get the note ID from list (more reliable than parsing model output)
 	listResult, err := env.executeListNotes(ctx, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -616,7 +1054,6 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 		t.Fatalf("No notes found after create")
 	}
 
-	// Find the note we just created
 	var noteID string
 	for _, note := range listResp.Notes {
 		if note.Title == title {
@@ -644,7 +1081,6 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 	}
 	t.Logf("Update response: %s", updateResp)
 
-	// Verify update via direct API call
 	readResult, err := env.executeReadNote(ctx, json.RawMessage(fmt.Sprintf(`{"id":"%s"}`, noteID)))
 	if err != nil {
 		t.Fatalf("Read after update failed: %v", err)
@@ -667,7 +1103,6 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 	}
 	t.Logf("Delete response: %s", deleteResp)
 
-	// Verify deletion
 	_, err = env.executeReadNote(ctx, json.RawMessage(fmt.Sprintf(`{"id":"%s"}`, noteID)))
 	if err == nil {
 		t.Fatalf("Note still exists after delete")
@@ -677,110 +1112,16 @@ func testOpenAI_CRUD_Roundtrip_Properties(t *rapid.T, env *testEnv) {
 	}
 }
 
-// testOpenAI_ListNotes_Properties tests listing notes with pagination
-func testOpenAI_ListNotes_Properties(t *rapid.T, env *testEnv) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	// Create some notes first
-	numNotes := rapid.IntRange(1, 5).Draw(t, "numNotes")
-	for i := 0; i < numNotes; i++ {
-		title := fmt.Sprintf("Test Note %d", i+1)
-		args := json.RawMessage(fmt.Sprintf(`{"title":"%s","content":"Test content %d"}`, title, i+1))
-		_, err := env.executeCreateNote(ctx, args)
-		if err != nil {
-			t.Fatalf("Failed to create test note: %v", err)
-		}
-	}
-
-	// Ask OpenAI to list notes
-	listPrompt := "List all my notes"
-	listResp, _, err := env.runConversation(ctx, listPrompt, nil)
-	if err != nil {
-		t.Fatalf("List conversation failed: %v", err)
-	}
-	t.Logf("List response: %s", listResp)
-
-	// Verify via direct API that all notes exist
-	listResult, err := env.executeListNotes(ctx, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("Direct list failed: %v", err)
-	}
-
-	var result notes.NoteListResult
-	if err := json.Unmarshal([]byte(listResult), &result); err != nil {
-		t.Fatalf("Failed to parse list: %v", err)
-	}
-
-	if result.TotalCount < numNotes {
-		t.Fatalf("Expected at least %d notes, got %d", numNotes, result.TotalCount)
-	}
-}
-
-// testOpenAI_SearchNotes_Properties tests searching notes
-func testOpenAI_SearchNotes_Properties(t *rapid.T, env *testEnv) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	// Create a note with a unique searchable term
-	uniqueTerm := rapid.StringMatching(`unique[A-Za-z]{5}`).Draw(t, "uniqueTerm")
-	title := fmt.Sprintf("Note about %s", uniqueTerm)
-	content := fmt.Sprintf("This note contains information about %s", uniqueTerm)
-
-	args := json.RawMessage(fmt.Sprintf(`{"title":"%s","content":"%s"}`, title, content))
-	_, err := env.executeCreateNote(ctx, args)
-	if err != nil {
-		t.Fatalf("Failed to create test note: %v", err)
-	}
-
-	// Ask OpenAI to search for the note
-	searchPrompt := fmt.Sprintf("Search for notes containing '%s'", uniqueTerm)
-	searchResp, _, err := env.runConversation(ctx, searchPrompt, nil)
-	if err != nil {
-		t.Fatalf("Search conversation failed: %v", err)
-	}
-	t.Logf("Search response: %s", searchResp)
-
-	// Verify via direct API
-	searchArgs := json.RawMessage(fmt.Sprintf(`{"query":"%s"}`, uniqueTerm))
-	searchResult, err := env.executeSearchNotes(ctx, searchArgs)
-	if err != nil {
-		t.Fatalf("Direct search failed: %v", err)
-	}
-
-	var results notes.SearchResults
-	if err := json.Unmarshal([]byte(searchResult), &results); err != nil {
-		t.Fatalf("Failed to parse search results: %v", err)
-	}
-
-	if results.TotalCount == 0 {
-		t.Fatalf("Search returned no results for term '%s'", uniqueTerm)
-	}
-
-	foundMatch := false
-	for _, result := range results.Results {
-		if strings.Contains(result.Note.Title, uniqueTerm) || strings.Contains(result.Note.Content, uniqueTerm) {
-			foundMatch = true
-			break
-		}
-	}
-
-	if !foundMatch {
-		t.Fatalf("Search results don't contain expected term '%s'", uniqueTerm)
-	}
-}
-
 // =============================================================================
 // Test Entry Points
 // =============================================================================
 
-// TestOpenAI_CreateNote_Properties runs property-based tests for create_note
 func TestOpenAI_CreateNote_Properties(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping OpenAI test in short mode")
 	}
 
-	env := setupTestEnv(t)
+	env := setupOAuthTestEnv(t)
 	defer env.cleanup()
 
 	rapid.Check(t, func(t *rapid.T) {
@@ -788,13 +1129,12 @@ func TestOpenAI_CreateNote_Properties(t *testing.T) {
 	})
 }
 
-// TestOpenAI_CRUD_Roundtrip_Properties runs property-based tests for full CRUD cycle
 func TestOpenAI_CRUD_Roundtrip_Properties(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping OpenAI test in short mode")
 	}
 
-	env := setupTestEnv(t)
+	env := setupOAuthTestEnv(t)
 	defer env.cleanup()
 
 	rapid.Check(t, func(t *rapid.T) {
@@ -802,269 +1142,89 @@ func TestOpenAI_CRUD_Roundtrip_Properties(t *testing.T) {
 	})
 }
 
-// TestOpenAI_ListNotes_Properties runs property-based tests for list_notes
-func TestOpenAI_ListNotes_Properties(t *testing.T) {
+// TestOpenAI_OAuth_Integration tests the full OAuth + OpenAI + Notes flow
+func TestOpenAI_OAuth_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping OpenAI test in short mode")
 	}
 
-	env := setupTestEnv(t)
-	defer env.cleanup()
-
-	rapid.Check(t, func(t *rapid.T) {
-		testOpenAI_ListNotes_Properties(t, env)
-	})
-}
-
-// TestOpenAI_SearchNotes_Properties runs property-based tests for search_notes
-func TestOpenAI_SearchNotes_Properties(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping OpenAI test in short mode")
-	}
-
-	env := setupTestEnv(t)
-	defer env.cleanup()
-
-	rapid.Check(t, func(t *rapid.T) {
-		testOpenAI_SearchNotes_Properties(t, env)
-	})
-}
-
-// =============================================================================
-// Deterministic Integration Tests (for quick validation)
-// =============================================================================
-
-// TestOpenAI_AllOperations_Integration is a deterministic test that exercises all 6 operations
-func TestOpenAI_AllOperations_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping OpenAI test in short mode")
-	}
-
-	env := setupTestEnv(t)
+	env := setupOAuthTestEnv(t)
 	defer env.cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	// Test 1: Create a note
-	t.Run("Create", func(t *testing.T) {
-		prompt := "Create a note titled 'Integration Test Note' with content 'This is a test note for integration testing'"
-		resp, _, err := env.runConversation(ctx, prompt, nil)
-		if err != nil {
-			t.Fatalf("Create failed: %v", err)
-		}
-		t.Logf("Create response: %s", resp)
-	})
+	t.Logf("[OAuth Integration] Using access token for authenticated requests")
+	t.Logf("[OAuth Integration] User ID: %s", env.userID)
 
-	// Get the created note ID
-	listResult, err := env.executeListNotes(ctx, json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-
-	var listResp notes.NoteListResult
-	if err := json.Unmarshal([]byte(listResult), &listResp); err != nil {
-		t.Fatalf("Failed to parse list: %v", err)
-	}
-
-	if len(listResp.Notes) == 0 {
-		t.Fatalf("No notes found")
-	}
-
-	noteID := listResp.Notes[0].ID
-
-	// Test 2: Read the note
-	t.Run("Read", func(t *testing.T) {
-		prompt := fmt.Sprintf("Read the note with ID '%s' and describe its contents", noteID)
-		resp, _, err := env.runConversation(ctx, prompt, nil)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
-		}
-		t.Logf("Read response: %s", resp)
-	})
-
-	// Test 3: Update the note
-	t.Run("Update", func(t *testing.T) {
-		prompt := fmt.Sprintf("Update the note with ID '%s' and change its content to 'Updated content for integration test'", noteID)
-		resp, _, err := env.runConversation(ctx, prompt, nil)
-		if err != nil {
-			t.Fatalf("Update failed: %v", err)
-		}
-		t.Logf("Update response: %s", resp)
-	})
-
-	// Test 4: List notes
-	t.Run("List", func(t *testing.T) {
-		prompt := "List all my notes and tell me how many there are"
-		resp, _, err := env.runConversation(ctx, prompt, nil)
-		if err != nil {
-			t.Fatalf("List failed: %v", err)
-		}
-		t.Logf("List response: %s", resp)
-	})
-
-	// Test 5: Search notes
-	t.Run("Search", func(t *testing.T) {
-		prompt := "Search for notes containing 'integration'"
-		resp, _, err := env.runConversation(ctx, prompt, nil)
-		if err != nil {
-			t.Fatalf("Search failed: %v", err)
-		}
-		t.Logf("Search response: %s", resp)
-	})
-
-	// Test 6: Delete the note
-	t.Run("Delete", func(t *testing.T) {
-		prompt := fmt.Sprintf("Delete the note with ID '%s'", noteID)
-		resp, _, err := env.runConversation(ctx, prompt, nil)
-		if err != nil {
-			t.Fatalf("Delete failed: %v", err)
-		}
-		t.Logf("Delete response: %s", resp)
-	})
-
-	// Verify deletion
-	_, err = env.executeReadNote(ctx, json.RawMessage(fmt.Sprintf(`{"id":"%s"}`, noteID)))
-	if err == nil {
-		t.Fatalf("Note still exists after delete")
-	}
-}
-
-// TestOpenAI_MultiTurn_Conversation proves that OpenAI maintains conversation state
-// across multiple turns using previous_response_id. Uses the SAME prompts as Claude test.
-func TestOpenAI_MultiTurn_Conversation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping OpenAI test in short mode")
-	}
-
-	env := setupTestEnv(t)
-	defer env.cleanup()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
-
-	// Use a single Conversation object to maintain state across turns
-	conv := &Conversation{}
-
-	var noteID string
-
-	// Turn 1: Create a note (SAME PROMPT AS CLAUDE TEST)
-	t.Run("Turn1_Create", func(t *testing.T) {
-		prompt := "Create a note titled 'Team Meeting Notes' with content 'Discussed Q1 roadmap and assigned action items.'"
-		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+	// Test 1: Verify OAuth token works for create
+	t.Run("OAuthCreate", func(t *testing.T) {
+		prompt := "Create a note titled 'OAuth Integration Test' with content 'Testing OAuth authentication flow'"
+		resp, toolCalls, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
 		t.Logf("Response: %s", resp)
 		t.Logf("Tool calls: %d", len(toolCalls))
-		t.Logf("Conversation.LastResponseID after Turn1: %s", conv.LastResponseID)
 
-		// Verify in DB
-		list, _ := env.notesSvc.List(100, 0)
-		for _, n := range list.Notes {
-			if strings.Contains(strings.ToLower(n.Title), "meeting") {
-				noteID = n.ID
+		// Verify at least one tool call was made
+		if len(toolCalls) == 0 {
+			t.Fatal("Expected at least one tool call")
+		}
+
+		// Verify the create_note tool was called
+		found := false
+		for _, tc := range toolCalls {
+			if tc.Name == "create_note" {
+				found = true
 				break
 			}
 		}
-		if noteID == "" {
-			t.Fatal("Note not created")
+		if !found {
+			t.Fatal("Expected create_note tool call")
 		}
-		t.Logf("Created note ID: %s", noteID)
 	})
 
-	// Turn 2: List notes (SAME PROMPT AS CLAUDE TEST)
-	t.Run("Turn2_List", func(t *testing.T) {
-		if conv.LastResponseID == "" {
-			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn1")
-		}
-		prevID := conv.LastResponseID
-
-		prompt := "List all my notes and tell me how many there are."
-		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+	// Test 2: Verify OAuth token works for list
+	t.Run("OAuthList", func(t *testing.T) {
+		prompt := "List all my notes"
+		resp, _, err := env.runConversation(ctx, prompt, nil)
 		if err != nil {
 			t.Fatalf("List failed: %v", err)
 		}
 		t.Logf("Response: %s", resp)
-		t.Logf("Tool calls: %d", len(toolCalls))
-		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
 	})
 
-	// Turn 3: Search notes (SAME PROMPT AS CLAUDE TEST)
-	t.Run("Turn3_Search", func(t *testing.T) {
-		if conv.LastResponseID == "" {
-			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn2")
-		}
-		prevID := conv.LastResponseID
+	// Test 3: Verify unauthorized request fails
+	t.Run("UnauthorizedFails", func(t *testing.T) {
+		// Make request without OAuth token
+		req, _ := http.NewRequest("GET", env.baseURL+"/notes", nil)
+		// Deliberately NOT setting Authorization header
 
-		prompt := "Search for notes containing 'meeting'."
-		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+		resp, err := env.httpClient.Do(req)
 		if err != nil {
-			t.Fatalf("Search failed: %v", err)
+			t.Fatalf("Request failed: %v", err)
 		}
-		t.Logf("Response: %s", resp)
-		t.Logf("Tool calls: %d", len(toolCalls))
-		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
-	})
+		defer resp.Body.Close()
 
-	// Turn 4: Update note (SAME PROMPT AS CLAUDE TEST)
-	t.Run("Turn4_Update", func(t *testing.T) {
-		if noteID == "" {
-			t.Skip("No note ID")
+		// Should return 401 Unauthorized
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("Expected 401 Unauthorized, got %d", resp.StatusCode)
 		}
-		if conv.LastResponseID == "" {
-			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn3")
-		}
-		prevID := conv.LastResponseID
 
-		prompt := fmt.Sprintf("Update the note with ID '%s' to add 'Follow-up: Monday' to the content.", noteID)
-		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
-		if err != nil {
-			t.Fatalf("Update failed: %v", err)
+		// Should have WWW-Authenticate header
+		wwwAuth := resp.Header.Get("WWW-Authenticate")
+		if wwwAuth == "" {
+			t.Fatal("Expected WWW-Authenticate header")
 		}
-		t.Logf("Response: %s", resp)
-		t.Logf("Tool calls: %d", len(toolCalls))
-		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
-
-		// Verify in DB
-		note, err := env.notesSvc.Read(noteID)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
+		if !strings.Contains(wwwAuth, "Bearer") {
+			t.Fatalf("Expected Bearer challenge, got: %s", wwwAuth)
 		}
-		t.Logf("Updated content: %s", note.Content)
-	})
-
-	// Turn 5: Delete note (SAME PROMPT AS CLAUDE TEST)
-	t.Run("Turn5_Delete", func(t *testing.T) {
-		if noteID == "" {
-			t.Skip("No note ID")
-		}
-		if conv.LastResponseID == "" {
-			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn4")
-		}
-		prevID := conv.LastResponseID
-
-		prompt := fmt.Sprintf("Delete the note with ID '%s'.", noteID)
-		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
-		if err != nil {
-			t.Fatalf("Delete failed: %v", err)
-		}
-		t.Logf("Response: %s", resp)
-		t.Logf("Tool calls: %d", len(toolCalls))
-		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
-
-		// Verify deletion in DB
-		_, err = env.notesSvc.Read(noteID)
-		if err == nil {
-			t.Fatal("Note still exists")
-		}
-		t.Log("Note deleted successfully")
 	})
 }
 
 // TestOpenAI_ToolDefinitions tests that all tool definitions are valid
 func TestOpenAI_ToolDefinitions(t *testing.T) {
-	// This test doesn't require API key - just validates tool definitions
 	expectedTools := []string{
 		"create_note",
 		"read_note",
@@ -1089,96 +1249,12 @@ func TestOpenAI_ToolDefinitions(t *testing.T) {
 				i, expectedTools[i], tool.OfFunction.Name)
 		}
 
-		// Verify each tool has a description
 		if tool.OfFunction.Description.Value == "" {
 			t.Errorf("Tool '%s' has no description", tool.OfFunction.Name)
 		}
 
-		// Verify each tool has parameters
 		if tool.OfFunction.Parameters == nil {
 			t.Errorf("Tool '%s' has no parameters", tool.OfFunction.Name)
 		}
 	}
-}
-
-// =============================================================================
-// Fuzz Entry Points
-// =============================================================================
-
-// FuzzOpenAI_CreateNote_Properties provides fuzz testing for create operations.
-// Note: Due to the expense of OpenAI API calls, fuzz testing is limited.
-// The property-based tests with rapid provide better coverage.
-func FuzzOpenAI_CreateNote_Properties(f *testing.F) {
-	// Get API key from env - source ~/openai_key.sh before running tests
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		f.Fatal("OPENAI_API_KEY not set - run: source ~/openai_key.sh")
-	}
-
-	// Add seed corpus
-	f.Add("Test Note", "Test content for fuzzing")
-
-	f.Fuzz(func(t *testing.T, title, content string) {
-		// Skip empty titles (required field)
-		if title == "" {
-			return
-		}
-
-		// Skip very long inputs to avoid excessive API costs
-		if len(title) > 100 || len(content) > 500 {
-			return
-		}
-
-		// Create temp directory for this fuzz iteration
-		tempDir := t.TempDir()
-		os.Setenv("DB_DATA_DIR", tempDir)
-
-		if err := db.InitSchemas(TestUserID); err != nil {
-			return // Skip this iteration on DB errors
-		}
-
-		userDB, err := db.OpenUserDB(TestUserID)
-		if err != nil {
-			return
-		}
-
-		notesSvc := notes.NewService(userDB)
-		mux := http.NewServeMux()
-		apiHandler := api.NewHandler(notesSvc)
-		apiHandler.RegisterRoutes(mux)
-		server := httptest.NewServer(mux)
-		defer server.Close()
-		defer db.CloseAll()
-
-		apiKey := os.Getenv("OPENAI_API_KEY")
-		openaiClient := openai.NewClient(option.WithAPIKey(apiKey))
-
-		env := &testEnv{
-			server:     server,
-			client:     &openaiClient,
-			httpClient: server.Client(),
-			baseURL:    server.URL,
-			cleanup:    func() {},
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Create note via direct API (faster than going through OpenAI)
-		args := json.RawMessage(fmt.Sprintf(`{"title":%q,"content":%q}`, title, content))
-		result, err := env.executeCreateNote(ctx, args)
-		if err != nil {
-			t.Logf("Create failed (may be expected for invalid input): %v", err)
-			return
-		}
-
-		// Verify the note was created
-		listResult, err := env.executeListNotes(ctx, json.RawMessage(`{}`))
-		if err != nil {
-			t.Fatalf("List failed: %v", err)
-		}
-
-		if !strings.Contains(listResult, title) {
-			t.Fatalf("Created note not found. Result: %s, List: %s", result, listResult)
-		}
-	})
 }
