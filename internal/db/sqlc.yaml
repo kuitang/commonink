@@ -1,0 +1,27 @@
+version: "2"
+sql:
+  # Sessions database (unencrypted, shared)
+  - schema: "sql/sessions_schema.sql"
+    queries: "sql/sessions_queries.sql"
+    engine: "sqlite"
+    gen:
+      go:
+        package: "sessions"
+        out: "sessions"
+        emit_json_tags: true
+        emit_empty_slices: true
+        emit_exact_table_names: false
+        emit_interface: true
+
+  # User database (encrypted per-user)
+  - schema: "sql/user_schema.sql"
+    queries: "sql/user_queries.sql"
+    engine: "sqlite"
+    gen:
+      go:
+        package: "userdb"
+        out: "userdb"
+        emit_json_tags: true
+        emit_empty_slices: true
+        emit_exact_table_names: false
+        emit_interface: true

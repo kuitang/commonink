@@ -61,7 +61,7 @@
 
 ### Layer 3 (Depends on Layer 2)
 4. **MCP Server** (`internal/mcp/`)
-   - `server.go` - MCP server with SSE transport
+   - `server.go` - MCP server with Streamable HTTP transport (MCP Spec 2025-03-26)
    - `tools.go` - All 6 MCP tools
    - `handlers.go` - Tool handlers calling notes CRUD
 
@@ -87,11 +87,36 @@
    - Test all 6 MCP tools
 
 9. **OpenAI Conformance Test** (`tests/e2e/openai/`)
-   - `conformance_test.go` - Go test using OpenAI Responses API
-   - Use `type: "mcp"` to connect to MCP server via ngrok
+   - `conformance_test.go` - Go test using OpenAI Agents SDK (NOT Responses API)
    - OpenAI auto-discovers tools from MCP server
    - Test prompts that exercise all 6 tools
    - Property tests with rapid
+
+   **TRANSPORT OPTIONS** (OpenAI Agents SDK supports ALL of these):
+
+   | Transport | Use Case | Example |
+   |-----------|----------|---------|
+   | **stdio** | Local subprocess (simplest) | `MCPServerStdio(command="./bin/server")` |
+   | **Streamable HTTP (localhost)** | Local HTTP server | `MCPServerStreamableHttp(url="http://localhost:8080/mcp")` |
+   | **SSE (localhost)** | Legacy HTTP/SSE | `MCPServerSse(url="http://localhost:8080/mcp")` |
+   | **HTTPS (ngrok)** | ChatGPT product only | `ngrok http 8080` → use https URL |
+
+   **For Milestone 1 testing**, use **localhost HTTP** - no ngrok needed:
+   ```python
+   from agents.mcp import MCPServerStreamableHttp
+
+   async with MCPServerStreamableHttp(
+       name="agent-notes",
+       params={"url": "http://localhost:8080/mcp"},
+   ) as server:
+       agent = Agent(name="NotesAgent", mcp_servers=[server])
+       result = await Runner.run(agent, "Create a note titled 'Test'")
+   ```
+
+   **Note**: ChatGPT (the product) requires HTTPS. Use ngrok only if testing with ChatGPT directly:
+   ```bash
+   ngrok http 8080  # Provides https://<subdomain>.ngrok.app → localhost:8080
+   ```
 
 10. **HTTP curl Test** (`tests/e2e/curl/`)
     - `test.sh` - Shell script with curl commands

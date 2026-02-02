@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agent-notes": {
+      "type": "streamableHttp",
+      "url": "http://localhost:18080/mcp"
+    }
+  }
+}

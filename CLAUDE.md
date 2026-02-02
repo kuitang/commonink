@@ -14,7 +14,26 @@ Quick reference for Claude and developers working on this project.
 
 ## Prerequisites
 
-**Go 1.22+ REQUIRED** - Run `go version` to verify. See README.md for installation.
+**Go 1.25+ REQUIRED via goenv** - This project uses goenv for Go version management.
+
+### Go Setup (CRITICAL for Claude agents)
+The project has a `.go-version` file that specifies Go 1.25.6. All shell commands must initialize goenv:
+
+```bash
+# Add this prefix to ALL go commands in scripts/tasks:
+export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)"
+
+# Or as a one-liner prefix for any go command:
+# $(eval "$(~/.goenv/bin/goenv init -)") && go build ...
+```
+
+**Verify correct Go version:**
+```bash
+export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)" && go version
+# Should output: go version go1.25.6 linux/arm64
+```
+
+**DO NOT use `/usr/bin/go`** - it's an outdated system Go (1.19).
 
 ## Test Strategy Overview
 
@@ -342,8 +361,12 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 
 ## Troubleshooting
 
-### "package X is not in GOROOT"
-→ Go version too old. Need Go 1.22+. See README.md
+### "package X is not in GOROOT" or wrong Go version
+→ You're using system Go instead of goenv. Prefix commands with:
+```bash
+export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)"
+```
+→ Verify with `go version` - must show go1.25.6
 
 ### "CGO_ENABLED required for SQLCipher"
 → Install gcc: `sudo apt-get install build-essential`

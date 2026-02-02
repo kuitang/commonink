@@ -1,15 +1,20 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	// Import SQLCipher driver with "sqlite3" driver name
-	_ "github.com/mutecomm/go-sqlcipher"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
+
+	"github.com/kuitang/agent-notes/internal/db/sessions"
+	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
 // Default hardcoded DEK for Milestone 1 testing.
@@ -52,14 +57,146 @@ var (
 	userDBsMu sync.RWMutex
 )
 
+// SessionsDB wraps the sql.DB connection and provides access to sqlc queries
+type SessionsDB struct {
+	db      *sql.DB
+	queries *sessions.Queries
+}
+
+// UserDB wraps the sql.DB connection and provides access to sqlc queries and FTS operations
+type UserDB struct {
+	db      *sql.DB
+	queries *userdb.Queries
+	userID  string
+}
+
+// DB returns the underlying sql.DB for direct access when needed
+func (s *SessionsDB) DB() *sql.DB {
+	return s.db
+}
+
+// Queries returns the sqlc-generated Queries for type-safe database operations
+func (s *SessionsDB) Queries() *sessions.Queries {
+	return s.queries
+}
+
+// DB returns the underlying sql.DB for direct access when needed
+func (u *UserDB) DB() *sql.DB {
+	return u.db
+}
+
+// Queries returns the sqlc-generated Queries for type-safe database operations
+func (u *UserDB) Queries() *userdb.Queries {
+	return u.queries
+}
+
+// UserID returns the user ID for this database
+func (u *UserDB) UserID() string {
+	return u.userID
+}
+
+// FTSSearchResult represents a single FTS search result
+type FTSSearchResult struct {
+	ID        string
+	Title     string
+	Content   string
+	IsPublic  int64
+	CreatedAt int64
+	UpdatedAt int64
+	Rank      float64 // FTS5 ranking score
+}
+
+// EscapeFTS5Query escapes a user-provided search query for safe use with FTS5 MATCH.
+// FTS5 has special syntax characters (AND, OR, NOT, *, ^, ", :, (, ), -, NEAR, etc.)
+// that can cause parsing errors or unexpected behavior if not properly escaped.
+//
+// The function wraps the entire query in double quotes to treat it as a literal phrase,
+// and escapes any embedded double quotes by doubling them (FTS5 escape convention).
+//
+// Examples:
+//   - "hello" -> "\"hello\""
+//   - "hello world" -> "\"hello world\""
+//   - "hello \"world\"" -> "\"hello \"\"world\"\"\""
+//   - "AND OR NOT" -> "\"AND OR NOT\""
+//   - "test*" -> "\"test*\""
+func EscapeFTS5Query(query string) string {
+	// Remove null bytes which cause "unterminated string" error in FTS5
+	// (SQLite's FTS5 is written in C where null bytes are string terminators)
+	query = strings.ReplaceAll(query, "\x00", "")
+	// Escape embedded double quotes by doubling them
+	escaped := strings.ReplaceAll(query, `"`, `""`)
+	// Wrap in double quotes to treat as a literal phrase
+	return `"` + escaped + `"`
+}
+
+// SearchNotes performs a full-text search on notes using FTS5
+// The query parameter is user-provided input that will be automatically escaped
+// to prevent FTS5 syntax errors and injection attacks.
+func (u *UserDB) SearchNotes(ctx context.Context, query string, limit, offset int64) ([]FTSSearchResult, error) {
+	// Escape user input to prevent FTS5 syntax errors from special characters
+	escapedQuery := EscapeFTS5Query(query)
+
+	rows, err := u.db.QueryContext(ctx, `
+		SELECT n.id, n.title, n.content, n.is_public, n.created_at, n.updated_at, rank
+		FROM notes n
+		JOIN fts_notes f ON n.rowid = f.rowid
+		WHERE fts_notes MATCH ?
+		ORDER BY rank
+		LIMIT ? OFFSET ?
+	`, escapedQuery, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("FTS search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []FTSSearchResult
+	for rows.Next() {
+		var r FTSSearchResult
+		var isPublic sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.Title, &r.Content, &isPublic, &r.CreatedAt, &r.UpdatedAt, &r.Rank); err != nil {
+			return nil, fmt.Errorf("failed to scan FTS result: %w", err)
+		}
+		if isPublic.Valid {
+			r.IsPublic = isPublic.Int64
+		}
+		results = append(results, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating FTS results: %w", err)
+	}
+
+	return results, nil
+}
+
+// SearchNotesCount returns the count of notes matching the FTS5 query
+// The query parameter is user-provided input that will be automatically escaped
+// to prevent FTS5 syntax errors and injection attacks.
+func (u *UserDB) SearchNotesCount(ctx context.Context, query string) (int64, error) {
+	// Escape user input to prevent FTS5 syntax errors from special characters
+	escapedQuery := EscapeFTS5Query(query)
+
+	var count int64
+	err := u.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM notes n
+		JOIN fts_notes f ON n.rowid = f.rowid
+		WHERE fts_notes MATCH ?
+	`, escapedQuery).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("FTS count failed: %w", err)
+	}
+	return count, nil
+}
+
 // OpenSessionsDB opens the shared sessions database (unencrypted).
 // This database contains bootstrap data like sessions, magic tokens, OAuth clients, etc.
 // The connection is cached as a singleton and reused across calls.
 //
 // Returns:
-//   - *sql.DB: Database connection
+//   - *SessionsDB: Database wrapper with sqlc queries
 //   - error: Any error encountered during initialization
-func OpenSessionsDB() (*sql.DB, error) {
+func OpenSessionsDB() (*SessionsDB, error) {
 	sessionsDBOnce.Do(func() {
 		// Ensure data directory exists
 		if err := os.MkdirAll(DataDirectory, 0755); err != nil {
@@ -97,7 +234,14 @@ func OpenSessionsDB() (*sql.DB, error) {
 		sessionsDB = db
 	})
 
-	return sessionsDB, sessionsDBErr
+	if sessionsDBErr != nil {
+		return nil, sessionsDBErr
+	}
+
+	return &SessionsDB{
+		db:      sessionsDB,
+		queries: sessions.New(sessionsDB),
+	}, nil
 }
 
 // OpenUserDB opens a per-user encrypted database.
@@ -108,9 +252,9 @@ func OpenSessionsDB() (*sql.DB, error) {
 //   - userID: The unique identifier for the user
 //
 // Returns:
-//   - *sql.DB: Database connection
+//   - *UserDB: Database wrapper with sqlc queries
 //   - error: Any error encountered during initialization
-func OpenUserDB(userID string) (*sql.DB, error) {
+func OpenUserDB(userID string) (*UserDB, error) {
 	if userID == "" {
 		return nil, fmt.Errorf("userID cannot be empty")
 	}
@@ -119,7 +263,11 @@ func OpenUserDB(userID string) (*sql.DB, error) {
 	userDBsMu.RLock()
 	if db, exists := userDBs[userID]; exists {
 		userDBsMu.RUnlock()
-		return db, nil
+		return &UserDB{
+			db:      db,
+			queries: userdb.New(db),
+			userID:  userID,
+		}, nil
 	}
 	userDBsMu.RUnlock()
 
@@ -129,7 +277,11 @@ func OpenUserDB(userID string) (*sql.DB, error) {
 
 	// Double-check after acquiring write lock (race condition prevention)
 	if db, exists := userDBs[userID]; exists {
-		return db, nil
+		return &UserDB{
+			db:      db,
+			queries: userdb.New(db),
+			userID:  userID,
+		}, nil
 	}
 
 	// Ensure data directory exists
@@ -175,7 +327,11 @@ func OpenUserDB(userID string) (*sql.DB, error) {
 	// Cache the connection
 	userDBs[userID] = db
 
-	return db, nil
+	return &UserDB{
+		db:      db,
+		queries: userdb.New(db),
+		userID:  userID,
+	}, nil
 }
 
 // InitSchemas ensures all database schemas are initialized.
@@ -241,4 +397,70 @@ func GetHardcodedDEK() []byte {
 	dek := make([]byte, len(hardcodedDEK))
 	copy(dek, hardcodedDEK)
 	return dek
+}
+
+// ResetForTesting resets all internal state for clean test isolation.
+// This function is intended only for testing and should not be used in production.
+// It closes all connections and resets the singleton state.
+func ResetForTesting() {
+	// Close all connections
+	CloseAll()
+
+	// Reset the sessions database singleton
+	sessionsDBOnce = sync.Once{}
+	sessionsDB = nil
+	sessionsDBErr = nil
+
+	// Note: userDBs is already cleared by CloseAll
+}
+
+// NewUserDBInMemory creates an in-memory encrypted UserDB for testing.
+// This is faster than file-based databases and avoids filesystem contention.
+// The database is not cached and should be closed when done.
+func NewUserDBInMemory(userID string) (*UserDB, error) {
+	if userID == "" {
+		userID = "test-user"
+	}
+
+	// Open in-memory database with encryption
+	// Using mode=memory with a shared cache allows multiple connections to the same in-memory DB
+	dekHex := hex.EncodeToString(hardcodedDEK)
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open in-memory database: %w", err)
+	}
+
+	// Keep at least one connection open to prevent the in-memory DB from being destroyed
+	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(10)
+
+	// Verify connection
+	var sqliteVersion string
+	if err := db.QueryRow("SELECT sqlite_version()").Scan(&sqliteVersion); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to verify in-memory database: %w", err)
+	}
+
+	// Initialize schema
+	if _, err := db.Exec(UserDBSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize in-memory schema: %w", err)
+	}
+
+	return &UserDB{
+		db:      db,
+		queries: userdb.New(db),
+		userID:  userID,
+	}, nil
+}
+
+// Close closes the UserDB connection. Only needed for in-memory databases
+// that are not cached by the package.
+func (u *UserDB) Close() error {
+	if u.db != nil {
+		return u.db.Close()
+	}
+	return nil
 }

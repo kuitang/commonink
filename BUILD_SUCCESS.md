@@ -213,7 +213,7 @@ internal/api/
 ### Phase 4: MCP Server (Week 3)
 ```bash
 internal/mcp/
-├── server.go       -- MCP protocol handler (SSE transport)
+├── server.go       -- MCP protocol handler (Streamable HTTP transport per MCP Spec 2025-03-26)
 ├── tools.go        -- MCP tool implementations
 └── oauth.go        -- OAuth 2.1 provider endpoints
 ```

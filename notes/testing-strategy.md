@@ -573,11 +573,9 @@ Runs ~10 critical path requests
 Verifies graceful shutdown
 
 3. **MCP Testing**: What MCP transports need testing?
-   - stdio
-   - HTTP/SSE
-   - WebSocket
-
-mcp uses streamable http only.
+   - Streamable HTTP only (per MCP Spec 2025-03-26)
+   - SSE is used optionally within Streamable HTTP for streaming responses, but is NOT a separate transport
+   - Single endpoint `/mcp` handles POST (client messages) and GET (server push)
 
 4. **Flakiness Budget**: What's acceptable flakiness rate for E2E tests?
    - 0% (any flake blocks merge)

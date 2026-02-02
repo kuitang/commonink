@@ -141,7 +141,7 @@ The inspector supports configuration files for multiple servers:
 }
 ```
 
-Supported transport types: `stdio`, `streamable-http`, and others.
+Supported transport types: `stdio`, `streamable-http` (recommended for remote servers).
 
 #### CI/CD Integration
 

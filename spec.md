@@ -8,11 +8,11 @@ MCP-first notes service enabling AI context sharing across Claude, ChatGPT, and 
 ## Architecture
 
 ### Tech Stack
-- **Language**: Go 1.24+
+- **Language**: Go 1.25+
 - **Database**: SQLite (one file per user) + SQLCipher encryption
-- **Deployment**: Fly.io + Tigris CDN
+- **Deployment**: Fly.io (single region, single instance for MVP)
 - **Auth**: Magic Login + Email/Password + Google OIDC (users) + OAuth 2.1 provider (for AI clients)
-- **Payments**: LemonSqueezy (Merchant of Record)
+- **Payments**: LemonSqueezy ($5/year unlimited + free tier)
 - **Email**: Resend
 
 ### Key Libraries
@@ -27,83 +27,40 @@ See `notes/go-libraries-2026.md` for versions.
 - Email: `github.com/resend/resend-go/v3 v3.1.0`
 - Testing: `pgregory.net/rapid v1.2.0` + stdlib fuzzing + `playwright-go v0.5200.1`
 
----
-
-## Architecture Decisions
-
-**Status**: ✅ ALL DECISIONS FINALIZED (2026-02-02)
-
 ### Database Architecture
-
-**User Data**: ALL in user's encrypted DB
-**Bootstrap Data**: Minimal in shared sessions.db
 
 ```
 ${DATA_ROOT}/sessions.db      -- Shared (unencrypted bootstrap)
 ${DATA_ROOT}/{user_id}.db     -- Per-user (encrypted with SQLCipher)
 ```
 
-### Authentication - All Three Methods
+- **User Data**: ALL in user's encrypted DB
+- **Bootstrap Data**: Minimal in shared sessions.db (sessions, OAuth clients/tokens, user keys)
 
-1. ✅ **Magic Login** - Email with token (passwordless)
-2. ✅ **Email/Password** - bcrypt hashed
-3. ✅ **Google OIDC** - Sign in with Google
+### Authentication
 
-**Google + Email Auto-Linking**: ✅ Yes, auto-link by email
-**Magic Login After Google**: ✅ Yes, both methods always available
-**Google Token Storage**: ✅ Don't store refresh tokens (session-based, 30-day sessions)
-**Google OIDC Scopes**: `openid email profile` (minimal, no offline_access)
+All three methods supported:
+1. **Magic Login** - Email with token (passwordless)
+2. **Email/Password** - Argon2id hashed (OWASP recommended)
+3. **Google OIDC** - Sign in with Google (`openid email profile` scopes, no offline_access)
+
+Auto-link accounts by email. Both magic login and Google always available. Session-based auth with 30-day sessions (no Google refresh token storage).
 
 ### Rate Limiting
 
-**Implementation**: stdlib `golang.org/x/time/rate` (per-user)
-**Free tier**: 10 req/sec, burst 20
-**Paid tier**: 1000 req/sec (unlimited-ish)
-**Memory Management**: TTL-based cleanup every hour
+Per-user via stdlib `golang.org/x/time/rate`:
+- **Free tier**: 10 req/sec, burst 20
+- **Paid tier**: 1000 req/sec
+- **Memory**: TTL-based cleanup every hour
 
-**Rate Limiter Memory Management**:
-```go
-type rateLimiterEntry struct {
-    limiter   *rate.Limiter
-    lastUsed  time.Time
-}
+### Storage Limits
 
-// Background cleanup every hour removes idle limiters
-```
-
-### Database Size Limits
-
-**Free tier**: 100MB limit
-**Paid tier**: Unlimited
-**Calculation**: On login, cache in memory
-**Enforcement**: Check cached size on writes
-
-```go
-// On login: Calculate DB size, cache in memory
-dbSize := calculateDBSize(userID)
-dbSizeCache[userID] = dbSize
-
-// On write: Check cached size
-if cachedSize > 100MB && !isPaidUser(userID) {
-    return http.StatusPaymentRequired
-}
-```
+- **Free tier**: 100MB, **Paid tier**: Unlimited
+- Cache DB size on login, check on writes
 
 ### Public Notes
 
-**URL Pattern**: `yourdomain.com/public/{user_id}/{note_id}`
-**No subdomain required** (simpler DNS setup)
-
-### Payment Integration
-
-**Provider**: LemonSqueezy only (Merchant of Record)
-**Pricing**: $5/year unlimited plan + free tier
-**Handles**: All tax, compliance, international payments
-
-### Session Management
-
-**Duration**: 30 days (balance UX and security)
-**Google re-auth**: One click (Google remembers consent)
+URL: `yourdomain.com/public/{user_id}/{note_id}` (no subdomain)
 
 ---
 
@@ -184,7 +141,7 @@ if cachedSize > 100MB && !isPaidUser(userID) {
 │ │   • CreateCheckout(userID, planID)                     │
 │ │                                                         │
 │ ├── webhook.go      - Payment webhooks                   │
-│ │   • HandleStripeWebhook() or HandleLemonWebhook()      │
+│ │   • HandleLemonWebhook()                               │
 │ │   • subscription_created → activate user               │
 │ │   • subscription_cancelled → deactivate                │
 │ │                                                         │
@@ -244,19 +201,34 @@ GET  /oauth/authorize       - Authorization endpoint (PKCE)
 POST /oauth/token           - Token endpoint (code exchange, refresh)
 ```
 
-### MCP Server
+### MCP Server (Streamable HTTP Transport - MCP Spec 2025-03-26)
 ```
-POST /mcp                   - MCP streamable HTTP endpoint
-  Methods:
-    - initialize            - MCP handshake
-    - tools/list            - List available tools
-    - tools/call            - Execute tool
+POST /mcp                   - Send JSON-RPC messages (requests, notifications, responses)
+                              Client MUST include Accept header with application/json and text/event-stream
+                              Server responds with JSON or SSE stream
+GET  /mcp                   - Open SSE stream for server-initiated messages (optional)
+                              Client MUST include Accept: text/event-stream
+                              Server returns 405 if not supported
+DELETE /mcp                 - Terminate session (optional)
+                              Client MUST include Mcp-Session-Id header
+
+Session Management:
+  - Server MAY return Mcp-Session-Id header in InitializeResult
+  - Client MUST include Mcp-Session-Id in all subsequent requests
+  - Server returns 404 when session expires
+
+JSON-RPC Methods:
+  - initialize              - MCP handshake (returns session ID)
+  - initialized             - Client confirms initialization
+  - tools/list              - List available tools
+  - tools/call              - Execute tool
+  - notifications/cancelled - Cancel running operation
 ```
 
 ### Payments
 ```
 POST /checkout              - Create checkout session
-POST /webhooks/stripe       - Stripe webhook (or /webhooks/lemon)
+POST /webhooks/lemon        - LemonSqueezy webhook
 GET  /subscription/status   - Check user's subscription
 ```
 
@@ -398,7 +370,7 @@ CREATE TABLE api_keys (
 
 Users can create API keys for programmatic access:
 - **key_id**: Unique identifier (shown to user)
-- **key_hash**: bcrypt hash of the actual key
+- **key_hash**: Argon2id hash of the actual key
 - **scope**: read_only or read_write
 - **last_used**: Track usage for cleanup
 
@@ -457,7 +429,7 @@ SQLite DB (encrypted at rest)
 ### note_create
 **Parameters:**
 - `title` (string, required)
-- `content` (string, required)
+- `content` (string, required, max 1MB)
 - `tags` (array of strings, optional)
 
 **Returns:**
@@ -472,7 +444,7 @@ SQLite DB (encrypted at rest)
 - Generates unique ID
 - Stores encrypted in user's SQLite
 - Updates FTS index
-- [DECIDE: Enforce max content size?]
+- Enforces max content size (1MB)
 
 ---
 
@@ -519,11 +491,9 @@ SQLite DB (encrypted at rest)
 ```
 
 **Acceptance Criteria:**
-- Uses FTS5 for full-text search
-- Searches both title and content
-- [DECIDE: Different weights for title vs content?]
+- Uses FTS5 for full-text search (supports AND, OR, NOT operators natively)
+- Searches both title and content (default FTS5 weighting)
 - Returns only current user's notes
-- [DECIDE: Support search operators (AND, OR, NOT)?]
 
 ---
 
@@ -565,7 +535,7 @@ SQLite DB (encrypted at rest)
 ```
 
 **Acceptance Criteria:**
-- Soft delete or hard delete? [DECIDE]
+- Hard delete (no versioning for MVP)
 - Returns 404 if note not found or belongs to different user
 - Removes from FTS index
 
@@ -890,11 +860,11 @@ TEST_MODE=true
 
 ### Fly.io Configuration
 - **Platform**: Fly.io
-- **Regions**: [DECIDE: single or multi-region?]
-- **Storage**: Mounted volume for SQLite files
-  - Path: `/data/{user_id}/notes.db`
-  - [DECIDE: Single volume or distributed?]
-- **Scaling**: [DECIDE: Horizontal scaling strategy with SQLite file locking?]
+- **Regions**: Single region (MVP)
+- **Storage**: Single mounted volume at `/data/`
+  - `sessions.db` for shared data
+  - `{user_id}.db` for per-user encrypted notes
+- **Scaling**: Single instance (MVP - SQLite file locking simplicity)
 - **Secrets**: Master encryption key stored in Fly secrets
 
 ### Environment Variables
@@ -902,7 +872,7 @@ TEST_MODE=true
 MASTER_KEY=<hex-encoded-key>           # For KEK derivation
 GOOGLE_CLIENT_ID=<google-oauth-id>
 GOOGLE_CLIENT_SECRET=<google-secret>
-STRIPE_SECRET_KEY=<stripe-key>         # or LEMON_API_KEY
+LEMON_API_KEY=<lemonsqueezy-key>
 RESEND_API_KEY=<resend-key>
 OAUTH_ISSUER=https://your-domain.com
 DATABASE_PATH=/data
@@ -910,52 +880,27 @@ DATABASE_PATH=/data
 
 ---
 
-## Open Questions (DECIDE)
+## Decision Summary
 
-### Critical Path
-1. **Payment provider**: Stripe or LemonSqueezy?
-2. **Pricing model**: Free tier? Subscription tiers? Limits?
-3. **HTTP framework**: chi (minimal) vs gin (popular)?
-4. **Horizontal scaling**: How to handle multiple instances + SQLite file locking?
+All architectural decisions finalized for MVP:
 
-### Data Storage
-5. **Metadata DB**: Where to store users, oauth_clients, oauth_tokens?
-   - Separate PostgreSQL instance?
-   - Shared SQLite file (not per-user)?
-6. **Note size limits**: Max content size? Max total storage per user?
-7. **Note organization**: Flat list with tags, or support folders?
-8. **Note deletion**: Soft delete with retention period, or hard delete?
-
-### Auth & Security
-9. **Email/password**: Support in addition to Google OIDC, or Google-only?
-10. **API keys**: Support for programmatic access (non-browser environments)?
-11. **Token storage**: Where to persist OAuth tokens? (User's SQLite, shared DB, Redis?)
-
-### Features
-12. **Search**: Title/content weighting? Search operators? Fuzzy matching?
-13. **Web UI**: How minimal? Just OAuth consent, or basic CRUD forms?
-14. **Note sharing**: Support sharing notes between users? Public URLs?
-15. **Versioning**: Support note version history, or just last-modified?
-
-### Rate Limiting
-16. **Limits**: What's reasonable? (e.g., 100 req/min per user?)
-17. **Per-endpoint**: Different limits for read vs write vs search?
-18. **Free vs paid**: Different rate limits for tiers?
-
-### Testing
-19. **Fuzzing duration**: 30 min nightly, or longer?
-20. **Playwright browsers**: Chromium only, or Firefox/WebKit too?
-21. **Flakiness budget**: Retry failed tests, or 0% tolerance?
-
-### Email
-22. **Email use cases**: Welcome, password reset, subscription confirmations, marketing?
-
----
-
-## Next Steps
-1. Answer open questions
-2. Initialize Go project with dependencies
-3. Write hello world + library smoke tests
-4. Implement CI scripts (quick, full, fuzz)
-5. Setup git hooks (go fmt + quick CI)
-6. Write CLAUDE.md with test plan
+| Area | Decision |
+|------|----------|
+| **Payment** | LemonSqueezy ($5/year + free tier) |
+| **HTTP** | stdlib `net/http` (Go 1.22+ routing) |
+| **Scaling** | Single instance, single region |
+| **Metadata DB** | Shared `sessions.db` (SQLite) |
+| **Note limits** | 1MB content, 100MB total (free), unlimited (paid) |
+| **Organization** | Flat list with tags (no folders) |
+| **Deletion** | Hard delete (no versioning) |
+| **Auth methods** | Magic Login + Email/Password + Google OIDC |
+| **API keys** | Supported (stored in user DB) |
+| **OAuth tokens** | Shared `sessions.db` |
+| **Search** | FTS5 default weighting, native operators |
+| **Web UI** | Minimal (OAuth consent + basic CRUD) |
+| **Public notes** | `/{user_id}/{note_id}` URLs |
+| **Rate limits** | Per-user (10/s free, 1000/s paid) |
+| **Fuzzing** | 30 min nightly |
+| **Browsers** | Chromium only |
+| **Flakiness** | 0% tolerance |
+| **Email** | Welcome, magic login, subscription confirmations |

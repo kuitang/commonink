@@ -1,12 +1,19 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kuitang/agent-notes/internal/db/sessions"
+	"github.com/kuitang/agent-notes/internal/db/testutil"
+	"github.com/kuitang/agent-notes/internal/db/userdb"
+	"pgregory.net/rapid"
 )
 
 // TestMain runs before all tests and cleans up after
@@ -22,7 +29,7 @@ func TestMain(m *testing.M) {
 }
 
 // setupTestDir creates a clean test directory for a specific test
-func setupTestDir(t *testing.T) string {
+func setupTestDir(t testing.TB) string {
 	// Close all databases to prevent caching issues between tests
 	CloseAll()
 
@@ -45,49 +52,93 @@ func setupTestDir(t *testing.T) string {
 	return testDir
 }
 
-func TestOpenSessionsDB(t *testing.T) {
-	setupTestDir(t)
+// setupTestDirRapid creates a clean test directory for rapid tests
+func setupTestDirRapid(t *rapid.T) string {
+	// Close all databases to prevent caching issues between tests
+	CloseAll()
 
-	db, err := OpenSessionsDB()
+	// Reset the singleton
+	sessionsDBOnce = sync.Once{}
+	sessionsDB = nil
+	sessionsDBErr = nil
+
+	// Use a unique name based on test iteration
+	testDir := filepath.Join("./testdata", "rapid_test")
+	if err := os.RemoveAll(testDir); err != nil {
+		t.Fatalf("Failed to remove old test directory: %v", err)
+	}
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	// Override the data directory for this test
+	DataDirectory = testDir
+
+	return testDir
+}
+
+// =============================================================================
+// Property: SessionsDB returns singleton and schema is correct
+// =============================================================================
+
+func testSessionsDB_Singleton_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	// Property: OpenSessionsDB returns non-nil database wrapper on success
+	db1, err := OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("OpenSessionsDB failed: %v", err)
 	}
-
-	if db == nil {
-		t.Fatal("Expected non-nil database connection")
+	if db1 == nil {
+		t.Fatal("Expected non-nil database wrapper")
 	}
 
-	// Verify database is functional
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to query sessions table: %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("Expected 0 sessions, got %d", count)
-	}
-
-	// Test that subsequent calls return the same instance
+	// Property: Singleton returns same underlying DB instance on subsequent calls
 	db2, err := OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("Second OpenSessionsDB call failed: %v", err)
 	}
+	if db1.DB() != db2.DB() {
+		t.Fatal("Expected same database instance on subsequent calls (singleton)")
+	}
 
-	if db != db2 {
-		t.Error("Expected same database instance on subsequent calls")
+	// Property: Database is functional (can query using sqlc)
+	count, err := db1.Queries().CountSessions(ctx)
+	if err != nil {
+		t.Fatalf("Failed to count sessions: %v", err)
+	}
+
+	// Property: Empty database has 0 rows initially
+	if count != 0 {
+		t.Fatalf("Expected 0 sessions in fresh database, got %d", count)
 	}
 }
 
-func TestOpenSessionsDB_SchemaCreation(t *testing.T) {
-	setupTestDir(t)
+func TestSessionsDB_Singleton_Properties(t *testing.T) {
+	rapid.Check(t, testSessionsDB_Singleton_Properties)
+}
 
-	db, err := OpenSessionsDB()
+func FuzzSessionsDB_Singleton_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testSessionsDB_Singleton_Properties))
+}
+
+// =============================================================================
+// Property: SessionsDB schema has all required tables
+// =============================================================================
+
+func testSessionsDB_Schema_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+
+	sessDB, err := OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("OpenSessionsDB failed: %v", err)
 	}
 
-	// Verify all expected tables exist
+	db := sessDB.DB()
+
+	// Property: All expected tables exist in schema
 	tables := []string{
 		"sessions",
 		"magic_tokens",
@@ -102,51 +153,79 @@ func TestOpenSessionsDB_SchemaCreation(t *testing.T) {
 		query := "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
 		err := db.QueryRow(query, table).Scan(&name)
 		if err == sql.ErrNoRows {
-			t.Errorf("Table %s does not exist", table)
+			t.Fatalf("Table %s does not exist (schema incomplete)", table)
 		} else if err != nil {
-			t.Errorf("Failed to check for table %s: %v", table, err)
+			t.Fatalf("Failed to check for table %s: %v", table, err)
 		}
 	}
 }
 
-func TestOpenUserDB(t *testing.T) {
-	setupTestDir(t)
+func TestSessionsDB_Schema_Properties(t *testing.T) {
+	rapid.Check(t, testSessionsDB_Schema_Properties)
+}
 
-	userID := "test-user-001"
-	db, err := OpenUserDB(userID)
+func FuzzSessionsDB_Schema_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testSessionsDB_Schema_Properties))
+}
+
+// =============================================================================
+// Property: UserDB with random valid userIDs works correctly
+// =============================================================================
+
+func testUserDB_ValidUserID_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+
+	// Property: OpenUserDB with valid userID returns non-nil database wrapper
+	db1, err := OpenUserDB(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("OpenUserDB failed for userID %q: %v", userID, err)
+	}
+	if db1 == nil {
+		t.Fatal("Expected non-nil database wrapper")
 	}
 
-	if db == nil {
-		t.Fatal("Expected non-nil database connection")
-	}
-
-	// Verify database is functional
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM notes").Scan(&count)
+	// Property: Database is functional using sqlc
+	count, err := db1.Queries().CountNotes(ctx)
 	if err != nil {
-		t.Fatalf("Failed to query notes table: %v", err)
+		t.Fatalf("Failed to count notes: %v", err)
 	}
 
+	// Property: Empty database has 0 rows
 	if count != 0 {
-		t.Errorf("Expected 0 notes, got %d", count)
+		t.Fatalf("Expected 0 notes in fresh database, got %d", count)
 	}
 
-	// Test caching - subsequent calls should return the same instance
+	// Property: Same userID returns cached instance (singleton per user)
 	db2, err := OpenUserDB(userID)
 	if err != nil {
 		t.Fatalf("Second OpenUserDB call failed: %v", err)
 	}
-
-	if db != db2 {
-		t.Error("Expected same database instance on subsequent calls")
+	if db1.DB() != db2.DB() {
+		t.Fatal("Expected same database instance for same userID")
 	}
 }
 
-func TestOpenUserDB_EmptyUserID(t *testing.T) {
-	setupTestDir(t)
+func TestUserDB_ValidUserID_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_ValidUserID_Properties)
+}
 
+func FuzzUserDB_ValidUserID_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_ValidUserID_Properties))
+}
+
+// =============================================================================
+// Property: UserDB with empty userID returns error
+// =============================================================================
+
+func testUserDB_EmptyUserID_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+
+	// Property: Empty userID always returns error
 	_, err := OpenUserDB("")
 	if err == nil {
 		t.Fatal("Expected error for empty userID")
@@ -154,20 +233,35 @@ func TestOpenUserDB_EmptyUserID(t *testing.T) {
 
 	expectedMsg := "userID cannot be empty"
 	if err.Error() != expectedMsg {
-		t.Errorf("Expected error message %q, got %q", expectedMsg, err.Error())
+		t.Fatalf("Expected error message %q, got %q", expectedMsg, err.Error())
 	}
 }
 
-func TestOpenUserDB_SchemaCreation(t *testing.T) {
-	setupTestDir(t)
+func TestUserDB_EmptyUserID_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_EmptyUserID_Properties)
+}
 
-	userID := "test-user-002"
-	db, err := OpenUserDB(userID)
+func FuzzUserDB_EmptyUserID_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_EmptyUserID_Properties))
+}
+
+// =============================================================================
+// Property: UserDB schema has all required tables including FTS5
+// =============================================================================
+
+func testUserDB_Schema_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
 	if err != nil {
 		t.Fatalf("OpenUserDB failed: %v", err)
 	}
 
-	// Verify all expected tables exist
+	db := userDB.DB()
+
+	// Property: All expected tables exist
 	tables := []string{
 		"account",
 		"notes",
@@ -180,330 +274,655 @@ func TestOpenUserDB_SchemaCreation(t *testing.T) {
 		query := "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
 		err := db.QueryRow(query, table).Scan(&name)
 		if err == sql.ErrNoRows {
-			t.Errorf("Table %s does not exist", table)
+			t.Fatalf("Table %s does not exist", table)
 		} else if err != nil {
-			t.Errorf("Failed to check for table %s: %v", table, err)
+			t.Fatalf("Failed to check for table %s: %v", table, err)
 		}
 	}
 
-	// Verify FTS5 virtual table
+	// Property: FTS5 virtual table exists
 	var ftsTables int
 	query := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'fts_notes%'"
 	err = db.QueryRow(query).Scan(&ftsTables)
 	if err != nil {
 		t.Fatalf("Failed to check FTS tables: %v", err)
 	}
-	// FTS5 creates multiple internal tables, should be at least 1
 	if ftsTables == 0 {
-		t.Error("FTS5 virtual table not created")
+		t.Fatal("FTS5 virtual table not created")
 	}
 }
 
-func TestOpenUserDB_MultipleUsers(t *testing.T) {
-	setupTestDir(t)
+func TestUserDB_Schema_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_Schema_Properties)
+}
 
-	users := []string{"user-001", "user-002", "user-003"}
+func FuzzUserDB_Schema_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_Schema_Properties))
+}
 
-	dbs := make(map[string]*sql.DB)
+// =============================================================================
+// Property: Multiple users have isolated databases
+// =============================================================================
+
+func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	// Generate 2-5 unique user IDs
+	numUsers := rapid.IntRange(2, 5).Draw(t, "numUsers")
+	userIDs := make([]string, numUsers)
+	dbs := make(map[string]*UserDB)
+
+	for i := 0; i < numUsers; i++ {
+		userIDs[i] = testutil.ValidUserID().Draw(t, "userID")
+	}
 
 	// Open databases for all users
-	for _, userID := range users {
-		db, err := OpenUserDB(userID)
+	for _, userID := range userIDs {
+		userDB, err := OpenUserDB(userID)
 		if err != nil {
 			t.Fatalf("Failed to open database for %s: %v", userID, err)
 		}
-		dbs[userID] = db
+		dbs[userID] = userDB
 	}
 
-	// Verify each database is independent
-	for i, userID := range users {
-		db := dbs[userID]
+	// Property: Each user's database is independent
+	now := time.Now().Unix()
+	for i, userID := range userIDs {
+		userDB := dbs[userID]
 
-		// Insert a test note with a unique value
+		// Insert a test note using sqlc
+		noteID := userID + "-note-1"
 		title := "Test Note " + userID
-		_, err := db.Exec(
-			"INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-			userID+"-note-1", title, "Test content", time.Now().Unix(), time.Now().Unix(),
-		)
+		err := userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+			ID:        noteID,
+			Title:     title,
+			Content:   "Test content",
+			IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
 		if err != nil {
 			t.Fatalf("Failed to insert note for %s: %v", userID, err)
 		}
 
-		// Verify the note exists
-		var retrievedTitle string
-		err = db.QueryRow("SELECT title FROM notes WHERE id = ?", userID+"-note-1").Scan(&retrievedTitle)
+		// Property: Note exists in correct database
+		note, err := userDB.Queries().GetNote(ctx, noteID)
 		if err != nil {
 			t.Fatalf("Failed to retrieve note for %s: %v", userID, err)
 		}
-
-		if retrievedTitle != title {
-			t.Errorf("Expected title %q, got %q", title, retrievedTitle)
+		if note.Title != title {
+			t.Fatalf("Expected title %q, got %q", title, note.Title)
 		}
 
-		// Verify other users' databases don't have this note
-		for j, otherUserID := range users {
+		// Property: Note does not exist in other users' databases
+		for j, otherUserID := range userIDs {
 			if i == j {
 				continue
 			}
 			otherDB := dbs[otherUserID]
-			var count int
-			err = otherDB.QueryRow("SELECT COUNT(*) FROM notes WHERE id = ?", userID+"-note-1").Scan(&count)
-			if err != nil {
-				t.Fatalf("Failed to check other user's database: %v", err)
-			}
-			if count != 0 {
-				t.Errorf("User %s's note found in %s's database", userID, otherUserID)
+			_, err := otherDB.Queries().GetNote(ctx, noteID)
+			if err == nil {
+				t.Fatalf("User %s's note found in %s's database (isolation violated)", userID, otherUserID)
+			} else if err != sql.ErrNoRows {
+				t.Fatalf("Unexpected error checking other user's database: %v", err)
 			}
 		}
 	}
 }
 
-func TestUserDB_FTS5Triggers(t *testing.T) {
-	setupTestDir(t)
+func TestUserDB_MultipleUsers_Isolation_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_MultipleUsers_Isolation_Properties)
+}
 
-	userID := "test-user-fts"
-	db, err := OpenUserDB(userID)
+func FuzzUserDB_MultipleUsers_Isolation_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_MultipleUsers_Isolation_Properties))
+}
+
+// =============================================================================
+// Property: FTS5 triggers keep index in sync with notes table
+// =============================================================================
+
+func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
 	if err != nil {
 		t.Fatalf("OpenUserDB failed: %v", err)
 	}
 
 	now := time.Now().Unix()
 
-	// Insert a note
-	noteID := "note-1"
-	title := "Full Text Search Test"
-	content := "This is a test note for full-text search functionality"
+	// Generate arbitrary note content (including special chars, unicode, etc.)
+	title := testutil.ArbitraryNoteTitle().Draw(t, "title")
+	// Use a simple searchWord for FTS sync test since we're testing trigger sync, not FTS escaping
+	searchWord := rapid.StringMatching("[a-z]{4,10}").Draw(t, "searchWord")
+	content := "This is content with " + searchWord + " embedded"
+	noteID := "note-" + rapid.StringMatching("[a-z0-9]{8}").Draw(t, "noteID")
 
-	_, err = db.Exec(
-		"INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		noteID, title, content, now, now,
-	)
+	// Insert note using sqlc
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        noteID,
+		Title:     title,
+		Content:   content,
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 	if err != nil {
 		t.Fatalf("Failed to insert note: %v", err)
 	}
 
-	// Verify FTS index was updated via trigger
-	var ftsTitle, ftsContent string
-	err = db.QueryRow(
-		"SELECT title, content FROM fts_notes WHERE fts_notes MATCH ?",
-		"search",
-	).Scan(&ftsTitle, &ftsContent)
+	// Property: FTS index is updated via INSERT trigger
+	results, err := userDB.SearchNotes(ctx, searchWord, 10, 0)
 	if err != nil {
-		t.Fatalf("Failed to query FTS index: %v", err)
+		t.Fatalf("Failed to query FTS index after insert: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 search result, got %d", len(results))
+	}
+	if results[0].Title != title {
+		t.Fatalf("FTS index title mismatch: expected %q, got %q", title, results[0].Title)
 	}
 
-	if ftsTitle != title {
-		t.Errorf("Expected FTS title %q, got %q", title, ftsTitle)
-	}
-
-	// Update the note
-	newContent := "Updated content for testing search triggers"
-	_, err = db.Exec("UPDATE notes SET content = ?, updated_at = ? WHERE id = ?", newContent, now, noteID)
+	// Update note with new search word using sqlc
+	newSearchWord := rapid.StringMatching("[a-z]{4,10}").Draw(t, "newSearchWord")
+	newContent := "Updated content with " + newSearchWord + " now"
+	err = userDB.Queries().UpdateNoteContent(ctx, userdb.UpdateNoteContentParams{
+		Content:   newContent,
+		UpdatedAt: now + 1,
+		ID:        noteID,
+	})
 	if err != nil {
 		t.Fatalf("Failed to update note: %v", err)
 	}
 
-	// Verify FTS index was updated
-	err = db.QueryRow(
-		"SELECT content FROM fts_notes WHERE fts_notes MATCH ?",
-		"testing",
-	).Scan(&ftsContent)
+	// Property: FTS index is updated via UPDATE trigger
+	results, err = userDB.SearchNotes(ctx, newSearchWord, 10, 0)
 	if err != nil {
-		t.Fatalf("Failed to query updated FTS index: %v", err)
+		t.Fatalf("Failed to query FTS index after update: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 search result, got %d", len(results))
+	}
+	if results[0].Content != newContent {
+		t.Fatalf("FTS index content mismatch: expected %q, got %q", newContent, results[0].Content)
 	}
 
-	if ftsContent != newContent {
-		t.Errorf("Expected updated FTS content %q, got %q", newContent, ftsContent)
-	}
-
-	// Delete the note
-	_, err = db.Exec("DELETE FROM notes WHERE id = ?", noteID)
+	// Delete note using sqlc
+	err = userDB.Queries().DeleteNote(ctx, noteID)
 	if err != nil {
 		t.Fatalf("Failed to delete note: %v", err)
 	}
 
-	// Verify FTS index was cleaned up
-	// Note: FTS5 uses MATCH for queries, and deleted entries should not match
-	var count int
-	err = db.QueryRow(
-		"SELECT COUNT(*) FROM fts_notes",
-	).Scan(&count)
+	// Property: FTS index is cleaned up via DELETE trigger
+	count, err := userDB.SearchNotesCount(ctx, newSearchWord)
 	if err != nil {
 		t.Fatalf("Failed to query FTS index after delete: %v", err)
 	}
-
 	if count != 0 {
-		t.Errorf("Expected FTS entry to be deleted, but found %d entries", count)
+		t.Fatalf("FTS entry should be deleted, but found %d entries", count)
 	}
 }
 
-func TestUserDB_ContentSizeLimit(t *testing.T) {
-	setupTestDir(t)
+func TestUserDB_FTS5_Sync_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_FTS5_Sync_Properties)
+}
 
-	userID := "test-user-limit"
-	db, err := OpenUserDB(userID)
+func FuzzUserDB_FTS5_Sync_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_FTS5_Sync_Properties))
+}
+
+// =============================================================================
+// Property: Note content size limits are enforced
+// =============================================================================
+
+func testUserDB_ContentSizeLimit_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
 	if err != nil {
 		t.Fatalf("OpenUserDB failed: %v", err)
 	}
 
 	now := time.Now().Unix()
 
-	// Test content at exactly 1MB (should succeed)
+	// Property: Content at exactly 1MB succeeds
 	content1MB := make([]byte, 1048576)
 	for i := range content1MB {
 		content1MB[i] = 'a'
 	}
 
-	_, err = db.Exec(
-		"INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		"note-1mb", "1MB Note", string(content1MB), now, now,
-	)
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        "note-1mb",
+		Title:     "1MB Note",
+		Content:   string(content1MB),
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 	if err != nil {
-		t.Errorf("Failed to insert 1MB note: %v", err)
+		t.Fatalf("Failed to insert 1MB note: %v", err)
 	}
 
-	// Test content over 1MB (should fail due to CHECK constraint)
+	// Property: Content over 1MB fails (CHECK constraint)
 	contentOver1MB := make([]byte, 1048577)
 	for i := range contentOver1MB {
 		contentOver1MB[i] = 'b'
 	}
 
-	_, err = db.Exec(
-		"INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		"note-over-1mb", "Over 1MB Note", string(contentOver1MB), now, now,
-	)
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        "note-over-1mb",
+		Title:     "Over 1MB Note",
+		Content:   string(contentOver1MB),
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 	if err == nil {
-		t.Error("Expected error when inserting note over 1MB, but got none")
+		t.Fatal("Expected error when inserting note over 1MB, but got none")
 	}
 }
 
-func TestInitSchemas(t *testing.T) {
-	setupTestDir(t)
+func TestUserDB_ContentSizeLimit_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_ContentSizeLimit_Properties)
+}
 
-	userIDs := []string{"user-init-1", "user-init-2"}
+func FuzzUserDB_ContentSizeLimit_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_ContentSizeLimit_Properties))
+}
+
+// =============================================================================
+// Property: InitSchemas initializes all databases
+// =============================================================================
+
+func testInitSchemas_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	// Generate random user IDs
+	numUsers := rapid.IntRange(1, 3).Draw(t, "numUsers")
+	userIDs := make([]string, numUsers)
+	for i := 0; i < numUsers; i++ {
+		userIDs[i] = testutil.ValidUserID().Draw(t, "userID")
+	}
 
 	err := InitSchemas(userIDs...)
 	if err != nil {
 		t.Fatalf("InitSchemas failed: %v", err)
 	}
 
-	// Verify sessions database was initialized
-	sessionsDB, err := OpenSessionsDB()
+	// Property: Sessions database is initialized
+	sessDB, err := OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("Failed to get sessions database: %v", err)
 	}
-	if sessionsDB == nil {
+	if sessDB == nil {
 		t.Fatal("Sessions database is nil")
 	}
 
-	// Verify all user databases were initialized
+	// Property: All user databases are initialized
 	for _, userID := range userIDs {
-		db, err := OpenUserDB(userID)
+		userDB, err := OpenUserDB(userID)
 		if err != nil {
 			t.Fatalf("Failed to get user database for %s: %v", userID, err)
 		}
-		if db == nil {
+		if userDB == nil {
 			t.Fatalf("User database for %s is nil", userID)
 		}
 
-		// Verify schema exists
-		var count int
-		err = db.QueryRow("SELECT COUNT(*) FROM notes").Scan(&count)
+		// Verify schema exists using sqlc
+		count, err := userDB.Queries().CountNotes(ctx)
 		if err != nil {
 			t.Fatalf("Schema not initialized for %s: %v", userID, err)
+		}
+		if count != 0 {
+			t.Fatalf("Expected 0 notes in fresh database, got %d", count)
 		}
 	}
 }
 
-func TestCloseAll(t *testing.T) {
-	setupTestDir(t)
+func TestInitSchemas_Properties(t *testing.T) {
+	rapid.Check(t, testInitSchemas_Properties)
+}
 
-	// Open some databases
+func FuzzInitSchemas_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testInitSchemas_Properties))
+}
+
+// =============================================================================
+// Property: CloseAll closes all connections
+// =============================================================================
+
+func testCloseAll_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+
+	// Open sessions database
 	_, err := OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("Failed to open sessions DB: %v", err)
 	}
 
-	userIDs := []string{"user-close-1", "user-close-2"}
-	for _, userID := range userIDs {
+	// Open some user databases
+	numUsers := rapid.IntRange(1, 3).Draw(t, "numUsers")
+	for i := 0; i < numUsers; i++ {
+		userID := testutil.ValidUserID().Draw(t, "userID")
 		_, err := OpenUserDB(userID)
 		if err != nil {
-			t.Fatalf("Failed to open user DB for %s: %v", userID, err)
+			t.Fatalf("Failed to open user DB for iteration %d: %v", i, err)
 		}
 	}
 
-	// Close all
+	// Property: CloseAll returns no error
 	err = CloseAll()
 	if err != nil {
-		t.Errorf("CloseAll returned error: %v", err)
+		t.Fatalf("CloseAll returned error: %v", err)
 	}
-
-	// Verify databases are closed by trying to query them
-	// Note: This is a bit tricky to test properly, but we can verify
-	// that the cache was cleared by checking that new calls create new instances
 }
 
-func TestGetHardcodedDEK(t *testing.T) {
+func TestCloseAll_Properties(t *testing.T) {
+	rapid.Check(t, testCloseAll_Properties)
+}
+
+func FuzzCloseAll_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testCloseAll_Properties))
+}
+
+// =============================================================================
+// Property: GetHardcodedDEK returns correct length and is a copy
+// =============================================================================
+
+func testGetHardcodedDEK_Properties(t *rapid.T) {
 	dek := GetHardcodedDEK()
 
+	// Property: DEK is 32 bytes (256 bits for AES-256)
 	if len(dek) != 32 {
-		t.Errorf("Expected DEK length 32, got %d", len(dek))
+		t.Fatalf("Expected DEK length 32, got %d", len(dek))
 	}
 
-	// Verify it returns a copy (modifying returned value doesn't affect internal state)
+	// Property: Returns a copy (mutating doesn't affect internal state)
+	originalFirstByte := dek[0]
 	dek[0] = 0xFF
-	dek2 := GetHardcodedDEK()
 
-	if dek2[0] == 0xFF {
-		t.Error("GetHardcodedDEK returns a reference instead of a copy")
+	dek2 := GetHardcodedDEK()
+	if dek2[0] != originalFirstByte {
+		t.Fatal("GetHardcodedDEK returns a reference instead of a copy")
 	}
 }
 
-func TestUserDB_Encryption(t *testing.T) {
-	setupTestDir(t)
+func TestGetHardcodedDEK_Properties(t *testing.T) {
+	rapid.Check(t, testGetHardcodedDEK_Properties)
+}
 
-	userID := "test-user-encrypted"
-	db, err := OpenUserDB(userID)
+func FuzzGetHardcodedDEK_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testGetHardcodedDEK_Properties))
+}
+
+// =============================================================================
+// Property: Encryption roundtrip works (data can be read back)
+// =============================================================================
+
+func testUserDB_Encryption_Roundtrip_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
 	if err != nil {
 		t.Fatalf("OpenUserDB failed: %v", err)
 	}
 
-	// Insert some sensitive data
+	// Generate random sensitive content
+	sensitiveContent := rapid.StringMatching("[A-Za-z0-9 ]{10,100}").Draw(t, "sensitiveContent")
+	title := rapid.StringMatching("[A-Za-z ]{5,30}").Draw(t, "title")
+	noteID := "encrypted-note-" + rapid.StringMatching("[a-z0-9]{8}").Draw(t, "noteID")
 	now := time.Now().Unix()
-	sensitiveContent := "This is sensitive encrypted data"
 
-	_, err = db.Exec(
-		"INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		"encrypted-note", "Secret Note", sensitiveContent, now, now,
-	)
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        noteID,
+		Title:     title,
+		Content:   sensitiveContent,
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 	if err != nil {
 		t.Fatalf("Failed to insert encrypted note: %v", err)
 	}
 
-	// Verify we can read it back
-	var content string
-	err = db.QueryRow("SELECT content FROM notes WHERE id = ?", "encrypted-note").Scan(&content)
+	// Property: Data can be read back (encryption/decryption works)
+	note, err := userDB.Queries().GetNote(ctx, noteID)
 	if err != nil {
 		t.Fatalf("Failed to read encrypted note: %v", err)
 	}
 
-	if content != sensitiveContent {
-		t.Errorf("Expected content %q, got %q", sensitiveContent, content)
+	if note.Content != sensitiveContent {
+		t.Fatalf("Data corruption: expected %q, got %q", sensitiveContent, note.Content)
 	}
 
-	// We can't directly test encryption without the wrong key, but we can verify
-	// that the data is stored encrypted by checking the database file directly.
-	// For Milestone 1, just verify we can read the data back, which proves
-	// the encryption/decryption cycle works.
-
-	// Verify data is readable (which means encryption/decryption works)
-	var content2 string
-	err = db.QueryRow("SELECT content FROM notes WHERE id = ?", "encrypted-note").Scan(&content2)
+	// Property: Multiple reads return same data
+	note2, err := userDB.Queries().GetNote(ctx, noteID)
 	if err != nil {
-		t.Fatalf("Failed to read encrypted note: %v", err)
+		t.Fatalf("Failed to read encrypted note second time: %v", err)
 	}
 
-	if content2 != sensitiveContent {
-		t.Errorf("Data corruption: expected %q, got %q", sensitiveContent, content2)
+	if note2.Content != sensitiveContent {
+		t.Fatalf("Data inconsistency on second read: expected %q, got %q", sensitiveContent, note2.Content)
 	}
+}
+
+func TestUserDB_Encryption_Roundtrip_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_Encryption_Roundtrip_Properties)
+}
+
+func FuzzUserDB_Encryption_Roundtrip_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_Encryption_Roundtrip_Properties))
+}
+
+// =============================================================================
+// Property: Sessions CRUD operations work via sqlc
+// =============================================================================
+
+func testSessionsDB_CRUD_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	sessDB, err := OpenSessionsDB()
+	if err != nil {
+		t.Fatalf("OpenSessionsDB failed: %v", err)
+	}
+
+	q := sessDB.Queries()
+
+	// Generate random session data
+	sessionID := "session-" + rapid.StringMatching("[a-z0-9]{16}").Draw(t, "sessionID")
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	now := time.Now().Unix()
+	expiresAt := now + int64(rapid.IntRange(3600, 86400).Draw(t, "expiresIn"))
+
+	// Property: Create session succeeds
+	err = q.CreateSession(ctx, sessions.CreateSessionParams{
+		SessionID: sessionID,
+		UserID:    userID,
+		ExpiresAt: expiresAt,
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// Property: Read returns same data
+	sess, err := q.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetSession failed: %v", err)
+	}
+	if sess.UserID != userID {
+		t.Fatalf("Expected userID %q, got %q", userID, sess.UserID)
+	}
+	if sess.ExpiresAt != expiresAt {
+		t.Fatalf("Expected expiresAt %d, got %d", expiresAt, sess.ExpiresAt)
+	}
+
+	// Property: Count reflects creation
+	count, err := q.CountSessions(ctx)
+	if err != nil {
+		t.Fatalf("CountSessions failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Expected 1 session, got %d", count)
+	}
+
+	// Property: Delete removes session
+	err = q.DeleteSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("DeleteSession failed: %v", err)
+	}
+
+	// Property: Count reflects deletion
+	count, err = q.CountSessions(ctx)
+	if err != nil {
+		t.Fatalf("CountSessions after delete failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("Expected 0 sessions after delete, got %d", count)
+	}
+}
+
+func TestSessionsDB_CRUD_Properties(t *testing.T) {
+	rapid.Check(t, testSessionsDB_CRUD_Properties)
+}
+
+func FuzzSessionsDB_CRUD_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testSessionsDB_CRUD_Properties))
+}
+
+// =============================================================================
+// Property: FTS5 handles arbitrary search queries safely
+// =============================================================================
+
+func testUserDB_FTS5_ArbitraryQuery_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
+	if err != nil {
+		t.Fatalf("OpenUserDB failed: %v", err)
+	}
+
+	now := time.Now().Unix()
+
+	// Create a note so there's something to search
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        "test-note",
+		Title:     "Test Note",
+		Content:   "Some searchable content here",
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create test note: %v", err)
+	}
+
+	// Property: SearchNotes should NEVER panic for ANY query string
+	// and should NEVER return SQL syntax errors (indicating injection)
+	query := testutil.ArbitrarySearchQuery().Draw(t, "query")
+
+	results, err := userDB.SearchNotes(ctx, query, 10, 0)
+
+	// Either succeeds (possibly empty results) or returns a clean FTS5 error
+	if err != nil {
+		errStr := err.Error()
+		// These would indicate our escaping failed:
+		if strings.Contains(errStr, "syntax error") {
+			t.Fatalf("FTS5 escaping failed (syntax error) for query %q: %v", query, err)
+		}
+		if strings.Contains(errStr, "unrecognized token") {
+			t.Fatalf("FTS5 escaping failed (unrecognized token) for query %q: %v", query, err)
+		}
+		if strings.Contains(errStr, "no such column") {
+			t.Fatalf("SQL injection possible (no such column) for query %q: %v", query, err)
+		}
+		if strings.Contains(errStr, "no such table") {
+			t.Fatalf("SQL injection possible (no such table) for query %q: %v", query, err)
+		}
+		// Other errors (like "unterminated string" before our fix) are test failures
+		// After fix, no FTS5 errors should occur
+		t.Fatalf("Unexpected FTS5 error for query %q: %v", query, err)
+	}
+
+	// Property: Results are well-formed if returned
+	for _, r := range results {
+		if r.ID == "" {
+			t.Fatal("Result has empty ID")
+		}
+	}
+}
+
+func TestUserDB_FTS5_ArbitraryQuery_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_FTS5_ArbitraryQuery_Properties)
+}
+
+func FuzzUserDB_FTS5_ArbitraryQuery_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_FTS5_ArbitraryQuery_Properties))
+}
+
+// =============================================================================
+// Property: SearchNotesCount also handles arbitrary queries safely
+// =============================================================================
+
+func testUserDB_FTS5_ArbitraryQueryCount_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
+	if err != nil {
+		t.Fatalf("OpenUserDB failed: %v", err)
+	}
+
+	// Property: SearchNotesCount should NEVER panic for ANY query string
+	query := testutil.ArbitrarySearchQuery().Draw(t, "query")
+
+	count, err := userDB.SearchNotesCount(ctx, query)
+
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "syntax error") ||
+			strings.Contains(errStr, "unrecognized token") ||
+			strings.Contains(errStr, "no such column") ||
+			strings.Contains(errStr, "no such table") {
+			t.Fatalf("FTS5 count escaping failed for query %q: %v", query, err)
+		}
+		t.Fatalf("Unexpected FTS5 count error for query %q: %v", query, err)
+	}
+
+	// Property: Count is non-negative
+	if count < 0 {
+		t.Fatalf("Count should be non-negative, got %d", count)
+	}
+}
+
+func TestUserDB_FTS5_ArbitraryQueryCount_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_FTS5_ArbitraryQueryCount_Properties)
+}
+
+func FuzzUserDB_FTS5_ArbitraryQueryCount_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_FTS5_ArbitraryQueryCount_Properties))
 }

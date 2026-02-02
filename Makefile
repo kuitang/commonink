@@ -1,16 +1,20 @@
-.PHONY: all build test test-db clean help
+.PHONY: all build test test-db clean help check fmt vet mod-tidy
 
-# Go parameters
-GOCMD=go
-GOBUILD=$(GOCMD) build
-GOTEST=$(GOCMD) test
-GOCLEAN=$(GOCMD) clean
+# Go parameters - use goenv
+GOENV_ROOT := $(HOME)/.goenv
+GOENV_BIN := $(GOENV_ROOT)/shims
+GOCMD := $(GOENV_BIN)/go
+GOBUILD := $(GOCMD) build
+GOTEST := $(GOCMD) test
+GOCLEAN := $(GOCMD) clean
+GOFMT := $(GOCMD) fmt
+GOVET := $(GOCMD) vet
+GOMOD := $(GOCMD) mod
 
 # CGO parameters for SQLCipher with FTS5 support
 export CGO_ENABLED=1
 export CGO_CFLAGS=-DSQLITE_ENABLE_FTS5
 export CGO_LDFLAGS=-lm
-export PATH:=/usr/local/go/bin:$(PATH)
 
 # Build output
 BINARY_NAME=agent-notes
@@ -18,23 +22,26 @@ BINARY_PATH=./bin/$(BINARY_NAME)
 
 all: test build
 
-## build: Build the application binary
-build:
+## check: Run fmt, vet, and mod tidy (runs before every build)
+check: fmt vet mod-tidy
+
+## build: Build the application binary (runs fmt/vet/mod-tidy first)
+build: check
 	@echo "Building $(BINARY_NAME)..."
 	$(GOBUILD) -o $(BINARY_PATH) ./cmd/server/
 
-## test: Run all tests
-test:
+## test: Run all tests (runs fmt/vet/mod-tidy first)
+test: check
 	@echo "Running all tests with FTS5 support..."
 	$(GOTEST) -v -count=1 ./...
 
 ## test-db: Run database layer tests only
-test-db:
+test-db: check
 	@echo "Running database layer tests with FTS5 support..."
 	$(GOTEST) -v -count=1 ./internal/db/
 
 ## test-coverage: Run tests with coverage report
-test-coverage:
+test-coverage: check
 	@echo "Running tests with coverage..."
 	$(GOTEST) -v -count=1 -coverprofile=coverage.out ./...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
@@ -53,17 +60,17 @@ clean:
 ## fmt: Format Go code
 fmt:
 	@echo "Formatting code..."
-	$(GOCMD) fmt ./...
+	$(GOFMT) ./...
 
 ## vet: Run go vet
 vet:
 	@echo "Running go vet..."
-	$(GOCMD) vet ./...
+	$(GOVET) ./...
 
 ## mod-tidy: Tidy up go.mod
 mod-tidy:
 	@echo "Tidying go.mod..."
-	$(GOCMD) mod tidy
+	$(GOMOD) tidy
 
 ## help: Show this help message
 help:

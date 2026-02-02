@@ -121,17 +121,30 @@ type ServerOptions struct {
 
 ---
 
-## SSE Transport Implementation
+## Streamable HTTP Transport (MCP Spec 2025-03-26)
 
-### Important Context: SSE Deprecation
+### Overview
 
-**⚠️ SSE Transport Status**:
-- SSE as standalone transport is **deprecated** as of protocol version 2024-11-05
-- Replaced by **Streamable HTTP** (which incorporates SSE as optional streaming)
-- SSE remains available for compatibility with older MCP servers
-- For new implementations, **Streamable HTTP** is recommended
+**Protocol Revision**: 2025-03-26
 
-### SSE Server Setup (Official SDK)
+**Streamable HTTP** is the standard HTTP transport for MCP, replacing the deprecated HTTP+SSE transport from protocol version 2024-11-05. It provides a unified approach where:
+- A **single endpoint** (e.g., `/mcp`) handles all communication
+- **POST** requests send JSON-RPC messages from client to server
+- **GET** requests optionally allow server to push messages to client
+- **SSE** is used optionally within responses for streaming, not as a separate transport
+
+### Key Differences from Deprecated SSE Transport
+
+| Aspect | Old HTTP+SSE (Deprecated) | Streamable HTTP (Current) |
+|--------|---------------------------|---------------------------|
+| Endpoints | Two: `/sse` + `/messages` | Single: `/mcp` |
+| Architecture | Dual-endpoint | Unified |
+| Streaming | Always SSE | Optional (JSON or SSE) |
+| Connection | Long-lived | Request-based |
+| Recovery | No built-in mechanism | Resumability via event IDs |
+| Session Management | None | `Mcp-Session-Id` header |
+
+### Server Implementation (Official SDK)
 
 ```go
 package main
@@ -150,12 +163,12 @@ func main() {
     // Register tools
     registerTools(server)
 
-    // Create SSE handler
-    handler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
+    // Create Streamable HTTP handler (single endpoint)
+    handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
         return server
     }, nil)
 
-    // Mount SSE endpoint
+    // Mount single MCP endpoint
     http.Handle("/mcp", handler)
 
     // Start server
@@ -163,73 +176,88 @@ func main() {
 }
 ```
 
-### SSE Client Connection (For Testing)
+### Protocol Details
 
-```go
-// Client connects to SSE endpoint
-transport := &mcp.SSEClientTransport{
-    URL: "http://localhost:8080/mcp",
-}
+#### Sending Messages to Server (POST)
 
-session, err := client.Connect(ctx, transport, nil)
-if err != nil {
-    log.Fatal(err)
-}
-defer session.Close()
+Per MCP spec, clients MUST use HTTP POST to send JSON-RPC messages:
+
+1. Client sends POST with `Content-Type: application/json`
+2. Client MUST include `Accept` header with both `application/json` and `text/event-stream`
+3. Body contains JSON-RPC request, notification, response, or batch
+4. Server responds with either:
+   - `Content-Type: application/json` (single JSON response)
+   - `Content-Type: text/event-stream` (SSE stream for multiple messages)
+
+```bash
+# Example: Send initialize request
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26"},"id":1}'
 ```
 
-### SSE Transport Architecture
+#### Receiving Server Messages (GET)
 
-**How SSE Transport Works**:
-- **GET request**: Client opens SSE connection (hanging GET)
-- **POST endpoint**: Client sends messages via POST
-- **Server-Sent Events**: Server pushes messages via SSE stream
+Clients MAY issue HTTP GET to open an SSE stream for server-initiated messages:
 
-**Default Endpoints**:
-- `/sse` - SSE connection endpoint
-- `/messages` - POST endpoint for client messages
+1. Client sends GET with `Accept: text/event-stream`
+2. Server returns SSE stream OR 405 Method Not Allowed
+3. Server MAY send JSON-RPC requests/notifications on the stream
+4. Used for server-to-client communication without client first sending data
 
-### SSE Handler Options
-
-```go
-type SSEOptions struct {
-    BasePath        string        // Base path for SSE endpoints
-    KeepAlive       time.Duration // Keep-alive interval
-    BaseURL         string        // Base URL for client connections
-    SSEEndpoint     string        // Custom SSE endpoint path
-    MessageEndpoint string        // Custom message endpoint path
-    ContextFunc     SSEContextFunc // Extract context from headers
-}
-
-// NewSSEHandler creates handler with options
-handler := mcp.NewSSEHandler(getServerFunc, &mcp.SSEOptions{
-    BasePath:    "/api",
-    KeepAlive:   30 * time.Second,
-    BaseURL:     "https://example.com",
-})
+```bash
+# Example: Open server message stream
+curl -N http://localhost:8080/mcp \
+  -H "Accept: text/event-stream" \
+  -H "Mcp-Session-Id: abc123"
 ```
 
-### Alternative: Streamable HTTP Transport (Modern)
+#### Session Management
+
+Sessions enable stateful interactions:
+
+1. Server MAY assign session ID via `Mcp-Session-Id` header in InitializeResult
+2. Clients MUST include session ID in all subsequent requests
+3. Session ID must be visible ASCII characters (0x21-0x7E)
+4. Session termination: Client sends DELETE with session ID
 
 ```go
-// Modern approach: Use Streamable HTTP instead of SSE
-handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-    return server
-}, nil)
-
-http.Handle("/mcp", handler)
+// Session ID in response header
+w.Header().Set("Mcp-Session-Id", generateSecureSessionID())
 ```
 
-**Benefits of Streamable HTTP**:
-- Bidirectional communication
-- Better browser compatibility
-- Supports optional streaming
-- Replaces SSE as recommended transport
+#### Resumability
+
+To handle connection drops:
+
+1. Server MAY attach `id` field to SSE events
+2. Client includes `Last-Event-ID` header when reconnecting
+3. Server MAY replay missed messages from that point
+
+### Security Requirements
+
+Per MCP spec:
+
+1. **Origin Validation**: Servers MUST validate `Origin` header to prevent DNS rebinding
+2. **Localhost Binding**: Local servers SHOULD bind to 127.0.0.1, not 0.0.0.0
+3. **Authentication**: Servers SHOULD implement proper auth for all connections
+
+### Backwards Compatibility
+
+**For clients** supporting older servers:
+1. POST InitializeRequest to server URL
+2. If successful → server supports Streamable HTTP
+3. If 4xx error → try GET, expecting SSE stream with `endpoint` event (old transport)
+
+**For servers** supporting older clients:
+- Keep hosting old SSE+POST endpoints alongside new MCP endpoint
+- Or combine old POST endpoint with new MCP endpoint (adds complexity)
 
 **Sources**:
-- [SSE Transport – MCP-Go](https://mcp-go.dev/transports/sse/)
-- [golang.org/x/tools/internal/mcp - Go Packages](https://pkg.go.dev/golang.org/x/tools/internal/mcp)
+- [MCP Transports Specification 2025-03-26](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
 - [Why MCP Deprecated SSE and Went with Streamable HTTP](https://blog.fka.dev/blog/2025-06-06-why-mcp-deprecated-sse-and-go-with-streamable-http/)
+- [Exploring the Future of MCP Transports](http://blog.modelcontextprotocol.io/posts/2025-12-19-mcp-transport-future/)
 
 ---
 
@@ -1015,7 +1043,7 @@ jobs:
 
 ## Example Implementations
 
-### Complete MCP Server Example (SSE Transport)
+### Complete MCP Server Example (Streamable HTTP Transport)
 
 ```go
 package main
@@ -1048,7 +1076,7 @@ func main() {
         Version: "v1.0.0",
     }, &mcp.ServerOptions{
         InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
-            log.Println("✓ Client connected to notes MCP server")
+            log.Println("Client connected to notes MCP server")
         },
         PageSize: 100,
     })
@@ -1056,15 +1084,13 @@ func main() {
     // Register all tools
     registerTools(server)
 
-    // Create SSE handler
-    handler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
+    // Create Streamable HTTP handler (MCP Spec 2025-03-26)
+    handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
         // Could return different servers based on auth, etc.
         return server
-    }, &mcp.SSEOptions{
-        KeepAlive: 30 * time.Second,
-    })
+    }, nil)
 
-    // Setup HTTP routes
+    // Setup HTTP routes - single endpoint for all MCP communication
     http.Handle("/mcp", handler)
     http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusOK)
@@ -1072,9 +1098,9 @@ func main() {
     })
 
     // Start server
-    log.Println("🚀 Notes MCP Server starting on :8080")
+    log.Println("Notes MCP Server starting on :8080")
     log.Println("   Endpoint: http://localhost:8080/mcp")
-    log.Println("   Transport: SSE")
+    log.Println("   Transport: Streamable HTTP (MCP Spec 2025-03-26)")
     if err := http.ListenAndServe(":8080", nil); err != nil {
         log.Fatal(err)
     }
@@ -1354,8 +1380,9 @@ func TestMCPIntegration(t *testing.T) {
 - [ ] Tool input validation works
 - [ ] Tool execution succeeds
 - [ ] Error handling returns proper MCP errors
-- [ ] Content types serialize correctly
-- [ ] SSE connection stays alive
+- [ ] Content types serialize correctly (JSON and SSE)
+- [ ] Streamable HTTP POST/GET work correctly
+- [ ] Session management via Mcp-Session-Id header
 - [ ] Concurrent requests handled correctly
 - [ ] Authentication works (if applicable)
 - [ ] Claude Code can discover and use tools
@@ -1371,7 +1398,7 @@ func TestMCPIntegration(t *testing.T) {
 # Build server (with CGO for SQLCipher)
 CGO_ENABLED=1 go build -o bin/notes-server ./cmd/server
 
-# Run server (SSE mode)
+# Run server (Streamable HTTP transport)
 ./bin/notes-server --mcp-mode
 
 # Run conformance tests
@@ -1388,7 +1415,7 @@ claude
 
 ### Key URLs
 
-- MCP Specification: https://modelcontextprotocol.io/specification/2025-11-25
+- MCP Specification (2025-03-26): https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
 - Go SDK: https://github.com/modelcontextprotocol/go-sdk
 - Go SDK Docs: https://pkg.go.dev/github.com/modelcontextprotocol/go-sdk/mcp
 - Claude Code MCP Docs: https://code.claude.com/docs/en/mcp
@@ -1396,7 +1423,7 @@ claude
 
 ### Next Steps
 
-1. **Implement MCP server** with SSE transport
+1. **Implement MCP server** with Streamable HTTP transport (single `/mcp` endpoint)
 2. **Register 6 tools** (note_view, note_create, note_update, note_search, note_list, note_delete)
 3. **Test locally** with curl/httpie
 4. **Run conformance suite** to verify protocol compliance
@@ -1406,4 +1433,5 @@ claude
 ---
 
 **Research completed**: 2026-02-02
+**Updated**: 2026-02-02 (Updated for Streamable HTTP transport per MCP Spec 2025-03-26)
 **Total sources reviewed**: 25+ articles, documentation pages, and repositories

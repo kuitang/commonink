@@ -61,7 +61,7 @@ internal/notes/
 **3a. MCP Server** (`internal/mcp/`)
 ```
 internal/mcp/
-├── server.go    # MCP server with SSE transport
+├── server.go    # MCP server with Streamable HTTP transport (MCP Spec 2025-03-26)
 ├── tools.go     # 6 MCP tool definitions
 └── handlers.go  # Tool handlers calling internal/notes
 ```
@@ -124,34 +124,63 @@ tests/e2e/openai/
 └── conformance_test.go  # Go test using Responses API
 ```
 
-**Test approach**:
-1. Start server in background
+**Test approach** (NATIVE MCP - No wrapper code needed!):
+1. Start MCP server: `./bin/server` (runs on localhost:8080/mcp)
 2. Expose via ngrok: `ngrok http 8080`
-3. Configure OpenAI Responses API with ngrok URL
-4. Use `type: "mcp"` tool (OpenAI auto-discovers tools)
-5. Send prompts that exercise all 6 tools
-6. Verify responses
-7. Property tests with rapid
+3. Point OpenAI at MCP server with `type: "mcp"`
+4. **OpenAI natively calls your MCP server** - discovers tools, executes them
+5. Send prompts, verify responses
+6. Property tests with rapid
 
-**Example OpenAI Responses API call**:
+**Complete example** (NO wrapper functions, NO HTTP client):
 ```go
-mcpTool := responses.ToolUnionParam{
-    OfMCP: &responses.MCPToolParam{
-        Type:            "mcp",
-        ServerLabel:     "conformance-test",
-        ServerURL:       "https://abc123.ngrok.app/mcp",
-        RequireApproval: "never",
-    },
-}
+func TestOpenAI_MCP_Integration(t *testing.T) {
+    // Source API key
+    source("~/openai_key.sh")
+    apiKey := os.Getenv("OPENAI_API_KEY")
 
-params := responses.ResponseNewParams{
-    Model: openai.ChatModelGPT4o,
-    Tools: []responses.ToolUnionParam{mcpTool},
-    Input: responses.ResponseNewParamsInputUnion{
-        OfString: openai.String("Create a note titled 'Test' with content 'Hello'"),
-    },
+    // Initialize OpenAI client
+    client := openai.NewClient(option.WithAPIKey(apiKey))
+
+    // Point OpenAI at your MCP server (via ngrok)
+    mcpTool := responses.ToolUnionParam{
+        OfMCP: &responses.MCPToolParam{
+            Type:            "mcp",
+            ServerLabel:     "notes-server",
+            ServerURL:       "https://abc123.ngrok.app/mcp", // Your ngrok URL
+            RequireApproval: "never",
+        },
+    }
+
+    // THAT'S IT! OpenAI now has native access to your 6 MCP tools
+    params := responses.ResponseNewParams{
+        Model: openai.ChatModelGPT4oMini,  // ⚠️ USE MINI NOT 4o
+        Tools: []responses.ToolUnionParam{mcpTool},
+        Input: responses.ResponseNewParamsInputUnion{
+            OfString: openai.String("Create a note titled 'Test' with content 'Hello World'"),
+        },
+    }
+
+    // OpenAI calls your MCP server directly, executes note_create tool
+    resp, err := client.Responses.New(ctx, params)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    // Verify OpenAI successfully created the note
+    assert.Contains(t, resp.OutputText(), "created")
 }
 ```
+
+**What happens under the hood**:
+1. OpenAI calls your MCP server's `tools/list` endpoint
+2. Discovers: note_view, note_create, note_update, note_search, note_list, note_delete
+3. Model decides to call `note_create` with the parameters
+4. OpenAI calls your MCP server's `tools/call` endpoint
+5. Your server creates the note, returns result
+6. OpenAI synthesizes final response
+
+**NO HTTP client code needed. NO wrapper functions. OpenAI does it all.**
 
 **5c. HTTP curl Test** (`tests/e2e/curl/`)
 ```

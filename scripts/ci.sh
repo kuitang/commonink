@@ -5,6 +5,16 @@ set -e
 # Runs property-based tests, fuzzing, and coverage analysis
 # Usage: ./scripts/ci.sh <level> [options]
 
+# Initialize goenv to use correct Go version (CRITICAL - do not use system Go 1.19)
+export GOENV_ROOT="$HOME/.goenv"
+export PATH="$GOENV_ROOT/bin:$PATH"
+if command -v goenv &> /dev/null; then
+    eval "$(goenv init -)"
+fi
+
+# Build tags required for SQLCipher FTS5 support
+BUILD_TAGS="-tags fts5"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -72,6 +82,7 @@ GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
 REQUIRED_VERSION="1.22"
 if [[ "$(printf '%s\n' "$REQUIRED_VERSION" "$GO_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]]; then
     echo -e "${RED}Error: Go $REQUIRED_VERSION or later required (found $GO_VERSION)${NC}"
+    echo -e "${YELLOW}Hint: Make sure goenv is initialized. Run: export GOENV_ROOT=\"\$HOME/.goenv\" && export PATH=\"\$GOENV_ROOT/bin:\$PATH\" && eval \"\$(goenv init -)\"${NC}"
     exit 1
 fi
 
@@ -88,7 +99,8 @@ if [[ "$LEVEL" == "quick" ]]; then
     echo -e "${GREEN}Running quick tests (rapid property tests)...${NC}"
 
     # Run all Test* functions (rapid tests)
-    go test -v -parallel "$PARALLEL" ./... \
+    # CGO_ENABLED=1 required for SQLCipher, BUILD_TAGS for FTS5
+    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" ./... \
         -run 'Test' \
         2>&1 | tee "$OUTPUT_DIR/quick-test.log"
 
@@ -108,7 +120,7 @@ if [[ "$LEVEL" == "full" ]]; then
 
     # Run tests with coverage
     echo -e "${BLUE}Running tests with coverage...${NC}"
-    go test -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/coverage.out" ./... \
+    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/coverage.out" ./... \
         2>&1 | tee "$OUTPUT_DIR/full-test.log"
 
     # Run MCP conformance tests
@@ -166,12 +178,12 @@ if [[ "$LEVEL" == "fuzz" ]]; then
 
     # First run quick tests as baseline
     echo -e "${BLUE}Running baseline tests...${NC}"
-    go test -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/baseline-coverage.out" ./... \
+    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/baseline-coverage.out" ./... \
         -run 'Test' \
         2>&1 | tee "$OUTPUT_DIR/baseline-test.log"
 
     # Find all fuzz tests
-    FUZZ_TESTS=$(go test -list=Fuzz ./... 2>/dev/null | grep '^Fuzz' || true)
+    FUZZ_TESTS=$(CGO_ENABLED=1 go test $BUILD_TAGS -list=Fuzz ./... 2>/dev/null | grep '^Fuzz' || true)
 
     if [[ -z "$FUZZ_TESTS" ]]; then
         echo -e "${YELLOW}No fuzz tests found${NC}"
@@ -188,10 +200,10 @@ if [[ "$LEVEL" == "fuzz" ]]; then
         echo -e "${BLUE}Fuzzing: $fuzz_test${NC}"
 
         # Extract package from test location
-        PACKAGE=$(go test -list="$fuzz_test" ./... 2>/dev/null | grep -v '^Fuzz' | head -1 || echo "./...")
+        PACKAGE=$(CGO_ENABLED=1 go test $BUILD_TAGS -list="$fuzz_test" ./... 2>/dev/null | grep -v '^Fuzz' | head -1 || echo "./...")
 
         # Run fuzzing (will create corpus in testdata/fuzz/)
-        go test -fuzz="^${fuzz_test}$" -fuzztime="$FUZZ_TIMEOUT" "$PACKAGE" \
+        CGO_ENABLED=1 go test $BUILD_TAGS -fuzz="^${fuzz_test}$" -fuzztime="$FUZZ_TIMEOUT" "$PACKAGE" \
             2>&1 | tee "$OUTPUT_DIR/fuzz-${fuzz_test}.log" || {
                 echo -e "${RED}Fuzz test $fuzz_test found issues!${NC}"
                 echo "See $OUTPUT_DIR/fuzz-${fuzz_test}.log for details"
@@ -202,7 +214,7 @@ if [[ "$LEVEL" == "fuzz" ]]; then
 
     # Run tests again with coverage to see fuzz improvements
     echo -e "${BLUE}Running tests after fuzzing (with coverage)...${NC}"
-    go test -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/fuzz-coverage.out" ./... \
+    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/fuzz-coverage.out" ./... \
         2>&1 | tee "$OUTPUT_DIR/fuzz-test.log"
 
     # Compare baseline vs fuzz coverage
