@@ -592,23 +592,32 @@ func setupTestServer(t *testing.T) *httptest.Server {
 
 ---
 
-## Claude Code MCP OAuth Conformance Test
+## Claude (Code CLI + Web) MCP OAuth Conformance Test
 
-Claude Code also supports OAuth for MCP servers, but with **key differences** from ChatGPT.
+**Claude Code CLI** and **Claude.ai web** use the **IDENTICAL OAuth flow** when connecting to remote MCP servers as MCP clients.
+
+Both require your MCP server to support:
+- **Public OAuth client** (`token_endpoint_auth_method: "none"`)
+- **Dynamic Client Registration (DCR)** - RFC 7591 **REQUIRED**
+- **PKCE with S256** - **REQUIRED**
+- **Same callback URL**: `https://claude.ai/api/mcp/auth_callback`
+
+Reference: [Claude Code MCP Docs](https://code.claude.com/docs/en/mcp) - "Use `/mcp` to authenticate with remote servers that require OAuth 2.0 authentication"
 
 ### Claude vs ChatGPT OAuth Differences
 
-| Feature | Claude Code | ChatGPT |
-|---------|-------------|---------|
+| Feature | Claude (Code CLI + Web) | ChatGPT |
+|---------|-------------------------|---------|
 | **Callback URL** | `https://claude.ai/api/mcp/auth_callback` | `https://chatgpt.com/connector_platform_oauth_redirect` |
 | **Future Callback** | `https://claude.com/api/mcp/auth_callback` | `https://platform.openai.com/apps-manage/oauth` |
 | **Client Name** | `"claudeai"` | `"ChatGPT"` |
-| **Token Auth Method** | `"none"` (public client) | `client_secret_post` / `client_secret_basic` |
-| **Client Secret on Token** | NO (public client) | YES |
-| **MCP Auth Spec** | 3/26 and 6/18 | 6/18 |
-| **Custom Client ID/Secret** | Supported (optional) | Not documented |
+| **Token Auth Method** | `"none"` (**public client**) | `client_secret_post` / `client_secret_basic` |
+| **Client Secret on Token** | **NO** (PKCE only) | **YES** |
+| **DCR Requirement** | **REQUIRED** | Required |
+| **MCP Auth Spec** | 2025-03-26, 2025-06-18, 2025-11-25 | 2025-06-18 |
+| **Custom Client ID/Secret** | Supported (fallback for non-DCR) | Not documented |
 
-**CRITICAL DIFFERENCE**: Claude uses `token_endpoint_auth_method: "none"`, meaning it's a **public client** and does NOT send `client_secret` on the `/oauth/token` endpoint. Your server MUST support this.
+**CRITICAL DIFFERENCE**: Claude uses `token_endpoint_auth_method: "none"`, meaning it's a **public client** and does NOT send `client_secret` on the `/oauth/token` endpoint. Your server MUST support token exchange with PKCE proof only (no client_secret).
 
 ### Claude Code OAuth Flow
 
@@ -1481,6 +1490,341 @@ go test -v ./tests/conformance/...
 - [ ] Expired token rejected
 - [ ] Wrong audience rejected
 
+### Authentication Enforcement (Layer 5)
+- [ ] ALL MCP requests require Bearer token
+- [ ] PAT endpoint works (`POST /api/tokens`)
+- [ ] PAT can be used as Bearer token for MCP
+- [ ] Unauthenticated MCP requests return 401 + WWW-Authenticate
+- [ ] No unauthenticated codepaths remain
+
+### Test Updates (Layer 5)
+- [ ] All unit tests create users via magic login or password
+- [ ] All MCP tests perform full OAuth flow
+- [ ] Mock email provider captures magic login tokens
+- [ ] Tests do not use hardcoded user IDs
+
+---
+
+## Layer 5: Enforce Authentication Everywhere (After OAuth Works)
+
+After OAuth is fully working, ALL codepaths MUST require authentication. No unauthenticated access.
+
+### 12. Personal Access Token (PAT) Endpoint
+
+**File**: `internal/auth/pat.go`
+
+Users can exchange their password for a long-lived PAT for programmatic access.
+
+**Endpoint**: `POST /api/tokens`
+
+```go
+// PAT endpoint - user exchanges password for a Personal Access Token
+// Reference: spec.md § Personal Access Tokens
+func (h *AuthHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Email    string `json:"email"`
+        Password string `json:"password"`
+        Name     string `json:"name"`      // Token name/description
+        Scope    string `json:"scope"`     // "read" or "read_write" (default)
+    }
+    json.NewDecoder(r.Body).Decode(&req)
+
+    // Validate email/password
+    user, err := h.store.ValidateCredentials(r.Context(), req.Email, req.Password)
+    if err != nil {
+        w.WriteHeader(http.StatusUnauthorized)
+        json.NewEncoder(w).Encode(map[string]string{"error": "invalid_credentials"})
+        return
+    }
+
+    // Generate PAT (long-lived, 1 year)
+    token := generateSecureToken(32)
+    tokenHash := hashToken(token)
+
+    // Store in user's DB
+    pat := &PAT{
+        ID:        generateID(),
+        Name:      req.Name,
+        TokenHash: tokenHash,
+        UserID:    user.ID,
+        Scope:     req.Scope,
+        ExpiresAt: time.Now().AddDate(1, 0, 0), // 1 year
+        CreatedAt: time.Now(),
+    }
+    h.store.CreatePAT(r.Context(), pat)
+
+    // Return token ONCE (never stored in plaintext)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]any{
+        "token":      token,  // Only shown once
+        "token_id":   pat.ID,
+        "name":       pat.Name,
+        "scope":      pat.Scope,
+        "expires_at": pat.ExpiresAt,
+        "created_at": pat.CreatedAt,
+    })
+}
+
+// ListPATs returns all PATs for the current user (without token values)
+func (h *AuthHandler) ListPATs(w http.ResponseWriter, r *http.Request) {
+    // Requires session auth
+    userID := r.Context().Value("user_id").(string)
+    pats, _ := h.store.ListPATs(r.Context(), userID)
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(pats)
+}
+
+// RevokePAT deletes a PAT
+func (h *AuthHandler) RevokePAT(w http.ResponseWriter, r *http.Request) {
+    userID := r.Context().Value("user_id").(string)
+    tokenID := r.PathValue("token_id")
+
+    err := h.store.DeletePAT(r.Context(), userID, tokenID)
+    if err != nil {
+        w.WriteHeader(http.StatusNotFound)
+        return
+    }
+    w.WriteHeader(http.StatusNoContent)
+}
+```
+
+**Database Schema** (add to `{user_id}.db` - already exists in spec.md as `api_keys`):
+
+```sql
+CREATE TABLE personal_access_tokens (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    scope TEXT DEFAULT 'read_write',
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+```
+
+### 13. Remove All Unauthenticated Codepaths
+
+**Files to modify**:
+- `internal/mcp/server.go` - Remove any unauthenticated handlers
+- `internal/mcp/handlers.go` - All tool calls require Bearer token
+- `cmd/server/main.go` - Remove unauthenticated routes
+
+**Requirements**:
+- MCP endpoint (`/mcp`) MUST require `Authorization: Bearer <token>`
+- Token can be: OAuth access token OR PAT
+- Unauthenticated requests return 401 with `WWW-Authenticate` header
+- No "demo mode" or "guest access"
+
+```go
+// AuthMiddleware validates Bearer token (OAuth or PAT)
+func (h *Handler) AuthMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        auth := r.Header.Get("Authorization")
+        if !strings.HasPrefix(auth, "Bearer ") {
+            h.writeAuthError(w, r)
+            return
+        }
+
+        token := strings.TrimPrefix(auth, "Bearer ")
+
+        // Try OAuth token first
+        claims, err := h.oauthVerifier.VerifyToken(r.Context(), token)
+        if err == nil {
+            ctx := context.WithValue(r.Context(), "user_id", claims.Subject)
+            ctx = context.WithValue(ctx, "scope", claims.Scope)
+            next.ServeHTTP(w, r.WithContext(ctx))
+            return
+        }
+
+        // Try PAT
+        pat, err := h.store.ValidatePAT(r.Context(), hashToken(token))
+        if err == nil {
+            // Update last_used_at
+            h.store.UpdatePATLastUsed(r.Context(), pat.ID)
+
+            ctx := context.WithValue(r.Context(), "user_id", pat.UserID)
+            ctx = context.WithValue(ctx, "scope", pat.Scope)
+            next.ServeHTTP(w, r.WithContext(ctx))
+            return
+        }
+
+        // Neither valid
+        h.writeAuthError(w, r)
+    })
+}
+
+func (h *Handler) writeAuthError(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("WWW-Authenticate", fmt.Sprintf(
+        `Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`,
+        h.issuer,
+    ))
+    w.WriteHeader(http.StatusUnauthorized)
+    json.NewEncoder(w).Encode(MCPAuthError(h.issuer + "/.well-known/oauth-protected-resource"))
+}
+```
+
+### 14. Update Unit Tests to Use Authentication
+
+**All unit tests MUST authenticate**. Use mock email provider for magic login flow.
+
+**File**: `tests/testutil/auth.go`
+
+```go
+package testutil
+
+// CreateTestUser creates a test user via magic login and returns session cookie + user ID
+func CreateTestUser(t *testing.T, server *httptest.Server) (*http.Cookie, string) {
+    t.Helper()
+    email := fmt.Sprintf("test-%s@example.com", generateID())
+
+    // 1. Request magic login
+    http.Post(server.URL+"/auth/magic-login", "application/json",
+        strings.NewReader(fmt.Sprintf(`{"email":"%s"}`, email)))
+
+    // 2. Get token from mock email provider
+    token := GetMockEmailToken(t, email)
+
+    // 3. Exchange token for session
+    resp, _ := http.Get(server.URL + "/auth/magic-login/verify?token=" + token)
+    defer resp.Body.Close()
+
+    // 4. Extract session cookie
+    for _, c := range resp.Cookies() {
+        if c.Name == "session" {
+            userID := GetUserIDFromSession(t, server, c)
+            return c, userID
+        }
+    }
+    t.Fatal("No session cookie returned")
+    return nil, ""
+}
+
+// CreateTestUserWithPassword creates a user with email/password auth
+func CreateTestUserWithPassword(t *testing.T, server *httptest.Server, email, password string) (*http.Cookie, string) {
+    // Register then login
+    http.Post(server.URL+"/auth/register", "application/json",
+        strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)))
+
+    resp, _ := http.Post(server.URL+"/auth/login", "application/json",
+        strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)))
+    defer resp.Body.Close()
+
+    for _, c := range resp.Cookies() {
+        if c.Name == "session" {
+            userID := GetUserIDFromSession(t, server, c)
+            return c, userID
+        }
+    }
+    t.Fatal("No session cookie returned")
+    return nil, ""
+}
+
+// CreateTestPAT creates a PAT for API/MCP testing
+func CreateTestPAT(t *testing.T, server *httptest.Server, email, password string) string {
+    resp, _ := http.Post(server.URL+"/api/tokens", "application/json",
+        strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"%s","name":"test"}`, email, password)))
+    defer resp.Body.Close()
+
+    var result struct{ Token string `json:"token"` }
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result.Token
+}
+```
+
+**Mock Email Provider** (`tests/testutil/mock_email.go`):
+
+```go
+package testutil
+
+var (
+    mockEmails = make(map[string]string) // email -> token
+    emailMu    sync.Mutex
+)
+
+type MockEmailSender struct{}
+
+func (m *MockEmailSender) SendMagicLogin(email, token string) error {
+    emailMu.Lock()
+    defer emailMu.Unlock()
+    mockEmails[email] = token
+    return nil
+}
+
+func GetMockEmailToken(t *testing.T, email string) string {
+    emailMu.Lock()
+    defer emailMu.Unlock()
+    token, ok := mockEmails[email]
+    if !ok {
+        t.Fatalf("No magic login token sent to %s", email)
+    }
+    delete(mockEmails, email) // One-time use
+    return token
+}
+```
+
+### 15. Update MCP Tests to Use Full OAuth Flow
+
+**MCP tests MUST perform the complete OAuth flow** to obtain a Bearer token.
+
+**File**: `tests/e2e/mcp_oauth_test.go`
+
+```go
+package e2e
+
+// MCPTestClient performs full OAuth flow before MCP calls
+type MCPTestClient struct {
+    server      *httptest.Server
+    accessToken string
+    userID      string
+}
+
+// NewMCPTestClient creates a client with valid OAuth credentials
+func NewMCPTestClient(t *testing.T, server *httptest.Server) *MCPTestClient {
+    t.Helper()
+    client := &MCPTestClient{server: server}
+
+    // 1. Create test user with password
+    email := fmt.Sprintf("mcp-test-%s@example.com", generateID())
+    password := generateSecurePassword()
+    _, userID := CreateTestUserWithPassword(t, server, email, password)
+    client.userID = userID
+
+    // 2. Perform OAuth flow (simulating ChatGPT or Claude)
+    client.accessToken = performOAuthFlow(t, server, email, password)
+    return client
+}
+
+// performOAuthFlow simulates the full ChatGPT/Claude OAuth connector flow
+func performOAuthFlow(t *testing.T, server *httptest.Server, email, password string) string {
+    // Step 1: GET /.well-known/oauth-protected-resource
+    // Step 2: GET /.well-known/oauth-authorization-server
+    // Step 3: POST /oauth/register (DCR)
+    // Step 4: Generate PKCE, build authorization URL
+    // Step 5: Login user, auto-consent, get code
+    // Step 6: POST /oauth/token with code + code_verifier
+    // Return access_token
+}
+
+// MCPRequest makes an authenticated MCP request
+func (c *MCPTestClient) MCPRequest(t *testing.T, method string, params any) map[string]any {
+    body, _ := json.Marshal(map[string]any{
+        "jsonrpc": "2.0", "method": method, "params": params, "id": 1,
+    })
+
+    req, _ := http.NewRequest("POST", c.server.URL+"/mcp", bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", "Bearer "+c.accessToken)
+
+    resp, _ := http.DefaultClient.Do(req)
+    defer resp.Body.Close()
+
+    var result map[string]any
+    json.NewDecoder(resp.Body).Decode(&result)
+    return result
+}
+```
+
 ---
 
 ## Commands to Execute
@@ -1513,11 +1857,13 @@ go test -v ./tests/conformance/...
 - **`chatgpt-apps/auth.md`** (lines 1-281) - AUTHORITATIVE SPEC, read completely
 - [OpenAI Apps SDK Authentication](https://developers.openai.com/apps-sdk/build/auth/)
 
-### Claude Code
+### Claude (Code CLI + Web) - Both Use Same OAuth Flow
+- [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp) - Official Claude Code docs
 - [Building Custom Connectors via Remote MCP Servers](https://support.claude.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers)
-- [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)
-- Claude callback URL: `https://claude.ai/api/mcp/auth_callback`
-- Claude uses `token_endpoint_auth_method: "none"` (public client)
+- [Claude OAuth requires DCR (Issue #2527)](https://github.com/anthropics/claude-code/issues/2527)
+- Callback URL: `https://claude.ai/api/mcp/auth_callback` (same for CLI and web)
+- Client type: **Public** (`token_endpoint_auth_method: "none"`)
+- DCR: **REQUIRED** (RFC 7591)
 
 ### Specifications
 - [MCP Authorization Spec (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
