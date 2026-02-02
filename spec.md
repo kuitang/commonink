@@ -8,23 +8,102 @@ MCP-first notes service enabling AI context sharing across Claude, ChatGPT, and 
 ## Architecture
 
 ### Tech Stack
-- **Language**: Go 1.22+
+- **Language**: Go 1.24+
 - **Database**: SQLite (one file per user) + SQLCipher encryption
-- **Deployment**: Fly.io
-- **Auth**: Google OIDC (users) + OAuth 2.1 provider (for AI clients)
-- **Payments**: [DECIDE: Stripe vs LemonSqueezy]
+- **Deployment**: Fly.io + Tigris CDN
+- **Auth**: Magic Login + Email/Password + Google OIDC (users) + OAuth 2.1 provider (for AI clients)
+- **Payments**: LemonSqueezy (Merchant of Record)
 - **Email**: Resend
 
 ### Key Libraries
 See `notes/go-libraries-2026.md` for versions.
-- MCP: `github.com/modelcontextprotocol/go-sdk`
-- OAuth Provider: `github.com/ory/fosite`
-- OIDC Client: `github.com/coreos/go-oidc/v3`
-- SQLite: `github.com/mutecomm/go-sqlcipher`
-- HTTP: [DECIDE: chi vs gin]
-- Payment: `github.com/stripe/stripe-go/v84` or `github.com/NdoleStudio/lemonsqueezy-go`
-- Email: `github.com/resend/resend-go/v3`
-- Testing: `pgregory.net/rapid` + stdlib fuzzing + `playwright-go`
+- MCP: `github.com/modelcontextprotocol/go-sdk v1.2.0`
+- OAuth Provider: `github.com/ory/fosite v0.49.0`
+- OIDC Client: `github.com/coreos/go-oidc/v3 v3.17.0`
+- SQLite: `github.com/mutecomm/go-sqlcipher` (with CGO)
+- HTTP: stdlib `net/http` (Go 1.22+ routing)
+- Rate Limiting: stdlib `golang.org/x/time/rate`
+- Payment: `github.com/NdoleStudio/lemonsqueezy-go v1.3.1`
+- Email: `github.com/resend/resend-go/v3 v3.1.0`
+- Testing: `pgregory.net/rapid v1.2.0` + stdlib fuzzing + `playwright-go v0.5200.1`
+
+---
+
+## Architecture Decisions
+
+**Status**: ✅ ALL DECISIONS FINALIZED (2026-02-02)
+
+### Database Architecture
+
+**User Data**: ALL in user's encrypted DB
+**Bootstrap Data**: Minimal in shared sessions.db
+
+```
+${DATA_ROOT}/sessions.db      -- Shared (unencrypted bootstrap)
+${DATA_ROOT}/{user_id}.db     -- Per-user (encrypted with SQLCipher)
+```
+
+### Authentication - All Three Methods
+
+1. ✅ **Magic Login** - Email with token (passwordless)
+2. ✅ **Email/Password** - bcrypt hashed
+3. ✅ **Google OIDC** - Sign in with Google
+
+**Google + Email Auto-Linking**: ✅ Yes, auto-link by email
+**Magic Login After Google**: ✅ Yes, both methods always available
+**Google Token Storage**: ✅ Don't store refresh tokens (session-based, 30-day sessions)
+**Google OIDC Scopes**: `openid email profile` (minimal, no offline_access)
+
+### Rate Limiting
+
+**Implementation**: stdlib `golang.org/x/time/rate` (per-user)
+**Free tier**: 10 req/sec, burst 20
+**Paid tier**: 1000 req/sec (unlimited-ish)
+**Memory Management**: TTL-based cleanup every hour
+
+**Rate Limiter Memory Management**:
+```go
+type rateLimiterEntry struct {
+    limiter   *rate.Limiter
+    lastUsed  time.Time
+}
+
+// Background cleanup every hour removes idle limiters
+```
+
+### Database Size Limits
+
+**Free tier**: 100MB limit
+**Paid tier**: Unlimited
+**Calculation**: On login, cache in memory
+**Enforcement**: Check cached size on writes
+
+```go
+// On login: Calculate DB size, cache in memory
+dbSize := calculateDBSize(userID)
+dbSizeCache[userID] = dbSize
+
+// On write: Check cached size
+if cachedSize > 100MB && !isPaidUser(userID) {
+    return http.StatusPaymentRequired
+}
+```
+
+### Public Notes
+
+**URL Pattern**: `yourdomain.com/public/{user_id}/{note_id}`
+**No subdomain required** (simpler DNS setup)
+
+### Payment Integration
+
+**Provider**: LemonSqueezy only (Merchant of Record)
+**Pricing**: $5/year unlimited plan + free tier
+**Handles**: All tax, compliance, international payments
+
+### Session Management
+
+**Duration**: 30 days (balance UX and security)
+**Google re-auth**: One click (Google remembers consent)
 
 ---
 
@@ -191,69 +270,137 @@ GET  /metrics               - Prometheus metrics (optional)
 
 ## Data Model
 
-### User (stored in shared metadata DB or user's SQLite?)
+### sessions.db (Shared, Unencrypted Bootstrap)
+
 ```sql
-users (
-    id            TEXT PRIMARY KEY,     -- Google sub claim
-    email         TEXT UNIQUE NOT NULL,
-    name          TEXT,
-    picture_url   TEXT,
-    created_at    INTEGER NOT NULL,
-    kek_version   INTEGER DEFAULT 1,
+CREATE TABLE sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    INDEX idx_user_id (user_id)
+);
+
+CREATE TABLE magic_tokens (
+    token_hash TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    user_id TEXT,  -- NULL until user created
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    INDEX idx_email (email)
+);
+
+CREATE TABLE user_keys (
+    user_id TEXT PRIMARY KEY,
+    kek_version INTEGER NOT NULL DEFAULT 1,
     encrypted_dek BLOB NOT NULL,
-    subscription_status TEXT DEFAULT 'free',  -- free, active, cancelled
-    subscription_id TEXT
-)
+    created_at INTEGER NOT NULL,
+    rotated_at INTEGER
+);
+
+CREATE TABLE oauth_clients (
+    client_id TEXT PRIMARY KEY,
+    client_secret TEXT NOT NULL,
+    client_name TEXT,
+    redirect_uris TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE oauth_tokens (
+    access_token TEXT PRIMARY KEY,
+    refresh_token TEXT,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    scope TEXT,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    INDEX idx_user_client (user_id, client_id)
+);
+
+CREATE TABLE oauth_codes (
+    code TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope TEXT,
+    code_challenge TEXT NOT NULL,
+    code_challenge_method TEXT DEFAULT 'S256',
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
 ```
 
-### Notes (per-user SQLite DB)
+### {user_id}.db (Per-User, Encrypted)
+
 ```sql
-notes (
-    id         TEXT PRIMARY KEY,
-    title      TEXT NOT NULL,
-    content    TEXT NOT NULL,
-    tags       TEXT,              -- JSON array or comma-separated
+CREATE TABLE account (
+    user_id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,    -- NULL if not set
+    google_sub TEXT,       -- NULL if not linked
+    created_at INTEGER NOT NULL,
+    subscription_status TEXT DEFAULT 'free',
+    subscription_id TEXT,  -- LemonSqueezy subscription_id
+    db_size_bytes INTEGER DEFAULT 0,
+    last_login INTEGER
+);
+
+CREATE TABLE notes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL CHECK(length(content) <= 1048576),
+    is_public INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
-)
+);
 
--- FTS5 index for search
 CREATE VIRTUAL TABLE fts_notes USING fts5(
-    title, content,
+    title,
+    content,
     content='notes',
     content_rowid='rowid'
-)
+);
+
+CREATE TRIGGER notes_ai AFTER INSERT ON notes BEGIN
+    INSERT INTO fts_notes(rowid, title, content)
+    VALUES (new.rowid, new.title, new.content);
+END;
+
+CREATE TRIGGER notes_ad AFTER DELETE ON notes BEGIN
+    DELETE FROM fts_notes WHERE rowid = old.rowid;
+END;
+
+CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
+    UPDATE fts_notes SET title = new.title, content = new.content
+    WHERE rowid = new.rowid;
+END;
+
+CREATE TABLE api_keys (
+    key_id TEXT PRIMARY KEY,
+    key_hash TEXT NOT NULL,
+    scope TEXT DEFAULT 'read_write',
+    created_at INTEGER NOT NULL,
+    last_used INTEGER
+);
 ```
 
-### OAuth Clients (stored where? Shared DB?)
-```sql
-oauth_clients (
-    client_id     TEXT PRIMARY KEY,
-    client_secret TEXT NOT NULL,
-    client_name   TEXT,           -- "Claude", "ChatGPT", etc.
-    redirect_uris TEXT NOT NULL,  -- JSON array
-    created_at    INTEGER NOT NULL
-)
+**Note**: OAuth clients, codes, and tokens are stored in sessions.db (see above).
 
-oauth_codes (
-    code              TEXT PRIMARY KEY,
-    client_id         TEXT NOT NULL,
-    user_id           TEXT NOT NULL,
-    redirect_uri      TEXT NOT NULL,
-    scope             TEXT,
-    code_challenge    TEXT NOT NULL,
-    expires_at        INTEGER NOT NULL
-)
+### Notes Schema Details
 
-oauth_tokens (
-    access_token  TEXT PRIMARY KEY,
-    refresh_token TEXT,
-    client_id     TEXT NOT NULL,
-    user_id       TEXT NOT NULL,
-    scope         TEXT,
-    expires_at    INTEGER NOT NULL
-)
-```
+- **id**: UUID or nanoid
+- **title**: Free text, searchable
+- **content**: Max 1MB (1,048,576 bytes)
+- **is_public**: Boolean flag for public sharing
+- **FTS5 triggers**: Auto-sync with full-text search index
+
+### API Keys Schema
+
+Users can create API keys for programmatic access:
+- **key_id**: Unique identifier (shown to user)
+- **key_hash**: bcrypt hash of the actual key
+- **scope**: read_only or read_write
+- **last_used**: Track usage for cleanup
 
 ---
 

@@ -119,24 +119,10 @@ ${DATA_ROOT}/{user_id}.db     -- Per-user (encrypted with SQLCipher)
 
 ---
 
-## ❓ 7 FOLLOW-UP QUESTIONS (Answer These Next)
-
-See **DECISIONS_FINAL.md** for details. Quick summary:
-
-1. **Google + Email Linking**: Auto-link if same email? *(Recommend: Yes)*
-2. **Magic Login After Google**: Allow? *(Recommend: Yes)*
-3. **Google Token Storage**: Store refresh tokens or re-auth? *(Recommend: Don't store)*
-4. **Rate Limiter Cleanup**: LRU, TTL, or no cleanup? *(Recommend: TTL 1 hour)*
-5. **DB Size Check**: On login, every write, or background job? *(Recommend: On login)*
-6. **Google Scopes**: Just `openid email profile`? *(Recommend: Yes, minimal)*
-7. **Password + Google Both**: Allow both methods? *(Recommend: Yes, flexible)*
-
----
-
 ## 🗂️ UPDATED DOCUMENTATION
 
 ### Documents to Keep (Updated)
-1. ✅ **DECISIONS_FINAL.md** - All decisions, 7 remaining questions
+1. ✅ **spec.md (Architecture Decisions section)** - All decisions, 7 remaining questions
 2. ✅ **spec.md** - Still valid, update with final schemas
 3. ✅ **CLAUDE.md** - Developer guide
 4. ✅ **README.md** - Update with final tech stack
@@ -151,7 +137,7 @@ See **DECISIONS_FINAL.md** for details. Quick summary:
 ### Documents to Delete/Archive
 1. ❌ **IMPLEMENTATION_STATUS.md** - Superseded by BUILD_SUCCESS.md
 2. ❌ **SETUP_COMPLETE.md** - Superseded by BUILD_SUCCESS.md
-3. ❌ **DECISIONS.md** - Superseded by DECISIONS_FINAL.md
+3. ❌ **DECISIONS.md** - Superseded by spec.md (Architecture Decisions section)
 4. ❌ Stripe references in all docs
 
 ---
@@ -177,7 +163,7 @@ See **DECISIONS_FINAL.md** for details. Quick summary:
 ## 🚀 NEXT STEPS (Implementation Ready)
 
 ### Immediate (Answer 7 Questions)
-Review **DECISIONS_FINAL.md** and answer the 7 follow-up questions.
+Review **spec.md (Architecture Decisions section)** and answer the 7 follow-up questions.
 
 ### Phase 1: Database Layer (Week 1)
 ```bash
@@ -291,7 +277,7 @@ npx @modelcontextprotocol/conformance server --url http://localhost:8080/mcp
 - `.git/hooks/pre-commit` - Auto go fmt + quick CI
 
 ### Documentation
-- `DECISIONS_FINAL.md` - **SOURCE OF TRUTH** for all decisions
+- `spec.md (Architecture Decisions section)` - **SOURCE OF TRUTH** for all decisions
 - `BUILD_SUCCESS.md` - This file
 - `spec.md` - Engineering spec (update with final schemas)
 - `CLAUDE.md` - Developer guide
@@ -377,4 +363,4 @@ Deployment:     Fly.io + Tigris CDN
 
 **Status**: ✅ ALL SYSTEMS GO - Ready for implementation!
 
-Answer the 7 questions in DECISIONS_FINAL.md, then start Phase 1! 🚀
+Answer the 7 questions in spec.md (Architecture Decisions section), then start Phase 1! 🚀
