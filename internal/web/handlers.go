@@ -82,6 +82,11 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	// OAuth consent (auth required)
 	mux.Handle("GET /oauth/consent", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleConsentPage)))
 	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleConsentDecision)))
+
+	// Settings - Token management (auth required)
+	mux.Handle("GET /settings/tokens", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleTokenSettings)))
+	mux.Handle("POST /settings/tokens", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleCreateToken)))
+	mux.Handle("POST /settings/tokens/{id}/revoke", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleRevokeToken)))
 }
 
 // PageData contains common data passed to all templates.
@@ -212,7 +217,7 @@ func (h *WebHandler) HandleLoginPage(w http.ResponseWriter, r *http.Request) {
 		data.Error = errMsg
 	}
 
-	if err := h.renderer.Render(w, "login.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/login.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -274,7 +279,7 @@ func (h *WebHandler) HandleMagicLinkRequest(w http.ResponseWriter, r *http.Reque
 		Email: email,
 	}
 
-	if err := h.renderer.Render(w, "magic_sent.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/magic_sent.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -316,7 +321,7 @@ func (h *WebHandler) HandleRegisterPage(w http.ResponseWriter, r *http.Request) 
 		data.Error = errMsg
 	}
 
-	if err := h.renderer.Render(w, "register.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/register.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -407,7 +412,7 @@ func (h *WebHandler) HandlePasswordResetPage(w http.ResponseWriter, r *http.Requ
 		data.Error = errMsg
 	}
 
-	if err := h.renderer.Render(w, "password_reset.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/password_reset.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -437,7 +442,7 @@ func (h *WebHandler) HandlePasswordReset(w http.ResponseWriter, r *http.Request)
 		Success: "If that email exists, a reset link has been sent.",
 	}
 
-	if err := h.renderer.Render(w, "password_reset.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/password_reset.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -461,7 +466,7 @@ func (h *WebHandler) HandlePasswordResetConfirmPage(w http.ResponseWriter, r *ht
 		data.Error = errMsg
 	}
 
-	if err := h.renderer.Render(w, "password_reset_confirm.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/password_reset_confirm.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -549,7 +554,7 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 		HasNext:    page < totalPages,
 	}
 
-	if err := h.renderer.Render(w, "list.html", data); err != nil {
+	if err := h.renderer.Render(w, "notes/list.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -563,7 +568,7 @@ func (h *WebHandler) HandleNewNotePage(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if err := h.renderer.Render(w, "edit.html", data); err != nil {
+	if err := h.renderer.Render(w, "notes/edit.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -636,7 +641,7 @@ func (h *WebHandler) HandleViewNote(w http.ResponseWriter, r *http.Request) {
 		ShareURL: shareURL,
 	}
 
-	if err := h.renderer.Render(w, "view.html", data); err != nil {
+	if err := h.renderer.Render(w, "notes/view.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -671,7 +676,7 @@ func (h *WebHandler) HandleEditNotePage(w http.ResponseWriter, r *http.Request) 
 		Note: note,
 	}
 
-	if err := h.renderer.Render(w, "edit.html", data); err != nil {
+	if err := h.renderer.Render(w, "notes/edit.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -800,7 +805,7 @@ func (h *WebHandler) HandlePublicNote(w http.ResponseWriter, r *http.Request) {
 		ShareURL: h.baseURL + "/public/" + userID + "/" + noteID,
 	}
 
-	if err := h.renderer.Render(w, "public_view.html", data); err != nil {
+	if err := h.renderer.Render(w, "notes/public_view.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -842,7 +847,7 @@ func (h *WebHandler) HandleConsentPage(w http.ResponseWriter, r *http.Request) {
 		CSRFToken:   "", // In production, generate CSRF token
 	}
 
-	if err := h.renderer.Render(w, "consent.html", data); err != nil {
+	if err := h.renderer.Render(w, "oauth/consent.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -871,7 +876,7 @@ func (h *WebHandler) HandleConsentDecision(w http.ResponseWriter, r *http.Reques
 			State:       state,
 		}
 
-		if err := h.renderer.Render(w, "consent_denied.html", data); err != nil {
+		if err := h.renderer.Render(w, "oauth/consent_denied.html", data); err != nil {
 			http.Error(w, "Failed to render page", http.StatusInternalServerError)
 		}
 		return
@@ -900,7 +905,7 @@ func (h *WebHandler) HandleConsentDecision(w http.ResponseWriter, r *http.Reques
 		State:       state,
 	}
 
-	if err := h.renderer.Render(w, "consent_granted.html", data); err != nil {
+	if err := h.renderer.Render(w, "oauth/consent_granted.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -916,7 +921,7 @@ func (h *WebHandler) renderAuthError(w http.ResponseWriter, errorCode, errorMsg,
 		ErrorDescription: errorDesc,
 	}
 
-	if err := h.renderer.Render(w, "error.html", data); err != nil {
+	if err := h.renderer.Render(w, "auth/error.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }

@@ -53,14 +53,11 @@ type authTestEnv struct {
 func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 	t.Helper()
 
-	// Create temporary directory for test databases
-	tempDir := t.TempDir()
+	// Reset database singleton and set fresh data directory
+	db.ResetForTesting()
+	db.DataDirectory = t.TempDir()
 
-	// Set environment variables for the test
-	originalDataDir := os.Getenv("DATA_DIR")
-	os.Setenv("DATA_DIR", tempDir)
-
-	// Initialize sessions database
+	// Initialize sessions database (now uses fresh directory)
 	sessionsDB, err := db.OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("Failed to open sessions database: %v", err)
@@ -182,7 +179,6 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 		}
 		rateLimiter.Stop()
 		db.CloseAll()
-		os.Setenv("DATA_DIR", originalDataDir)
 	}
 
 	return env, cleanup
@@ -501,8 +497,8 @@ func TestBrowser_Auth_PasswordLogin(t *testing.T) {
 		t.Fatalf("Failed to fill password: %v", err)
 	}
 
-	// Submit login form
-	signInBtn := page.Locator("button[type='submit']:has-text('Sign In')")
+	// Submit login form (target the password login form specifically)
+	signInBtn := page.Locator("form[action='/auth/login'] button[type='submit']")
 	err = signInBtn.Click()
 	if err != nil {
 		t.Fatalf("Failed to click sign in button: %v", err)

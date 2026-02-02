@@ -58,11 +58,11 @@ type notesCrudEnv struct {
 func setupNotesCrudEnv(t *testing.T) *notesCrudEnv {
 	t.Helper()
 
-	// Create temporary directory for databases
-	tmpDir := t.TempDir()
-	os.Setenv("DATA_DIR", tmpDir)
+	// Reset database singleton and set fresh data directory
+	db.ResetForTesting()
+	db.DataDirectory = t.TempDir()
 
-	// Initialize sessions database
+	// Initialize sessions database (now uses fresh directory)
 	sessionsDB, err := db.OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("Failed to open sessions database: %v", err)
@@ -332,6 +332,16 @@ func (env *notesCrudEnv) waitForCrudSelector(t *testing.T, selector string) play
 		Timeout: playwright.Float(5000),
 	})
 	if err != nil {
+		// Debug: log the current page content and URL
+		currentURL := env.page.URL()
+		title, _ := env.page.Title()
+		content, _ := env.page.Content()
+		if len(content) > 500 {
+			content = content[:500] + "..."
+		}
+		t.Logf("Current URL: %s", currentURL)
+		t.Logf("Current title: %s", title)
+		t.Logf("Content preview: %s", content)
 		t.Fatalf("Failed to wait for selector %s: %v", selector, err)
 	}
 	return locator
@@ -917,8 +927,8 @@ func TestBrowser_NotesCRUD_LoginFlow(t *testing.T) {
 		t.Fatalf("Failed to fill password: %v", err)
 	}
 
-	// Click Sign In button
-	signInButton := env.page.Locator("button[type='submit']:has-text('Sign In')")
+	// Click Sign In button (target the password login form specifically)
+	signInButton := env.page.Locator("form[action='/auth/login'] button[type='submit']")
 	err = signInButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click sign in button: %v", err)
