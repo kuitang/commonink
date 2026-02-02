@@ -471,9 +471,10 @@ func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Co
 		Tools: allTools,
 	}
 
-	// Continue existing conversation if provided
+	// Continue existing conversation if provided - THIS PROVES MULTI-TURN
 	if conv != nil && conv.LastResponseID != "" {
 		params.PreviousResponseID = openai.String(conv.LastResponseID)
+		fmt.Printf("[MULTI-TURN PROOF] Using previous_response_id: %s\n", conv.LastResponseID)
 	}
 
 	// Run conversation loop until model stops making tool calls
@@ -524,6 +525,7 @@ func (env *testEnv) runConversation(ctx context.Context, prompt string, conv *Co
 		if !hasFunctionCalls {
 			if conv != nil {
 				conv.LastResponseID = previousResponseID
+				fmt.Printf("[MULTI-TURN PROOF] Saving response_id for next turn: %s\n", previousResponseID)
 			}
 			return response.OutputText(), toolCalls, nil
 		}
@@ -926,6 +928,138 @@ func TestOpenAI_AllOperations_Integration(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Note still exists after delete")
 	}
+}
+
+// TestOpenAI_MultiTurn_Conversation proves that OpenAI maintains conversation state
+// across multiple turns using previous_response_id. Uses the SAME prompts as Claude test.
+func TestOpenAI_MultiTurn_Conversation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping OpenAI test in short mode")
+	}
+
+	env := setupTestEnv(t)
+	defer env.cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	// Use a single Conversation object to maintain state across turns
+	conv := &Conversation{}
+
+	var noteID string
+
+	// Turn 1: Create a note (SAME PROMPT AS CLAUDE TEST)
+	t.Run("Turn1_Create", func(t *testing.T) {
+		prompt := "Create a note titled 'Team Meeting Notes' with content 'Discussed Q1 roadmap and assigned action items.'"
+		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+		t.Logf("Response: %s", resp)
+		t.Logf("Tool calls: %d", len(toolCalls))
+		t.Logf("Conversation.LastResponseID after Turn1: %s", conv.LastResponseID)
+
+		// Verify in DB
+		list, _ := env.notesSvc.List(100, 0)
+		for _, n := range list.Notes {
+			if strings.Contains(strings.ToLower(n.Title), "meeting") {
+				noteID = n.ID
+				break
+			}
+		}
+		if noteID == "" {
+			t.Fatal("Note not created")
+		}
+		t.Logf("Created note ID: %s", noteID)
+	})
+
+	// Turn 2: List notes (SAME PROMPT AS CLAUDE TEST)
+	t.Run("Turn2_List", func(t *testing.T) {
+		if conv.LastResponseID == "" {
+			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn1")
+		}
+		prevID := conv.LastResponseID
+
+		prompt := "List all my notes and tell me how many there are."
+		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+		if err != nil {
+			t.Fatalf("List failed: %v", err)
+		}
+		t.Logf("Response: %s", resp)
+		t.Logf("Tool calls: %d", len(toolCalls))
+		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
+	})
+
+	// Turn 3: Search notes (SAME PROMPT AS CLAUDE TEST)
+	t.Run("Turn3_Search", func(t *testing.T) {
+		if conv.LastResponseID == "" {
+			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn2")
+		}
+		prevID := conv.LastResponseID
+
+		prompt := "Search for notes containing 'meeting'."
+		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+		if err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+		t.Logf("Response: %s", resp)
+		t.Logf("Tool calls: %d", len(toolCalls))
+		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
+	})
+
+	// Turn 4: Update note (SAME PROMPT AS CLAUDE TEST)
+	t.Run("Turn4_Update", func(t *testing.T) {
+		if noteID == "" {
+			t.Skip("No note ID")
+		}
+		if conv.LastResponseID == "" {
+			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn3")
+		}
+		prevID := conv.LastResponseID
+
+		prompt := fmt.Sprintf("Update the note with ID '%s' to add 'Follow-up: Monday' to the content.", noteID)
+		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+		if err != nil {
+			t.Fatalf("Update failed: %v", err)
+		}
+		t.Logf("Response: %s", resp)
+		t.Logf("Tool calls: %d", len(toolCalls))
+		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
+
+		// Verify in DB
+		note, err := env.notesSvc.Read(noteID)
+		if err != nil {
+			t.Fatalf("Read failed: %v", err)
+		}
+		t.Logf("Updated content: %s", note.Content)
+	})
+
+	// Turn 5: Delete note (SAME PROMPT AS CLAUDE TEST)
+	t.Run("Turn5_Delete", func(t *testing.T) {
+		if noteID == "" {
+			t.Skip("No note ID")
+		}
+		if conv.LastResponseID == "" {
+			t.Fatal("MULTI-TURN FAILURE: No previous response ID from Turn4")
+		}
+		prevID := conv.LastResponseID
+
+		prompt := fmt.Sprintf("Delete the note with ID '%s'.", noteID)
+		resp, toolCalls, err := env.runConversation(ctx, prompt, conv)
+		if err != nil {
+			t.Fatalf("Delete failed: %v", err)
+		}
+		t.Logf("Response: %s", resp)
+		t.Logf("Tool calls: %d", len(toolCalls))
+		t.Logf("MULTI-TURN PROOF: Previous=%s, New=%s", prevID, conv.LastResponseID)
+
+		// Verify deletion in DB
+		_, err = env.notesSvc.Read(noteID)
+		if err == nil {
+			t.Fatal("Note still exists")
+		}
+		t.Log("Note deleted successfully")
+	})
 }
 
 // TestOpenAI_ToolDefinitions tests that all tool definitions are valid
