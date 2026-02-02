@@ -36,6 +36,14 @@ type OauthCode struct {
 	CreatedAt           int64          `json:"created_at"`
 }
 
+type OauthConsent struct {
+	ID        string `json:"id"`
+	UserID    string `json:"user_id"`
+	ClientID  string `json:"client_id"`
+	Scopes    string `json:"scopes"`
+	GrantedAt int64  `json:"granted_at"`
+}
+
 type OauthToken struct {
 	AccessToken  string         `json:"access_token"`
 	RefreshToken sql.NullString `json:"refresh_token"`

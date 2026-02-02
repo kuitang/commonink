@@ -199,7 +199,7 @@ func (u *UserDB) SearchNotesCount(ctx context.Context, query string) (int64, err
 func OpenSessionsDB() (*SessionsDB, error) {
 	sessionsDBOnce.Do(func() {
 		// Ensure data directory exists
-		if err := os.MkdirAll(DataDirectory, 0755); err != nil {
+		if err := os.MkdirAll(DataDirectory, 0750); err != nil {
 			sessionsDBErr = fmt.Errorf("failed to create data directory: %w", err)
 			return
 		}
@@ -255,8 +255,26 @@ func OpenSessionsDB() (*SessionsDB, error) {
 //   - *UserDB: Database wrapper with sqlc queries
 //   - error: Any error encountered during initialization
 func OpenUserDB(userID string) (*UserDB, error) {
+	return OpenUserDBWithDEK(userID, hardcodedDEK)
+}
+
+// OpenUserDBWithDEK opens a per-user encrypted database with a provided DEK.
+// This is the production version that accepts a DEK from the KeyManager.
+//
+// Parameters:
+//   - userID: The unique identifier for the user
+//   - dek: The 32-byte Data Encryption Key for SQLCipher
+//
+// Returns:
+//   - *UserDB: Database wrapper with sqlc queries
+//   - error: Any error encountered during initialization
+func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	if userID == "" {
 		return nil, fmt.Errorf("userID cannot be empty")
+	}
+
+	if len(dek) != 32 {
+		return nil, fmt.Errorf("DEK must be exactly 32 bytes, got %d", len(dek))
 	}
 
 	// Check if database is already cached
@@ -285,7 +303,7 @@ func OpenUserDB(userID string) (*UserDB, error) {
 	}
 
 	// Ensure data directory exists
-	if err := os.MkdirAll(DataDirectory, 0755); err != nil {
+	if err := os.MkdirAll(DataDirectory, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
@@ -293,7 +311,7 @@ func OpenUserDB(userID string) (*UserDB, error) {
 	dbPath := filepath.Join(DataDirectory, fmt.Sprintf("%s.db", userID))
 
 	// Encode DEK as hex for SQLCipher pragma
-	dekHex := hex.EncodeToString(hardcodedDEK)
+	dekHex := hex.EncodeToString(dek)
 
 	// Construct DSN with SQLCipher encryption parameters
 	// Format: file.db?_pragma_key=x'HEX_KEY'&_pragma_cipher_page_size=4096

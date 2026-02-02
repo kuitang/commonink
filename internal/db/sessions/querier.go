@@ -12,6 +12,8 @@ import (
 type Querier interface {
 	CountSessions(ctx context.Context) (int64, error)
 	CountSessionsByUserID(ctx context.Context, userID string) (int64, error)
+	// OAuth consent queries for the shared sessions database
+	CreateConsent(ctx context.Context, arg CreateConsentParams) (OauthConsent, error)
 	// Magic tokens operations
 	CreateMagicToken(ctx context.Context, arg CreateMagicTokenParams) error
 	// OAuth clients operations
@@ -25,10 +27,13 @@ type Querier interface {
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	// User keys operations
 	CreateUserKey(ctx context.Context, arg CreateUserKeyParams) error
+	DeleteConsent(ctx context.Context, arg DeleteConsentParams) error
 	DeleteExpiredMagicTokens(ctx context.Context, expiresAt int64) error
+	DeleteExpiredMagicTokensNow(ctx context.Context) error
 	DeleteExpiredOAuthCodes(ctx context.Context, expiresAt int64) error
 	DeleteExpiredOAuthTokens(ctx context.Context, expiresAt int64) error
 	DeleteExpiredSessions(ctx context.Context, expiresAt int64) error
+	DeleteExpiredSessionsNow(ctx context.Context) error
 	DeleteMagicToken(ctx context.Context, tokenHash string) error
 	DeleteMagicTokensByEmail(ctx context.Context, email string) error
 	DeleteOAuthClient(ctx context.Context, clientID string) error
@@ -39,6 +44,7 @@ type Querier interface {
 	DeleteSession(ctx context.Context, sessionID string) error
 	DeleteSessionsByUserID(ctx context.Context, userID string) error
 	DeleteUserKey(ctx context.Context, userID string) error
+	GetConsent(ctx context.Context, arg GetConsentParams) (OauthConsent, error)
 	GetMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
 	GetMagicTokensByEmail(ctx context.Context, email string) ([]MagicToken, error)
 	GetOAuthClient(ctx context.Context, clientID string) (OauthClient, error)
@@ -49,9 +55,16 @@ type Querier interface {
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	GetSessionsByUserID(ctx context.Context, userID string) ([]Session, error)
 	GetUserKey(ctx context.Context, userID string) (UserKey, error)
+	GetValidMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
+	GetValidSession(ctx context.Context, sessionID string) (Session, error)
+	ListConsentsForUser(ctx context.Context, userID string) ([]OauthConsent, error)
 	ListOAuthClients(ctx context.Context) ([]OauthClient, error)
+	UpdateConsentScopes(ctx context.Context, arg UpdateConsentScopesParams) (OauthConsent, error)
 	UpdateOAuthClient(ctx context.Context, arg UpdateOAuthClientParams) error
 	UpdateUserKey(ctx context.Context, arg UpdateUserKeyParams) error
+	UpsertMagicToken(ctx context.Context, arg UpsertMagicTokenParams) error
+	UpsertSession(ctx context.Context, arg UpsertSessionParams) error
+	UpsertUserKey(ctx context.Context, arg UpsertUserKeyParams) error
 }
 
 var _ Querier = (*Queries)(nil)

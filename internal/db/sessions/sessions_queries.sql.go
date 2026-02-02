@@ -207,6 +207,15 @@ func (q *Queries) DeleteExpiredMagicTokens(ctx context.Context, expiresAt int64)
 	return err
 }
 
+const deleteExpiredMagicTokensNow = `-- name: DeleteExpiredMagicTokensNow :exec
+DELETE FROM magic_tokens WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)
+`
+
+func (q *Queries) DeleteExpiredMagicTokensNow(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredMagicTokensNow)
+	return err
+}
+
 const deleteExpiredOAuthCodes = `-- name: DeleteExpiredOAuthCodes :exec
 DELETE FROM oauth_codes WHERE expires_at < ?
 `
@@ -231,6 +240,15 @@ DELETE FROM sessions WHERE expires_at < ?
 
 func (q *Queries) DeleteExpiredSessions(ctx context.Context, expiresAt int64) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredSessions, expiresAt)
+	return err
+}
+
+const deleteExpiredSessionsNow = `-- name: DeleteExpiredSessionsNow :exec
+DELETE FROM sessions WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER)
+`
+
+func (q *Queries) DeleteExpiredSessionsNow(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredSessionsNow)
 	return err
 }
 
@@ -578,6 +596,39 @@ func (q *Queries) GetUserKey(ctx context.Context, userID string) (UserKey, error
 	return i, err
 }
 
+const getValidMagicToken = `-- name: GetValidMagicToken :one
+SELECT token_hash, email, user_id, expires_at, created_at FROM magic_tokens WHERE token_hash = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)
+`
+
+func (q *Queries) GetValidMagicToken(ctx context.Context, tokenHash string) (MagicToken, error) {
+	row := q.db.QueryRowContext(ctx, getValidMagicToken, tokenHash)
+	var i MagicToken
+	err := row.Scan(
+		&i.TokenHash,
+		&i.Email,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getValidSession = `-- name: GetValidSession :one
+SELECT session_id, user_id, expires_at, created_at FROM sessions WHERE session_id = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)
+`
+
+func (q *Queries) GetValidSession(ctx context.Context, sessionID string) (Session, error) {
+	row := q.db.QueryRowContext(ctx, getValidSession, sessionID)
+	var i Session
+	err := row.Scan(
+		&i.SessionID,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listOAuthClients = `-- name: ListOAuthClients :many
 SELECT client_id, client_secret, client_name, redirect_uris, created_at
 FROM oauth_clients
@@ -655,6 +706,77 @@ func (q *Queries) UpdateUserKey(ctx context.Context, arg UpdateUserKeyParams) er
 		arg.EncryptedDek,
 		arg.RotatedAt,
 		arg.UserID,
+	)
+	return err
+}
+
+const upsertMagicToken = `-- name: UpsertMagicToken :exec
+INSERT INTO magic_tokens (token_hash, email, user_id, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?) ON CONFLICT(token_hash) DO UPDATE SET expires_at = excluded.expires_at
+`
+
+type UpsertMagicTokenParams struct {
+	TokenHash string         `json:"token_hash"`
+	Email     string         `json:"email"`
+	UserID    sql.NullString `json:"user_id"`
+	ExpiresAt int64          `json:"expires_at"`
+	CreatedAt int64          `json:"created_at"`
+}
+
+func (q *Queries) UpsertMagicToken(ctx context.Context, arg UpsertMagicTokenParams) error {
+	_, err := q.db.ExecContext(ctx, upsertMagicToken,
+		arg.TokenHash,
+		arg.Email,
+		arg.UserID,
+		arg.ExpiresAt,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const upsertSession = `-- name: UpsertSession :exec
+INSERT INTO sessions (session_id, user_id, expires_at, created_at)
+VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET expires_at = excluded.expires_at
+`
+
+type UpsertSessionParams struct {
+	SessionID string `json:"session_id"`
+	UserID    string `json:"user_id"`
+	ExpiresAt int64  `json:"expires_at"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSession,
+		arg.SessionID,
+		arg.UserID,
+		arg.ExpiresAt,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const upsertUserKey = `-- name: UpsertUserKey :exec
+INSERT INTO user_keys (user_id, kek_version, encrypted_dek, created_at, rotated_at)
+VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+  kek_version = excluded.kek_version, encrypted_dek = excluded.encrypted_dek, rotated_at = excluded.rotated_at
+`
+
+type UpsertUserKeyParams struct {
+	UserID       string        `json:"user_id"`
+	KekVersion   int64         `json:"kek_version"`
+	EncryptedDek []byte        `json:"encrypted_dek"`
+	CreatedAt    int64         `json:"created_at"`
+	RotatedAt    sql.NullInt64 `json:"rotated_at"`
+}
+
+func (q *Queries) UpsertUserKey(ctx context.Context, arg UpsertUserKeyParams) error {
+	_, err := q.db.ExecContext(ctx, upsertUserKey,
+		arg.UserID,
+		arg.KekVersion,
+		arg.EncryptedDek,
+		arg.CreatedAt,
+		arg.RotatedAt,
 	)
 	return err
 }

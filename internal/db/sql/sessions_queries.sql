@@ -6,10 +6,17 @@
 INSERT INTO sessions (session_id, user_id, expires_at, created_at)
 VALUES (?, ?, ?, ?);
 
+-- name: UpsertSession :exec
+INSERT INTO sessions (session_id, user_id, expires_at, created_at)
+VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET expires_at = excluded.expires_at;
+
 -- name: GetSession :one
 SELECT session_id, user_id, expires_at, created_at
 FROM sessions
 WHERE session_id = ?;
+
+-- name: GetValidSession :one
+SELECT * FROM sessions WHERE session_id = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER);
 
 -- name: GetSessionsByUserID :many
 SELECT session_id, user_id, expires_at, created_at
@@ -22,6 +29,9 @@ DELETE FROM sessions WHERE session_id = ?;
 
 -- name: DeleteExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at < ?;
+
+-- name: DeleteExpiredSessionsNow :exec
+DELETE FROM sessions WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER);
 
 -- name: DeleteSessionsByUserID :exec
 DELETE FROM sessions WHERE user_id = ?;
@@ -38,10 +48,17 @@ SELECT COUNT(*) FROM sessions WHERE user_id = ?;
 INSERT INTO magic_tokens (token_hash, email, user_id, expires_at, created_at)
 VALUES (?, ?, ?, ?, ?);
 
+-- name: UpsertMagicToken :exec
+INSERT INTO magic_tokens (token_hash, email, user_id, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?) ON CONFLICT(token_hash) DO UPDATE SET expires_at = excluded.expires_at;
+
 -- name: GetMagicToken :one
 SELECT token_hash, email, user_id, expires_at, created_at
 FROM magic_tokens
 WHERE token_hash = ?;
+
+-- name: GetValidMagicToken :one
+SELECT * FROM magic_tokens WHERE token_hash = ? AND expires_at > CAST(strftime('%s', 'now') AS INTEGER);
 
 -- name: GetMagicTokensByEmail :many
 SELECT token_hash, email, user_id, expires_at, created_at
@@ -55,6 +72,9 @@ DELETE FROM magic_tokens WHERE token_hash = ?;
 -- name: DeleteExpiredMagicTokens :exec
 DELETE FROM magic_tokens WHERE expires_at < ?;
 
+-- name: DeleteExpiredMagicTokensNow :exec
+DELETE FROM magic_tokens WHERE expires_at <= CAST(strftime('%s', 'now') AS INTEGER);
+
 -- name: DeleteMagicTokensByEmail :exec
 DELETE FROM magic_tokens WHERE email = ?;
 
@@ -63,6 +83,11 @@ DELETE FROM magic_tokens WHERE email = ?;
 -- name: CreateUserKey :exec
 INSERT INTO user_keys (user_id, kek_version, encrypted_dek, created_at)
 VALUES (?, ?, ?, ?);
+
+-- name: UpsertUserKey :exec
+INSERT INTO user_keys (user_id, kek_version, encrypted_dek, created_at, rotated_at)
+VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+  kek_version = excluded.kek_version, encrypted_dek = excluded.encrypted_dek, rotated_at = excluded.rotated_at;
 
 -- name: GetUserKey :one
 SELECT user_id, kek_version, encrypted_dek, created_at, rotated_at
