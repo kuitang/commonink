@@ -101,493 +101,20 @@ The conformance client MUST test this exact 5-step flow:
 
 ### Conformance Test Implementation
 
-**File**: `tests/conformance/chatgpt_oauth_test.go`
-
-```go
-// Package conformance implements a custom ChatGPT OAuth conformance test client.
-// This tests the EXACT flow that ChatGPT performs, as specified in chatgpt-apps/auth.md.
-//
-// IMPORTANT: Read chatgpt-apps/auth.md (lines 1-281) before modifying this file.
-package conformance
-
-import (
-    "context"
-    "crypto/sha256"
-    "encoding/base64"
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "net/http/httptest"
-    "net/url"
-    "strings"
-    "testing"
-
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
-    "pgregory.net/rapid"
-)
-
-// ChatGPTOAuthConformanceTest tests the exact OAuth flow that ChatGPT performs.
-// Reference: chatgpt-apps/auth.md lines 99-119
-type ChatGPTOAuthConformanceTest struct {
-    t         *testing.T
-    serverURL string
-    client    *http.Client
-
-    // Discovered metadata
-    resourceMetadata   ResourceMetadata
-    authServerMetadata AuthServerMetadata
-
-    // Registration
-    clientID     string
-    clientSecret string
-
-    // PKCE
-    codeVerifier  string
-    codeChallenge string
-
-    // Tokens
-    accessToken  string
-    refreshToken string
-}
-
-// ResourceMetadata from /.well-known/oauth-protected-resource
-// Reference: chatgpt-apps/auth.md lines 33-40
-type ResourceMetadata struct {
-    Resource             string   `json:"resource"`
-    AuthorizationServers []string `json:"authorization_servers"`
-    ScopesSupported      []string `json:"scopes_supported"`
-    ResourceDocumentation string  `json:"resource_documentation,omitempty"`
-}
-
-// AuthServerMetadata from /.well-known/oauth-authorization-server
-// Reference: chatgpt-apps/auth.md lines 65-74
-type AuthServerMetadata struct {
-    Issuer                           string   `json:"issuer"`
-    AuthorizationEndpoint            string   `json:"authorization_endpoint"`
-    TokenEndpoint                    string   `json:"token_endpoint"`
-    RegistrationEndpoint             string   `json:"registration_endpoint"`
-    CodeChallengeMethodsSupported    []string `json:"code_challenge_methods_supported"`
-    ScopesSupported                  []string `json:"scopes_supported"`
-}
-
-// DCRRequest for Dynamic Client Registration
-// Reference: chatgpt-apps/auth.md lines 107-109, 121-125
-type DCRRequest struct {
-    ClientName    string   `json:"client_name"`
-    RedirectURIs  []string `json:"redirect_uris"`
-    GrantTypes    []string `json:"grant_types"`
-    ResponseTypes []string `json:"response_types"`
-}
-
-// DCRResponse from Dynamic Client Registration
-type DCRResponse struct {
-    ClientID         string   `json:"client_id"`
-    ClientSecret     string   `json:"client_secret"`
-    ClientIDIssuedAt int64    `json:"client_id_issued_at"`
-    RedirectURIs     []string `json:"redirect_uris"`
-}
-
-// TokenResponse from token endpoint
-type TokenResponse struct {
-    AccessToken  string `json:"access_token"`
-    TokenType    string `json:"token_type"`
-    ExpiresIn    int    `json:"expires_in"`
-    RefreshToken string `json:"refresh_token"`
-    Scope        string `json:"scope"`
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 1 - Protected Resource Metadata
-// Reference: chatgpt-apps/auth.md lines 28-56
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step1_FetchProtectedResourceMetadata() {
-    c.t.Log("Step 1: Fetching protected resource metadata")
-
-    resp, err := c.client.Get(c.serverURL + "/.well-known/oauth-protected-resource")
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    // MUST return 200
-    require.Equal(c.t, http.StatusOK, resp.StatusCode,
-        "Protected resource metadata endpoint must return 200")
-
-    // MUST return JSON
-    require.Equal(c.t, "application/json", resp.Header.Get("Content-Type"),
-        "Protected resource metadata must be JSON")
-
-    err = json.NewDecoder(resp.Body).Decode(&c.resourceMetadata)
-    require.NoError(c.t, err, "Protected resource metadata must be valid JSON")
-
-    // REQUIRED field: resource (auth.md line 43)
-    require.NotEmpty(c.t, c.resourceMetadata.Resource,
-        "Protected resource metadata MUST include 'resource' field")
-
-    // REQUIRED field: authorization_servers (auth.md line 44)
-    require.NotEmpty(c.t, c.resourceMetadata.AuthorizationServers,
-        "Protected resource metadata MUST include 'authorization_servers' field")
-
-    c.t.Logf("  ✓ resource: %s", c.resourceMetadata.Resource)
-    c.t.Logf("  ✓ authorization_servers: %v", c.resourceMetadata.AuthorizationServers)
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 2 - Auth Server Metadata
-// Reference: chatgpt-apps/auth.md lines 58-80
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step2_FetchAuthServerMetadata() {
-    c.t.Log("Step 2: Fetching authorization server metadata")
-
-    authServer := c.resourceMetadata.AuthorizationServers[0]
-    resp, err := c.client.Get(authServer + "/.well-known/oauth-authorization-server")
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    require.Equal(c.t, http.StatusOK, resp.StatusCode)
-
-    err = json.NewDecoder(resp.Body).Decode(&c.authServerMetadata)
-    require.NoError(c.t, err)
-
-    // REQUIRED: authorization_endpoint (auth.md line 77)
-    require.NotEmpty(c.t, c.authServerMetadata.AuthorizationEndpoint,
-        "Auth server metadata MUST include 'authorization_endpoint'")
-
-    // REQUIRED: token_endpoint (auth.md line 77)
-    require.NotEmpty(c.t, c.authServerMetadata.TokenEndpoint,
-        "Auth server metadata MUST include 'token_endpoint'")
-
-    // REQUIRED: registration_endpoint (auth.md line 78)
-    require.NotEmpty(c.t, c.authServerMetadata.RegistrationEndpoint,
-        "Auth server metadata MUST include 'registration_endpoint' for DCR")
-
-    // CRITICAL: code_challenge_methods_supported MUST include S256 (auth.md line 79)
-    // "If that field is missing, ChatGPT will refuse to complete the flow"
-    require.Contains(c.t, c.authServerMetadata.CodeChallengeMethodsSupported, "S256",
-        "CRITICAL: code_challenge_methods_supported MUST include 'S256' or ChatGPT will refuse")
-
-    c.t.Logf("  ✓ authorization_endpoint: %s", c.authServerMetadata.AuthorizationEndpoint)
-    c.t.Logf("  ✓ token_endpoint: %s", c.authServerMetadata.TokenEndpoint)
-    c.t.Logf("  ✓ registration_endpoint: %s", c.authServerMetadata.RegistrationEndpoint)
-    c.t.Logf("  ✓ code_challenge_methods_supported includes S256")
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 3 - Dynamic Client Registration
-// Reference: chatgpt-apps/auth.md lines 107-109, 121-125
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step3_DynamicClientRegistration() {
-    c.t.Log("Step 3: Dynamic Client Registration")
-
-    // ChatGPT redirect URIs (auth.md lines 84-86)
-    dcrReq := DCRRequest{
-        ClientName:    "ChatGPT",
-        RedirectURIs:  []string{"https://chatgpt.com/connector_platform_oauth_redirect"},
-        GrantTypes:    []string{"authorization_code", "refresh_token"},
-        ResponseTypes: []string{"code"},
-    }
-
-    body, _ := json.Marshal(dcrReq)
-    resp, err := c.client.Post(
-        c.authServerMetadata.RegistrationEndpoint,
-        "application/json",
-        strings.NewReader(string(body)),
-    )
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    // DCR must succeed
-    require.Equal(c.t, http.StatusOK, resp.StatusCode,
-        "Dynamic Client Registration must return 200 (or 201)")
-
-    var dcrResp DCRResponse
-    err = json.NewDecoder(resp.Body).Decode(&dcrResp)
-    require.NoError(c.t, err)
-
-    // MUST return client_id
-    require.NotEmpty(c.t, dcrResp.ClientID,
-        "DCR response MUST include 'client_id'")
-
-    // MUST return client_secret
-    require.NotEmpty(c.t, dcrResp.ClientSecret,
-        "DCR response MUST include 'client_secret'")
-
-    c.clientID = dcrResp.ClientID
-    c.clientSecret = dcrResp.ClientSecret
-
-    c.t.Logf("  ✓ client_id: %s", c.clientID)
-    c.t.Logf("  ✓ client_secret: [REDACTED]")
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 4 - Authorization Code + PKCE
-// Reference: chatgpt-apps/auth.md lines 88-97, 111-113
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step4_GeneratePKCE() {
-    c.t.Log("Step 4a: Generating PKCE challenge")
-
-    // Generate code_verifier (43-128 chars)
-    c.codeVerifier = generateSecureRandom(64)
-
-    // Generate code_challenge using S256 (auth.md lines 94-97)
-    h := sha256.Sum256([]byte(c.codeVerifier))
-    c.codeChallenge = base64.RawURLEncoding.EncodeToString(h[:])
-
-    c.t.Logf("  ✓ code_verifier: %s...", c.codeVerifier[:16])
-    c.t.Logf("  ✓ code_challenge (S256): %s", c.codeChallenge)
-}
-
-func (c *ChatGPTOAuthConformanceTest) Step4_AuthorizationRequest(redirectURI string) string {
-    c.t.Log("Step 4b: Authorization request")
-
-    state := generateSecureRandom(32)
-
-    // Build authorization URL exactly as ChatGPT does (auth.md lines 88-92)
-    params := url.Values{
-        "client_id":             {c.clientID},
-        "redirect_uri":          {redirectURI},
-        "response_type":         {"code"},
-        "scope":                 {"notes:read notes:write"},
-        "state":                 {state},
-        "code_challenge":        {c.codeChallenge},
-        "code_challenge_method": {"S256"},
-        // CRITICAL: ChatGPT sends resource parameter (auth.md lines 88-92)
-        "resource":              {c.resourceMetadata.Resource},
-    }
-
-    authURL := c.authServerMetadata.AuthorizationEndpoint + "?" + params.Encode()
-    c.t.Logf("  ✓ Authorization URL: %s", authURL)
-
-    return authURL
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 5 - Token Exchange
-// Reference: chatgpt-apps/auth.md lines 115-116
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step5_TokenExchange(code, redirectURI string) {
-    c.t.Log("Step 5: Token exchange")
-
-    // Token request exactly as ChatGPT does (auth.md lines 88-92)
-    params := url.Values{
-        "grant_type":    {"authorization_code"},
-        "client_id":     {c.clientID},
-        "client_secret": {c.clientSecret},
-        "code":          {code},
-        "redirect_uri":  {redirectURI},
-        "code_verifier": {c.codeVerifier},
-        // CRITICAL: ChatGPT sends resource parameter (auth.md lines 88-92)
-        "resource":      {c.resourceMetadata.Resource},
-    }
-
-    resp, err := c.client.PostForm(c.authServerMetadata.TokenEndpoint, params)
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    require.Equal(c.t, http.StatusOK, resp.StatusCode,
-        "Token exchange must return 200")
-
-    var tokenResp TokenResponse
-    err = json.NewDecoder(resp.Body).Decode(&tokenResp)
-    require.NoError(c.t, err)
-
-    require.NotEmpty(c.t, tokenResp.AccessToken,
-        "Token response MUST include 'access_token'")
-    require.Equal(c.t, "Bearer", tokenResp.TokenType,
-        "Token type MUST be 'Bearer'")
-
-    c.accessToken = tokenResp.AccessToken
-    c.refreshToken = tokenResp.RefreshToken
-
-    c.t.Logf("  ✓ access_token: [REDACTED]")
-    c.t.Logf("  ✓ token_type: %s", tokenResp.TokenType)
-    c.t.Logf("  ✓ expires_in: %d", tokenResp.ExpiresIn)
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 6 - Token Verification
-// Reference: chatgpt-apps/auth.md lines 151-162
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step6_VerifyTokenWorks() {
-    c.t.Log("Step 6: Verify token works on MCP endpoint")
-
-    req, _ := http.NewRequest("POST", c.serverURL+"/mcp", strings.NewReader(`{
-        "jsonrpc": "2.0",
-        "method": "tools/list",
-        "id": 1
-    }`))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", "Bearer "+c.accessToken)
-
-    resp, err := c.client.Do(req)
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    require.Equal(c.t, http.StatusOK, resp.StatusCode,
-        "MCP request with valid token must return 200")
-
-    c.t.Log("  ✓ MCP request with Bearer token succeeded")
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 7 - Auth Trigger (401 + _meta)
-// Reference: chatgpt-apps/auth.md lines 180-280
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) Step7_VerifyAuthTrigger() {
-    c.t.Log("Step 7: Verify auth trigger response")
-
-    // Request WITHOUT token
-    req, _ := http.NewRequest("POST", c.serverURL+"/mcp", strings.NewReader(`{
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {"name": "create_note", "arguments": {"title": "test"}},
-        "id": 1
-    }`))
-    req.Header.Set("Content-Type", "application/json")
-    // No Authorization header
-
-    resp, err := c.client.Do(req)
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    // Check for WWW-Authenticate header (auth.md lines 48-54)
-    wwwAuth := resp.Header.Get("WWW-Authenticate")
-    if resp.StatusCode == http.StatusUnauthorized {
-        require.Contains(c.t, wwwAuth, "resource_metadata",
-            "401 response MUST include WWW-Authenticate with resource_metadata")
-        c.t.Log("  ✓ 401 response includes WWW-Authenticate header")
-    }
-
-    // If 200, check for _meta["mcp/www_authenticate"] (auth.md lines 257-280)
-    if resp.StatusCode == http.StatusOK {
-        var mcpResp map[string]interface{}
-        json.NewDecoder(resp.Body).Decode(&mcpResp)
-
-        if result, ok := mcpResp["result"].(map[string]interface{}); ok {
-            if meta, ok := result["_meta"].(map[string]interface{}); ok {
-                _, hasWWWAuth := meta["mcp/www_authenticate"]
-                require.True(c.t, hasWWWAuth,
-                    "MCP error response MUST include _meta['mcp/www_authenticate']")
-                c.t.Log("  ✓ MCP response includes _meta['mcp/www_authenticate']")
-            }
-        }
-    }
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Negative Tests
-// =============================================================================
-
-func (c *ChatGPTOAuthConformanceTest) TestNegative_NoPKCE() {
-    c.t.Log("Negative Test: Authorization without PKCE must fail")
-
-    params := url.Values{
-        "client_id":     {c.clientID},
-        "redirect_uri":  {"https://chatgpt.com/connector_platform_oauth_redirect"},
-        "response_type": {"code"},
-        "scope":         {"notes:read"},
-        "state":         {"test"},
-        // NO code_challenge - must be rejected
-    }
-
-    resp, err := c.client.Get(c.authServerMetadata.AuthorizationEndpoint + "?" + params.Encode())
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    require.Equal(c.t, http.StatusBadRequest, resp.StatusCode,
-        "Authorization without PKCE MUST be rejected (OAuth 2.1 requirement)")
-
-    c.t.Log("  ✓ Authorization without PKCE correctly rejected")
-}
-
-func (c *ChatGPTOAuthConformanceTest) TestNegative_WrongCodeVerifier() {
-    c.t.Log("Negative Test: Token exchange with wrong code_verifier must fail")
-
-    // This would be tested after getting a valid code
-    // The token endpoint MUST reject mismatched code_verifier
-}
-
-func (c *ChatGPTOAuthConformanceTest) TestNegative_InvalidRedirectURI() {
-    c.t.Log("Negative Test: DCR with invalid redirect_uri must fail")
-
-    dcrReq := DCRRequest{
-        ClientName:    "Evil Client",
-        RedirectURIs:  []string{"https://evil.com/steal-tokens"},
-        GrantTypes:    []string{"authorization_code"},
-        ResponseTypes: []string{"code"},
-    }
-
-    body, _ := json.Marshal(dcrReq)
-    resp, err := c.client.Post(
-        c.authServerMetadata.RegistrationEndpoint,
-        "application/json",
-        strings.NewReader(string(body)),
-    )
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    require.Equal(c.t, http.StatusBadRequest, resp.StatusCode,
-        "DCR with non-allowlisted redirect_uri MUST be rejected")
-
-    c.t.Log("  ✓ DCR with invalid redirect_uri correctly rejected")
-}
-
-// =============================================================================
-// MAIN TEST RUNNER
-// =============================================================================
-
-func TestChatGPTOAuthConformance(t *testing.T) {
-    // Setup test server
-    server := setupTestServer(t)
-    defer server.Close()
-
-    conformance := &ChatGPTOAuthConformanceTest{
-        t:         t,
-        serverURL: server.URL,
-        client:    &http.Client{},
-    }
-
-    // Run the exact ChatGPT OAuth flow
-    t.Run("Step1_ProtectedResourceMetadata", conformance.Step1_FetchProtectedResourceMetadata)
-    t.Run("Step2_AuthServerMetadata", conformance.Step2_FetchAuthServerMetadata)
-    t.Run("Step3_DynamicClientRegistration", conformance.Step3_DynamicClientRegistration)
-    t.Run("Step4_PKCE", conformance.Step4_GeneratePKCE)
-
-    // For full flow, we need to simulate browser auth
-    // In CI, use a test user that auto-approves
-    t.Run("Step7_AuthTrigger", conformance.Step7_VerifyAuthTrigger)
-
-    // Negative tests
-    t.Run("Negative_NoPKCE", conformance.TestNegative_NoPKCE)
-    t.Run("Negative_InvalidRedirectURI", conformance.TestNegative_InvalidRedirectURI)
-}
-
-// Property-based conformance tests using rapid
-func TestChatGPTOAuthConformance_Properties(t *testing.T) {
-    rapid.Check(t, func(t *rapid.T) {
-        // Property: S256 must always be in code_challenge_methods_supported
-        // Property: resource parameter must be echoed
-        // Property: PKCE must be enforced
-        // Property: only allowlisted redirect_uris accepted
-    })
-}
-
-// Helper functions
-func generateSecureRandom(length int) string {
-    // Implementation
-    return ""
-}
-
-func setupTestServer(t *testing.T) *httptest.Server {
-    // Implementation
-    return nil
-}
+**File**: `tests/conformance/oauth_conformance_test.go`
+
+> **NOTE**: The unified conformance test implementation has been moved to the actual test file at `tests/conformance/oauth_conformance_test.go`. This file contains a single unified test client that supports BOTH ChatGPT (confidential client) and Claude (public client) modes, eliminating code duplication between the two flows.
+>
+> The test file uses a `ClientMode` type to switch between:
+> - `ClientModeChatGPT`: Confidential client with `client_secret` on token endpoint
+> - `ClientModeClaude`: Public client without `client_secret` (PKCE-only)
+>
+> Common code for Steps 1, 2, 4, 6, and 7 is shared. Client-specific code for Step 3 (DCR) and Step 5 (Token Exchange) is handled based on mode.
+
+**Run conformance tests:**
+```bash
+export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)"
+go test -v ./tests/conformance/...
 ```
 
 ---
@@ -675,215 +202,13 @@ Reference: [Building Custom Connectors](https://support.claude.com/en/articles/1
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Claude Code Conformance Test Implementation
+### Claude-specific Test Details
 
-**File**: `tests/conformance/claude_oauth_test.go`
+The Claude-specific test logic is included in the unified test file at `tests/conformance/oauth_conformance_test.go`. Key differences from ChatGPT:
 
-```go
-// Package conformance implements a custom Claude Code OAuth conformance test client.
-// This tests the EXACT flow that Claude Code performs as a PUBLIC OAuth client.
-//
-// Key difference from ChatGPT: Claude uses token_endpoint_auth_method: "none"
-// meaning NO client_secret is sent on token exchange (relies on PKCE only).
-//
-// Reference: https://support.claude.com/en/articles/11503834-building-custom-connectors-via-remote-mcp-servers
-package conformance
-
-// ClaudeOAuthConformanceTest tests the exact OAuth flow that Claude Code performs.
-// CRITICAL: Claude is a PUBLIC client (no client_secret on token endpoint)
-type ClaudeOAuthConformanceTest struct {
-    t         *testing.T
-    serverURL string
-    client    *http.Client
-
-    resourceMetadata   ResourceMetadata
-    authServerMetadata AuthServerMetadata
-
-    clientID string
-    // NOTE: No clientSecret field - Claude doesn't use it on token endpoint
-
-    codeVerifier  string
-    codeChallenge string
-
-    accessToken  string
-    refreshToken string
-}
-
-// ClaudeDCRRequest - Claude's DCR request differs from ChatGPT
-type ClaudeDCRRequest struct {
-    ClientName              string   `json:"client_name"`
-    GrantTypes              []string `json:"grant_types"`
-    RedirectURIs            []string `json:"redirect_uris"`
-    ResponseTypes           []string `json:"response_types"`
-    TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"` // "none" for Claude!
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 3 - Dynamic Client Registration (Claude-specific)
-// Reference: https://support.claude.com/en/articles/11503834
-// =============================================================================
-
-func (c *ClaudeOAuthConformanceTest) Step3_DynamicClientRegistration() {
-    c.t.Log("Step 3: Dynamic Client Registration (Claude - PUBLIC CLIENT)")
-
-    // Claude's DCR request - note token_endpoint_auth_method: "none"
-    dcrReq := ClaudeDCRRequest{
-        ClientName:              "claudeai",
-        GrantTypes:              []string{"authorization_code", "refresh_token"},
-        RedirectURIs:            []string{"https://claude.ai/api/mcp/auth_callback"},
-        ResponseTypes:           []string{"code"},
-        TokenEndpointAuthMethod: "none", // CRITICAL: Claude is a public client
-    }
-
-    body, _ := json.Marshal(dcrReq)
-    resp, err := c.client.Post(
-        c.authServerMetadata.RegistrationEndpoint,
-        "application/json",
-        strings.NewReader(string(body)),
-    )
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    require.Equal(c.t, http.StatusOK, resp.StatusCode,
-        "DCR must succeed for public client (token_endpoint_auth_method=none)")
-
-    var dcrResp DCRResponse
-    err = json.NewDecoder(resp.Body).Decode(&dcrResp)
-    require.NoError(c.t, err)
-
-    // MUST return client_id
-    require.NotEmpty(c.t, dcrResp.ClientID,
-        "DCR response MUST include 'client_id'")
-
-    // client_secret may or may not be returned for public clients
-    // but it should NOT be required for token exchange
-
-    c.clientID = dcrResp.ClientID
-
-    c.t.Logf("  ✓ client_id: %s", c.clientID)
-    c.t.Log("  ✓ token_endpoint_auth_method: none (public client)")
-}
-
-// =============================================================================
-// CONFORMANCE TEST: Step 5 - Token Exchange (Claude-specific - NO client_secret)
-// =============================================================================
-
-func (c *ClaudeOAuthConformanceTest) Step5_TokenExchange_PublicClient(code, redirectURI string) {
-    c.t.Log("Step 5: Token exchange (Claude - PUBLIC CLIENT, no client_secret)")
-
-    // Claude's token request - NO client_secret, relies on PKCE only
-    params := url.Values{
-        "grant_type":    {"authorization_code"},
-        "client_id":     {c.clientID},
-        // NO client_secret - this is the key difference from ChatGPT
-        "code":          {code},
-        "redirect_uri":  {redirectURI},
-        "code_verifier": {c.codeVerifier},
-    }
-
-    resp, err := c.client.PostForm(c.authServerMetadata.TokenEndpoint, params)
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    // MUST succeed without client_secret (PKCE provides proof)
-    require.Equal(c.t, http.StatusOK, resp.StatusCode,
-        "Token exchange MUST work without client_secret for public clients with PKCE")
-
-    var tokenResp TokenResponse
-    err = json.NewDecoder(resp.Body).Decode(&tokenResp)
-    require.NoError(c.t, err)
-
-    require.NotEmpty(c.t, tokenResp.AccessToken)
-    require.Equal(c.t, "Bearer", tokenResp.TokenType)
-
-    c.accessToken = tokenResp.AccessToken
-    c.refreshToken = tokenResp.RefreshToken
-
-    c.t.Log("  ✓ Token exchange succeeded WITHOUT client_secret")
-    c.t.Log("  ✓ PKCE code_verifier provided sufficient proof")
-}
-
-// =============================================================================
-// NEGATIVE TEST: Verify server rejects token exchange without PKCE for public client
-// =============================================================================
-
-func (c *ClaudeOAuthConformanceTest) TestNegative_PublicClientWithoutPKCE() {
-    c.t.Log("Negative Test: Public client token exchange without PKCE must fail")
-
-    // Try token exchange with neither client_secret NOR code_verifier
-    params := url.Values{
-        "grant_type":   {"authorization_code"},
-        "client_id":    {c.clientID},
-        "code":         {"test-code"},
-        "redirect_uri": {"https://claude.ai/api/mcp/auth_callback"},
-        // NO client_secret AND NO code_verifier
-    }
-
-    resp, err := c.client.PostForm(c.authServerMetadata.TokenEndpoint, params)
-    require.NoError(c.t, err)
-    defer resp.Body.Close()
-
-    // MUST fail - public client requires PKCE
-    require.Equal(c.t, http.StatusBadRequest, resp.StatusCode,
-        "Token exchange for public client without PKCE MUST be rejected")
-
-    c.t.Log("  ✓ Public client without PKCE correctly rejected")
-}
-
-// =============================================================================
-// MAIN TEST RUNNER
-// =============================================================================
-
-func TestClaudeOAuthConformance(t *testing.T) {
-    server := setupTestServer(t)
-    defer server.Close()
-
-    conformance := &ClaudeOAuthConformanceTest{
-        t:         t,
-        serverURL: server.URL,
-        client:    &http.Client{},
-    }
-
-    // Steps 1-2 are same as ChatGPT (reuse from shared tests)
-    t.Run("Step1_ProtectedResourceMetadata", conformance.Step1_FetchProtectedResourceMetadata)
-    t.Run("Step2_AuthServerMetadata", conformance.Step2_FetchAuthServerMetadata)
-
-    // Step 3 is Claude-specific (public client registration)
-    t.Run("Step3_DCR_PublicClient", conformance.Step3_DynamicClientRegistration)
-
-    // Steps 4-5 are Claude-specific (no client_secret)
-    t.Run("Step4_PKCE", conformance.Step4_GeneratePKCE)
-
-    // Negative tests
-    t.Run("Negative_PublicClientWithoutPKCE", conformance.TestNegative_PublicClientWithoutPKCE)
-}
-
-// TestBothClients ensures server works with BOTH ChatGPT and Claude
-func TestBothClientsCompatibility(t *testing.T) {
-    server := setupTestServer(t)
-    defer server.Close()
-
-    // Test 1: ChatGPT flow (confidential client with client_secret)
-    t.Run("ChatGPT_ConfidentialClient", func(t *testing.T) {
-        chatgpt := &ChatGPTOAuthConformanceTest{
-            t:         t,
-            serverURL: server.URL,
-            client:    &http.Client{},
-        }
-        // Run ChatGPT tests...
-    })
-
-    // Test 2: Claude flow (public client without client_secret)
-    t.Run("Claude_PublicClient", func(t *testing.T) {
-        claude := &ClaudeOAuthConformanceTest{
-            t:         t,
-            serverURL: server.URL,
-            client:    &http.Client{},
-        }
-        // Run Claude tests...
-    })
-}
-```
+- **Step 3 (DCR)**: Includes `token_endpoint_auth_method: "none"` in the registration request
+- **Step 5 (Token Exchange)**: Does NOT include `client_secret` - relies on PKCE code_verifier only
+- **Negative Test**: Verifies that public clients without PKCE are rejected
 
 ### Server Implementation Requirements for Both Clients
 
@@ -1397,9 +722,9 @@ func MCPAuthError(resourceMetadataURL string) map[string]any {
 
 #### 9. Custom Conformance Test Client
 
-**File**: `tests/conformance/chatgpt_oauth_test.go`
+**File**: `tests/conformance/oauth_conformance_test.go`
 
-This is the PRIMARY testing mechanism. See the complete implementation above in "Custom Conformance Test Client (REQUIRED)" section.
+This is the PRIMARY testing mechanism. The unified test file supports both ChatGPT (confidential client) and Claude (public client) modes through a `ClientMode` type that determines behavior at Steps 3 and 5.
 
 **Run conformance tests:**
 ```bash
@@ -1434,7 +759,7 @@ After conformance tests pass:
 │   └── auth.md              # OFFICIAL SPEC - READ FIRST (lines 1-281)
 ├── tests/
 │   └── conformance/
-│       └── chatgpt_oauth_test.go  # Custom conformance test client
+│       └── oauth_conformance_test.go  # Unified OAuth conformance tests (ChatGPT + Claude)
 ├── internal/
 │   ├── oauth/
 │   │   ├── provider.go
@@ -1492,7 +817,8 @@ go test -v ./tests/conformance/...
 
 ### Authentication Enforcement (Layer 5)
 - [ ] ALL MCP requests require Bearer token
-- [ ] PAT endpoint works (`POST /api/tokens`)
+- [ ] PAT API endpoints work (`POST/GET/DELETE /api/tokens`)
+- [ ] PAT Management UI at `/settings/tokens` (create, list, revoke)
 - [ ] PAT can be used as Bearer token for MCP
 - [ ] Unauthenticated MCP requests return 401 + WWW-Authenticate
 - [ ] No unauthenticated codepaths remain
@@ -1601,6 +927,41 @@ CREATE TABLE personal_access_tokens (
     created_at INTEGER NOT NULL,
     last_used_at INTEGER
 );
+```
+
+### 12b. PAT Management UI
+
+**File**: `web/templates/settings_tokens.html`
+
+**Route**: `GET /settings/tokens` (session auth required)
+
+UI calls the same backend API endpoints - no duplicate logic.
+
+**Views**:
+
+1. **Token List** (default view)
+   - Table: name, scope, created_at, last_used_at
+   - "Revoke" button per row → calls `DELETE /api/tokens/{id}`
+   - "Create New Token" button
+
+2. **Create Token Form**
+   - Name (text input, required)
+   - Scope (dropdown: "Read & Write" / "Read Only")
+   - Password (re-authenticate)
+   - Submit → calls `POST /api/tokens`
+
+3. **Token Created Modal** (one-time display)
+   - Shows token value + copy button
+   - Warning: "Only shown once"
+   - "Done" dismisses
+
+4. **Revoke Confirmation**
+   - "This will immediately invalidate the token"
+   - Cancel / Revoke buttons
+
+**Handler** (`cmd/server/main.go`):
+```go
+mux.HandleFunc("GET /settings/tokens", h.requireSession(h.renderTokensPage))
 ```
 
 ### 13. Remove All Unauthenticated Codepaths
