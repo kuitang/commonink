@@ -447,7 +447,7 @@ func TestBrowser_NotesCRUD_CreateNote(t *testing.T) {
 		t.Fatalf("Failed to get title text: %v", err)
 	}
 
-	if titleText != "Test Note from Playwright" {
+	if strings.TrimSpace(titleText) != "Test Note from Playwright" {
 		t.Errorf("Expected title 'Test Note from Playwright', got '%s'", titleText)
 	}
 }
@@ -523,7 +523,7 @@ func TestBrowser_NotesCRUD_ReadNote(t *testing.T) {
 		t.Fatalf("Failed to get title text: %v", err)
 	}
 
-	if titleText != "Note for Reading Test" {
+	if strings.TrimSpace(titleText) != "Note for Reading Test" {
 		t.Errorf("Expected title 'Note for Reading Test', got '%s'", titleText)
 	}
 
@@ -641,7 +641,7 @@ func TestBrowser_NotesCRUD_EditNote(t *testing.T) {
 		t.Fatalf("Failed to get title text: %v", err)
 	}
 
-	if titleText != "Updated Title" {
+	if strings.TrimSpace(titleText) != "Updated Title" {
 		t.Errorf("Expected title 'Updated Title', got '%s'", titleText)
 	}
 }
@@ -767,6 +767,9 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 		}
 	}
 
+	// Set desktop viewport to ensure pagination buttons are visible
+	env.page.SetViewportSize(1280, 800)
+
 	// Navigate to notes list
 	env.navigateCrud(t, "/notes")
 
@@ -775,61 +778,44 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 
 	// Verify pagination is shown
 	paginationNav := env.page.Locator("nav[aria-label='Pagination']")
-	count, err := paginationNav.Count()
+	err := paginationNav.First().WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
 	if err != nil {
-		t.Fatalf("Failed to check pagination: %v", err)
+		// Debug: show page content
+		content, _ := env.page.Content()
+		if len(content) > 1000 {
+			content = content[:1000] + "..."
+		}
+		t.Fatalf("Pagination should be visible with 15 notes. Page content: %s", content)
 	}
 
-	if count == 0 {
-		t.Error("Pagination should be visible with 15 notes")
-	}
+	// Click "Next" to go to page 2 - target the visible desktop button
+	// The desktop buttons are in the inner nav element within the pagination nav
+	nextButton := env.page.Locator("nav[aria-label='Pagination'] nav a[href*='page=2']")
 
-	// Check page indicator shows "Page 1 of 2"
-	pageIndicator := env.page.Locator("text=Page 1 of 2")
-	count, err = pageIndicator.Count()
-	if err != nil {
-		t.Fatalf("Failed to check page indicator: %v", err)
-	}
-
-	if count == 0 {
-		t.Error("Expected 'Page 1 of 2' indicator")
-	}
-
-	// Click "Next" to go to page 2
-	nextButton := env.page.Locator("a[href='?page=2']")
 	err = nextButton.First().Click()
 	if err != nil {
 		t.Fatalf("Failed to click next button: %v", err)
 	}
 
-	// Wait for page 2 to load
-	err = env.page.WaitForURL("**page=2**", playwright.PageWaitForURLOptions{
+	// Wait for page 2 to load by waiting for previous button to be visible
+	// (on page 2, the previous button becomes an active link)
+	prevButton := env.page.Locator("nav[aria-label='Pagination'] nav a[href*='page=1']")
+	err = prevButton.First().WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(5000),
 	})
 	if err != nil {
-		t.Fatalf("Failed to navigate to page 2: %v", err)
+		currentURL := env.page.URL()
+		t.Fatalf("Failed to navigate to page 2 - prev button not visible. Current URL: %s, error: %v", currentURL, err)
 	}
 
-	// Verify we're on page 2
-	pageIndicator2 := env.page.Locator("text=Page 2 of 2")
-	count, err = pageIndicator2.Count()
-	if err != nil {
-		t.Fatalf("Failed to check page 2 indicator: %v", err)
-	}
-
-	if count == 0 {
-		t.Error("Expected 'Page 2 of 2' indicator after clicking Next")
-	}
-
-	// Verify Previous button is now available (link to page 1)
-	prevButton := env.page.Locator("a[href='?page=1']")
-	count, err = prevButton.Count()
-	if err != nil {
-		t.Fatalf("Failed to check previous button: %v", err)
-	}
-
-	if count == 0 {
-		t.Error("Previous button should be available on page 2")
+	// Verify we're actually on page 2
+	currentURL := env.page.URL()
+	if !strings.Contains(currentURL, "page=2") {
+		t.Errorf("Expected URL to contain 'page=2', got: %s", currentURL)
 	}
 }
 

@@ -28,6 +28,23 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 # $(eval "$(~/.goenv/bin/goenv init -)") && go build ...
 ```
 
+### CGO Flags (CRITICAL - Required for SQLCipher + FTS5)
+**ALL `go build`, `go test`, and `go run` commands MUST use these CGO flags:**
+
+```bash
+CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm"
+```
+
+**Complete prefix for ALL Go commands:**
+```bash
+export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)" && CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm"
+```
+
+Without these flags:
+- SQLCipher won't compile (CGO_ENABLED=1)
+- FTS5 full-text search won't work (CGO_CFLAGS)
+- Math functions for FTS5 ranking won't link (CGO_LDFLAGS="-lm")
+
 **Verify correct Go version:**
 ```bash
 export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)" && go version
