@@ -1,3 +1,15 @@
+{{define "head"}}
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="{{if .Note.Title}}{{.Note.Title}}{{else}}Untitled Note{{end}}">
+    <meta property="og:description" content="{{if .Note.Content}}{{truncate .Note.Content 160}}{{else}}A shared note on Agent Notes{{end}}">
+    <meta property="og:url" content="{{.ShareURL}}">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="{{if .Note.Title}}{{.Note.Title}}{{else}}Untitled Note{{end}}">
+    <meta name="twitter:description" content="{{if .Note.Content}}{{truncate .Note.Content 160}}{{else}}A shared note on Agent Notes{{end}}">
+{{end}}
 
 {{define "content"}}
 <div class="min-h-screen bg-gray-50 dark:bg-gray-900">

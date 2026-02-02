@@ -79,7 +79,7 @@ This project uses **property-based testing** with rapid + Go's native fuzzing. S
 
 ## CI Commands
 
-### Quick Check (~30s) - Run Before Every Commit
+### Quick Check (~45s) - Run Before Every Commit
 ```bash
 ./scripts/ci.sh quick
 ```
@@ -369,7 +369,7 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 
 | Level | When | Duration | Purpose |
 |-------|------|----------|---------|
-| **quick** | Before every commit | ~30s | Fast feedback loop |
+| **quick** | Before every commit | ~45s | Fast feedback loop |
 | **full** | Before PR, after feature complete | ~5min | Comprehensive validation + coverage |
 | **fuzz** | Nightly, after security changes | 30+ min | Deep edge case discovery |
 

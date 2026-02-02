@@ -67,7 +67,7 @@ if [[ ! "$LEVEL" =~ ^(quick|full|fuzz)$ ]]; then
     echo "Usage: $0 <level> [options]"
     echo ""
     echo "Levels:"
-    echo "  quick   - rapid property tests only, excludes e2e conformance (~30 seconds)"
+    echo "  quick   - rapid property tests only, 10 samples, excludes e2e conformance (~45 seconds)"
     echo "  full    - all tests including e2e conformance + coverage (~5 minutes)"
     echo "  fuzz    - coverage-guided fuzzing (~30+ minutes)"
     echo ""
@@ -103,12 +103,16 @@ echo ""
 if [[ "$LEVEL" == "quick" ]]; then
     echo -e "${GREEN}Running quick tests (rapid property tests)...${NC}"
     echo -e "${YELLOW}Note: Excluding tests/e2e/claude and tests/e2e/openai (conformance tests - run with 'full')${NC}"
+    echo -e "${YELLOW}Note: Using -rapid.checks=10 for faster feedback (full CI uses 100)${NC}"
 
     # Run all Test* functions (rapid tests) EXCLUDING e2e conformance tests
     # CGO_ENABLED=1 required for SQLCipher, BUILD_TAGS for FTS5
+    # -rapid.checks=10 reduces property test iterations for faster feedback
+    # (10 samples still catch most bugs while being 10x faster than default 100)
     CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" \
         $(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai') \
         -run 'Test' \
+        -rapid.checks=10 \
         2>&1 | tee "$OUTPUT_DIR/quick-test.log"
 
     echo -e "${GREEN}✓ Quick tests completed${NC}"
