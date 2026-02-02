@@ -1,3 +1,33 @@
+# CRITICAL Principles
+- In every task/subagent prompt, You MUST tell them to read the entire CLAUDE.md
+- EVERY TASK MUST USE OPUS 4.5.
+- Use parallel tasks, back ground tasks, everywhere. Defer implementation and research to them.
+- If you find an error in CLAUDE.md or anything out of date with the code, you must fix CLAUDE.md
+- NEVER write fallback or backwards compatible code. Always make sure we execute the difficult path.
+- Expense, complexity, and token limit are of no object. Simply execute what I tell you to and do not simplify it. (However, use tasks to do the heavy lifting, always as parallel as possible.)
+- ALWAYS follow the directives below on property-based testing.
+
+# ⚠️ CRITICAL: OpenAI API Model Selection ⚠️
+
+**ALWAYS USE `gpt-4o-mini` FOR OPENAI API CALLS - NEVER USE `gpt-4o`**
+
+When using the OpenAI Responses API or any OpenAI SDK calls:
+```go
+// ✅ CORRECT - Use gpt-4o-mini
+params := responses.ResponseNewParams{
+    Model: openai.ChatModelGPT4oMini,  // ✅ THIS
+    // ... rest of config
+}
+
+// ❌ WRONG - Do NOT use gpt-4o
+params := responses.ResponseNewParams{
+    Model: openai.ChatModelGPT4o,  // ❌ NOT THIS
+    // ... rest of config
+}
+```
+
+**Rationale**: Cost optimization - gpt-4o-mini is significantly cheaper while providing sufficient quality for conformance testing.
+
 # Developer Guide - Remote Notes MicroSaaS
 
 Quick reference for Claude and developers working on this project.
