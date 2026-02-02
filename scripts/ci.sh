@@ -94,13 +94,15 @@ echo -e "Parallel workers: $PARALLEL"
 echo -e "Output directory: $OUTPUT_DIR"
 echo ""
 
-# Quick level: rapid property tests only
+# Quick level: rapid property tests only (excludes heavy e2e conformance tests)
 if [[ "$LEVEL" == "quick" ]]; then
     echo -e "${GREEN}Running quick tests (rapid property tests)...${NC}"
+    echo -e "${YELLOW}Note: Excluding tests/e2e/claude and tests/e2e/openai (conformance tests - run with 'full')${NC}"
 
-    # Run all Test* functions (rapid tests)
+    # Run all Test* functions (rapid tests) EXCLUDING e2e conformance tests
     # CGO_ENABLED=1 required for SQLCipher, BUILD_TAGS for FTS5
-    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" ./... \
+    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" \
+        $(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai') \
         -run 'Test' \
         2>&1 | tee "$OUTPUT_DIR/quick-test.log"
 

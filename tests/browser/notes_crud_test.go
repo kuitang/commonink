@@ -129,10 +129,7 @@ func setupNotesCrudEnv(t *testing.T) *notesCrudEnv {
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)
 
-	// Create auth handler
-	oidcClient := auth.NewMockOIDCClient()
-	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
-	authHandler.RegisterRoutes(mux)
+	// Note: WebHandler already registers auth routes, so we don't need authHandler here
 
 	// Rate limiting middleware
 	getUserID := func(r *http.Request) string {
