@@ -34,9 +34,9 @@ type OAuthTokenClaims struct {
 
 // Middleware provides authentication middleware for HTTP handlers.
 type Middleware struct {
-	sessionService     *SessionService
-	keyManager         *crypto.KeyManager
-	oauthVerifier      OAuthTokenVerifier
+	sessionService      *SessionService
+	keyManager          *crypto.KeyManager
+	oauthVerifier       OAuthTokenVerifier
 	resourceMetadataURL string
 }
 

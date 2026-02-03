@@ -25,7 +25,21 @@ type TokenSettingsData struct {
 	BaseURL  string
 }
 
-// HandleTokenSettings handles GET /settings/tokens - shows token management page.
+// TokenNewData contains data for the new token creation page.
+type TokenNewData struct {
+	PageData
+	BaseURL string
+}
+
+// TokenCreatedData contains data for the token created confirmation page.
+type TokenCreatedData struct {
+	PageData
+	Token     string
+	TokenName string
+	BaseURL   string
+}
+
+// HandleTokenSettings handles GET /settings/tokens and GET /tokens - shows token management page.
 func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -56,17 +70,13 @@ func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request)
 		tokens = append(tokens, pat)
 	}
 
-	// Check for new token in query params (from redirect after creation)
-	newToken := r.URL.Query().Get("new_token")
-
 	data := TokenSettingsData{
 		PageData: PageData{
 			Title: "Personal Access Tokens",
 			User:  &auth.User{ID: auth.GetUserID(r.Context())},
 		},
-		Tokens:   tokens,
-		NewToken: newToken,
-		BaseURL:  h.baseURL,
+		Tokens:  tokens,
+		BaseURL: h.baseURL,
 	}
 
 	// Check for error in query params
@@ -74,7 +84,39 @@ func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request)
 		data.Error = errMsg
 	}
 
-	if err := h.renderer.Render(w, "settings/tokens.html", data); err != nil {
+	// Use the new tokens/list.html template for /tokens route, settings/tokens.html for /settings/tokens
+	templateName := "tokens/list.html"
+	if r.URL.Path == "/settings/tokens" {
+		templateName = "settings/tokens.html"
+	}
+
+	if err := h.renderer.Render(w, templateName, data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HandleNewTokenPage handles GET /tokens/new - shows the new token creation form.
+func (h *WebHandler) HandleNewTokenPage(w http.ResponseWriter, r *http.Request) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	data := TokenNewData{
+		PageData: PageData{
+			Title: "Create New Token",
+			User:  &auth.User{ID: auth.GetUserID(r.Context())},
+		},
+		BaseURL: h.baseURL,
+	}
+
+	// Check for error in query params
+	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+		data.Error = errMsg
+	}
+
+	if err := h.renderer.Render(w, "tokens/new.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -94,7 +136,7 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/settings/tokens?error=Invalid+form+data", http.StatusFound)
+		http.Redirect(w, r, "/tokens/new?error=Invalid+form+data", http.StatusFound)
 		return
 	}
 
@@ -106,31 +148,31 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	// Validate required fields
 	if name == "" {
-		http.Redirect(w, r, "/settings/tokens?error=Token+name+is+required", http.StatusFound)
+		http.Redirect(w, r, "/tokens/new?error=Token+name+is+required", http.StatusFound)
 		return
 	}
 
 	if email == "" || password == "" {
-		http.Redirect(w, r, "/settings/tokens?error=Email+and+password+required+for+authentication", http.StatusFound)
+		http.Redirect(w, r, "/tokens/new?error=Email+and+password+required+for+authentication", http.StatusFound)
 		return
 	}
 
 	// Verify credentials
 	account, err := userDB.Queries().GetAccount(r.Context(), userID)
 	if err != nil {
-		http.Redirect(w, r, "/settings/tokens?error=Failed+to+verify+credentials", http.StatusFound)
+		http.Redirect(w, r, "/tokens/new?error=Failed+to+verify+credentials", http.StatusFound)
 		return
 	}
 
 	if account.Email != email {
-		http.Redirect(w, r, "/settings/tokens?error=Invalid+credentials", http.StatusFound)
+		http.Redirect(w, r, "/tokens/new?error=Invalid+credentials", http.StatusFound)
 		return
 	}
 
 	// Verify password if hash exists
 	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
 		if !auth.VerifyPassword(password, account.PasswordHash.String) {
-			http.Redirect(w, r, "/settings/tokens?error=Invalid+credentials", http.StatusFound)
+			http.Redirect(w, r, "/tokens/new?error=Invalid+credentials", http.StatusFound)
 			return
 		}
 	}
@@ -151,12 +193,24 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// Create the PAT
 	token, _, err := createPATForUser(r.Context(), userDB, userID, name, scope, expiresIn)
 	if err != nil {
-		http.Redirect(w, r, "/settings/tokens?error=Failed+to+create+token", http.StatusFound)
+		http.Redirect(w, r, "/tokens/new?error=Failed+to+create+token", http.StatusFound)
 		return
 	}
 
-	// Redirect back to settings with the new token displayed
-	http.Redirect(w, r, "/settings/tokens?new_token="+token, http.StatusFound)
+	// Render the token created page (shows token only once)
+	data := TokenCreatedData{
+		PageData: PageData{
+			Title: "Token Created",
+			User:  &auth.User{ID: userID},
+		},
+		Token:     token,
+		TokenName: name,
+		BaseURL:   h.baseURL,
+	}
+
+	if err := h.renderer.Render(w, "tokens/created.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
 }
 
 // createPATForUser creates a PAT and returns the full token string.
@@ -194,7 +248,7 @@ func createPATForUser(ctx context.Context, userDB *db.UserDB, userID, name, scop
 	return fullToken, patID, nil
 }
 
-// HandleRevokeToken handles POST /settings/tokens/{id}/revoke - revokes a PAT.
+// HandleRevokeToken handles POST /settings/tokens/{id}/revoke and POST /tokens/{id}/revoke - revokes a PAT.
 func (h *WebHandler) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -204,22 +258,22 @@ func (h *WebHandler) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 
 	patID := r.PathValue("id")
 	if patID == "" {
-		http.Redirect(w, r, "/settings/tokens?error=Token+ID+required", http.StatusFound)
+		http.Redirect(w, r, "/tokens?error=Token+ID+required", http.StatusFound)
 		return
 	}
 
 	// Verify the PAT exists
 	_, err := userDB.Queries().GetPATByID(r.Context(), patID)
 	if err != nil {
-		http.Redirect(w, r, "/settings/tokens?error=Token+not+found", http.StatusFound)
+		http.Redirect(w, r, "/tokens?error=Token+not+found", http.StatusFound)
 		return
 	}
 
 	// Delete the PAT
 	if err := userDB.Queries().DeletePAT(r.Context(), patID); err != nil {
-		http.Redirect(w, r, "/settings/tokens?error=Failed+to+revoke+token", http.StatusFound)
+		http.Redirect(w, r, "/tokens?error=Failed+to+revoke+token", http.StatusFound)
 		return
 	}
 
-	http.Redirect(w, r, "/settings/tokens", http.StatusFound)
+	http.Redirect(w, r, "/tokens", http.StatusFound)
 }

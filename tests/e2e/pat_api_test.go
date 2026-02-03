@@ -165,64 +165,6 @@ type testHelper interface {
 	Fatal(args ...any)
 }
 
-// createTestUserWithSession creates a test user and returns their session cookie.
-// DEPRECATED: Use createTestUserWithCachedPassword for property tests to avoid
-// expensive Argon2 hash computation on every iteration.
-func (s *patTestServer) createTestUserWithSession(t testHelper, emailAddr, password string) (userID string, sessionCookie *http.Cookie) {
-	ctx := context.Background()
-
-	// Create or find user
-	user, err := s.userService.FindOrCreateByEmail(ctx, emailAddr)
-	if err != nil {
-		t.Fatalf("Failed to create user: %v", err)
-	}
-
-	// Set password for the user (needed for PAT creation)
-	passwordHash, err := auth.HashPassword(password)
-	if err != nil {
-		t.Fatalf("Failed to hash password: %v", err)
-	}
-
-	// Get user's database and set the password hash
-	dek, err := s.keyManager.GetOrCreateUserDEK(user.ID)
-	if err != nil {
-		t.Fatalf("Failed to get user DEK: %v", err)
-	}
-	userDB, err := db.OpenUserDBWithDEK(user.ID, dek)
-	if err != nil {
-		t.Fatalf("Failed to open user DB: %v", err)
-	}
-
-	// First create the account record (if it doesn't exist)
-	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
-		UserID:       user.ID,
-		Email:        emailAddr,
-		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-		CreatedAt:    time.Now().Unix(),
-	})
-	if err != nil {
-		// Account might already exist, try updating the password instead
-		err = userDB.Queries().UpdateAccountPasswordHash(ctx, userdb.UpdateAccountPasswordHashParams{
-			PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-			UserID:       user.ID,
-		})
-		if err != nil {
-			t.Fatalf("Failed to set account password: %v", err)
-		}
-	}
-
-	// Create session
-	sessionID, err := s.sessionService.Create(ctx, user.ID)
-	if err != nil {
-		t.Fatalf("Failed to create session: %v", err)
-	}
-
-	return user.ID, &http.Cookie{
-		Name:  auth.SessionCookieName,
-		Value: sessionID,
-	}
-}
-
 // createTestUserWithCachedPassword creates a test user using a pre-computed password hash.
 // This is ~100x faster than createTestUserWithSession because it skips Argon2 hashing.
 // Use cachedTestPassword as the password when calling APIs that require re-authentication.
@@ -1110,6 +1052,493 @@ func FuzzPATAPI_Expiration_Properties(f *testing.F) {
 		server := setupPATTestServerRapid(rt)
 		defer server.cleanup()
 		testPATAPI_Expiration_Properties(rt, server)
+	}))
+}
+
+// =============================================================================
+// Property 11: One-Time Token Reveal Property
+// Token value is returned ONLY on creation, never on list
+// =============================================================================
+
+func testPATAPI_OneTimeReveal_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Create PAT and capture the token value
+	tokenID, tokenValue := server.createPAT(t, sessionCookie, tokenName, "read_write", emailAddr, password)
+
+	// Property 1: Token value was returned on creation
+	if tokenValue == "" {
+		t.Fatal("Token value should be returned on creation")
+	}
+	if !strings.HasPrefix(tokenValue, auth.PATPrefix) {
+		t.Fatalf("Token should have correct prefix, got: %s", tokenValue[:min(20, len(tokenValue))])
+	}
+
+	// Property 2: Token value is NOT returned when listing
+	tokens := server.listPATs(t, sessionCookie)
+	for _, tok := range tokens {
+		if tok.ID == tokenID {
+			// The PAT struct in list response should NOT contain the token value
+			// auth.PAT struct doesn't have a Token field - only ID, Name, Scope, ExpiresAt, CreatedAt, LastUsedAt
+			// This is by design - the token value is never exposed after creation
+			// We verify the token exists in the list but has no way to retrieve the secret
+			if tok.Name != tokenName {
+				t.Fatalf("Token name mismatch: expected %q, got %q", tokenName, tok.Name)
+			}
+			// Success: token metadata is available, but token value is not exposed
+			return
+		}
+	}
+	t.Fatalf("Token %s not found in list", tokenID)
+}
+
+func TestPATAPI_OneTimeReveal_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_OneTimeReveal_Properties(rt, server)
+	})
+}
+
+func FuzzPATAPI_OneTimeReveal_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_OneTimeReveal_Properties(rt, server)
+	}))
+}
+
+// =============================================================================
+// Property 12: Duplicate Names Allowed Property
+// Multiple PATs with the same name can be created (no uniqueness constraint on name)
+// =============================================================================
+
+func testPATAPI_DuplicateNames_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Create first PAT with the name
+	tokenID1, tokenValue1 := server.createPAT(t, sessionCookie, tokenName, "read_write", emailAddr, password)
+
+	// Property 1: First token created successfully
+	if tokenID1 == "" || tokenValue1 == "" {
+		t.Fatal("First token should be created successfully")
+	}
+
+	// Create second PAT with the SAME name
+	tokenID2, tokenValue2 := server.createPAT(t, sessionCookie, tokenName, "read_write", emailAddr, password)
+
+	// Property 2: Second token also created successfully (no uniqueness constraint on name)
+	if tokenID2 == "" || tokenValue2 == "" {
+		t.Fatal("Second token with same name should be created successfully")
+	}
+
+	// Property 3: The two tokens have different IDs
+	if tokenID1 == tokenID2 {
+		t.Fatal("Two tokens should have different IDs")
+	}
+
+	// Property 4: The two tokens have different values
+	if tokenValue1 == tokenValue2 {
+		t.Fatal("Two tokens should have different values")
+	}
+
+	// Property 5: Both tokens appear in list
+	tokens := server.listPATs(t, sessionCookie)
+	found1, found2 := false, false
+	for _, tok := range tokens {
+		if tok.ID == tokenID1 {
+			found1 = true
+		}
+		if tok.ID == tokenID2 {
+			found2 = true
+		}
+	}
+	if !found1 || !found2 {
+		t.Fatalf("Both tokens should appear in list: found1=%v, found2=%v", found1, found2)
+	}
+
+	// Property 6: Both tokens work for authentication
+	server.authenticateWithPATExpectSuccess(t, tokenValue1)
+	server.authenticateWithPATExpectSuccess(t, tokenValue2)
+}
+
+func TestPATAPI_DuplicateNames_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_DuplicateNames_Properties(rt, server)
+	})
+}
+
+func FuzzPATAPI_DuplicateNames_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_DuplicateNames_Properties(rt, server)
+	}))
+}
+
+// =============================================================================
+// Property 13: Expiration Enforcement Property
+// Expired tokens are rejected at authentication time
+// =============================================================================
+
+// createPATWithExpiry creates a PAT via the API with custom expiry and returns the token ID and full token value.
+func (s *patTestServer) createPATWithExpiry(t testHelper, sessionCookie *http.Cookie, name, scope, email, password string, expiresIn int64) (tokenID, tokenValue string) {
+	reqBody := auth.CreatePATRequest{
+		Name:      name,
+		Scope:     scope,
+		ExpiresIn: expiresIn,
+		Email:     email,
+		Password:  password,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", s.server.URL+"/api/tokens", bytes.NewReader(bodyBytes))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Failed to create PAT: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var result auth.CreatePATResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	return result.ID, result.Token
+}
+
+func testPATAPI_ExpirationEnforcement_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Create PAT with 2 second expiry (more than 1s to avoid races, but still short enough to test)
+	tokenID, tokenValue := server.createPATWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, 2)
+
+	// Property 1: Token was created successfully
+	if tokenID == "" || tokenValue == "" {
+		t.Fatal("Token should be created successfully")
+	}
+
+	// Property 2: Token works immediately after creation
+	status := server.authenticateWithPAT(t, tokenValue)
+	if status != http.StatusOK {
+		t.Fatalf("Fresh token should work: expected 200, got %d", status)
+	}
+
+	// Wait for token to expire (3 seconds to be safe - token expires at 2s, we wait 3s)
+	time.Sleep(3 * time.Second)
+
+	// Property 3: Token is rejected after expiration
+	status = server.authenticateWithPAT(t, tokenValue)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("Expired token should be rejected: expected 401, got %d", status)
+	}
+}
+
+func TestPATAPI_ExpirationEnforcement_Properties(t *testing.T) {
+	// Note: This test uses a deterministic approach because each iteration
+	// requires a 3-second sleep to wait for token expiry, making full
+	// rapid property testing too slow. The expiry enforcement behavior
+	// doesn't benefit from random input variation anyway.
+	server := setupPATTestServer(t)
+	defer server.cleanup()
+
+	emailAddr := "expiration-test@test.com"
+	tokenName := "expiration-test-token"
+
+	// Create test user with a fresh session
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Create PAT with 2 second expiry
+	tokenID, tokenValue := server.createPATWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, 2)
+
+	// Property 1: Token was created successfully
+	if tokenID == "" || tokenValue == "" {
+		t.Fatal("Token should be created successfully")
+	}
+
+	// Property 2: Token works immediately after creation
+	status := server.authenticateWithPAT(t, tokenValue)
+	if status != http.StatusOK {
+		t.Fatalf("Fresh token should work: expected 200, got %d", status)
+	}
+
+	// Wait for token to expire (3 seconds to be safe - token expires at 2s, we wait 3s)
+	time.Sleep(3 * time.Second)
+
+	// Property 3: Token is rejected after expiration
+	status = server.authenticateWithPAT(t, tokenValue)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("Expired token should be rejected: expected 401, got %d", status)
+	}
+}
+
+// Note: No fuzz entry point for ExpirationEnforcement because:
+// 1. The test requires a 3-second sleep which makes fuzzing impractical
+// 2. The expiry enforcement behavior is deterministic and doesn't benefit from random inputs
+
+// =============================================================================
+// Property 14: Maximum Expiry Enforcement Property
+// Tokens cannot be created with expiry exceeding 1 year (MaxPATExpiry)
+// =============================================================================
+
+func testPATAPI_MaxExpiry_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Try to create PAT with expiry exceeding 1 year (366 days in seconds)
+	exceedMaxExpiry := int64(366 * 24 * 60 * 60) // 366 days
+
+	reqBody := auth.CreatePATRequest{
+		Name:      tokenName,
+		Scope:     "read_write",
+		ExpiresIn: exceedMaxExpiry,
+		Email:     emailAddr,
+		Password:  password,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", server.server.URL+"/api/tokens", bytes.NewReader(bodyBytes))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Property: Request should be rejected with 400 Bad Request
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Expiry exceeding max should be rejected with 400, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Property 2: Create token with exactly max expiry (365 days) should succeed
+	maxExpiry := int64(365 * 24 * 60 * 60) // 365 days
+	tokenID, tokenValue := server.createPATWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, maxExpiry)
+	if tokenID == "" || tokenValue == "" {
+		t.Fatal("Token with max expiry should be created successfully")
+	}
+}
+
+func TestPATAPI_MaxExpiry_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_MaxExpiry_Properties(rt, server)
+	})
+}
+
+func FuzzPATAPI_MaxExpiry_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_MaxExpiry_Properties(rt, server)
+	}))
+}
+
+// =============================================================================
+// Property 15: Empty Name Rejection Property
+// Tokens cannot be created with empty name
+// =============================================================================
+
+func testPATAPI_EmptyNameRejection_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Property 1: Empty name should be rejected
+	reqEmptyName := auth.CreatePATRequest{
+		Name:      "", // Empty name
+		Scope:     "read_write",
+		ExpiresIn: 3600,
+		Email:     emailAddr,
+		Password:  password,
+	}
+	status := server.createPATExpectError(t, sessionCookie, reqEmptyName)
+	if status != http.StatusBadRequest {
+		t.Fatalf("Empty name should be rejected with 400, got %d", status)
+	}
+
+	// Property 2: Whitespace-only name should still be accepted (no trim validation)
+	// Note: This tests current behavior - if we want to reject whitespace names,
+	// the server code would need to be updated
+	reqWhitespaceName := auth.CreatePATRequest{
+		Name:      "   ", // Whitespace-only name
+		Scope:     "read_write",
+		ExpiresIn: 3600,
+		Email:     emailAddr,
+		Password:  password,
+	}
+	bodyBytes, _ := json.Marshal(reqWhitespaceName)
+	req, _ := http.NewRequest("POST", server.server.URL+"/api/tokens", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Property: Whitespace name is currently accepted (server doesn't trim)
+	// This documents current behavior - status should be 201 or 400
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Whitespace name should either succeed (201) or fail validation (400), got %d", resp.StatusCode)
+	}
+}
+
+func TestPATAPI_EmptyNameRejection_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_EmptyNameRejection_Properties(rt, server)
+	})
+}
+
+func FuzzPATAPI_EmptyNameRejection_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_EmptyNameRejection_Properties(rt, server)
+	}))
+}
+
+// =============================================================================
+// Property 16: Default Scope Property
+// Tokens created without explicit scope get "read_write" as default
+// =============================================================================
+
+func testPATAPI_DefaultScope_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Create PAT without explicit scope
+	tokenID, _ := server.createPAT(t, sessionCookie, tokenName, "", emailAddr, password)
+
+	// Property: Default scope should be "read_write"
+	tokens := server.listPATs(t, sessionCookie)
+	for _, tok := range tokens {
+		if tok.ID == tokenID {
+			if tok.Scope != "read_write" {
+				t.Fatalf("Default scope should be 'read_write', got %q", tok.Scope)
+			}
+			return
+		}
+	}
+	t.Fatal("Token not found in list")
+}
+
+func TestPATAPI_DefaultScope_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_DefaultScope_Properties(rt, server)
+	})
+}
+
+func FuzzPATAPI_DefaultScope_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_DefaultScope_Properties(rt, server)
+	}))
+}
+
+// =============================================================================
+// Property 17: Wrong Email Rejection Property
+// Creating PAT with wrong email (not matching session user) fails
+// =============================================================================
+
+func testPATAPI_WrongEmailRejection_Properties(t *rapid.T, server *patTestServer) {
+	// Generate random inputs
+	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
+	wrongEmail := rapid.StringMatching(`[a-z]{5,10}@wrong\.com`).Draw(t, "wrongEmail")
+	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+
+	// Create test user with cached password (avoids Argon2 hash per iteration)
+	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+
+	// Property: Creating PAT with wrong email should fail
+	reqWrongEmail := auth.CreatePATRequest{
+		Name:      tokenName,
+		Scope:     "read_write",
+		ExpiresIn: 3600,
+		Email:     wrongEmail, // Wrong email
+		Password:  password,
+	}
+	status := server.createPATExpectError(t, sessionCookie, reqWrongEmail)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("Wrong email should be rejected with 401, got %d", status)
+	}
+}
+
+func TestPATAPI_WrongEmailRejection_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_WrongEmailRejection_Properties(rt, server)
+	})
+}
+
+func FuzzPATAPI_WrongEmailRejection_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		server := setupPATTestServerRapid(rt)
+		defer server.cleanup()
+		testPATAPI_WrongEmailRejection_Properties(rt, server)
 	}))
 }
 

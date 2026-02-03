@@ -1,5 +1,7 @@
 # Remote Notes MicroSaaS - Engineering Specification
 
+**Branding**: common.ink
+
 ## Overview
 MCP-first notes service enabling AI context sharing across Claude, ChatGPT, and any MCP-compatible client. Users authenticate via Google, store encrypted notes, access via MCP protocol.
 
@@ -175,14 +177,44 @@ Per-user via stdlib `golang.org/x/time/rate`:
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│ web/                                                     │
-│ ├── templates/      - HTML templates                     │
-│ │   • login.html                                         │
-│ │   • oauth_consent.html                                 │
-│ │   • notes_list.html (minimal UI)                       │
-│ │   • settings_tokens.html (PAT management)              │
-│ │                                                         │
-│ └── static/         - CSS, JS (minimal)                  │
+│ web/templates/      - HTML templates (Go html/template)   │
+│ ├── base.html          - Base layout (common.ink brand)   │
+│ ├── auth/                                                 │
+│ │   ├── login.html     - Login (Google, magic link, pwd)  │
+│ │   ├── register.html  - Registration                     │
+│ │   ├── magic_sent.html - Magic link sent confirmation    │
+│ │   ├── password_reset.html - Password reset request      │
+│ │   ├── password_reset_confirm.html - New password form   │
+│ │   └── error.html     - Auth error page                  │
+│ ├── notes/                                                │
+│ │   ├── list.html      - Notes list with pagination       │
+│ │   ├── view.html      - Note view with markdown render   │
+│ │   ├── edit.html      - Note create/edit form            │
+│ │   └── public_view.html - Public note view               │
+│ ├── oauth/                                                │
+│ │   ├── consent.html   - OAuth consent screen             │
+│ │   ├── consent_granted.html - Consent granted            │
+│ │   └── consent_denied.html  - Consent denied             │
+│ ├── tokens/                                               │
+│ │   ├── list.html      - PAT management page              │
+│ │   ├── new.html       - Create new PAT form              │
+│ │   └── created.html   - Token created (one-time reveal)  │
+│ ├── settings/                                             │
+│ │   └── tokens.html    - PAT settings page                │
+│ └── static/                                               │
+│     └── page.html      - Static page wrapper              │
+│                                                            │
+│ static/src/           - Markdown source for static pages   │
+│ ├── privacy.md        - Privacy policy                     │
+│ ├── tos.md            - Terms of service                   │
+│ ├── about.md          - About page                         │
+│ └── api-docs.md       - API documentation                  │
+│                                                            │
+│ static/gen/           - Pre-generated HTML (from markdown) │
+│ ├── privacy.html                                           │
+│ ├── terms.html                                             │
+│ ├── about.html                                             │
+│ └── api-docs.html                                          │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -192,19 +224,63 @@ Per-user via stdlib `golang.org/x/time/rate`:
 
 ### Web UI (Session-based)
 ```
-GET  /                      - Landing page
-GET  /login                 - Redirect to Google OIDC
-GET  /auth/callback         - Google OIDC callback
-GET  /logout                - Clear session
-GET  /notes                 - List notes (minimal web UI)
+GET  /                           - Landing (redirects to /notes if logged in, /login otherwise)
+GET  /login                      - Login page (Google OIDC, magic link, email/password)
+GET  /register                   - Registration page
+GET  /password-reset             - Password reset request page
+GET  /auth/password-reset-confirm - Password reset confirmation page
+GET  /notes                      - Notes list (protected)
+GET  /notes/new                  - New note form (protected)
+POST /notes                      - Create note (protected)
+GET  /notes/{id}                 - View note (protected)
+GET  /notes/{id}/edit            - Edit note form (protected)
+POST /notes/{id}                 - Update note (protected)
+POST /notes/{id}/delete          - Delete note (protected)
+POST /notes/{id}/publish         - Toggle public visibility (protected)
+GET  /public/{user_id}/{note_id} - Public note view (no auth)
+GET  /pub/{short_id}             - Short URL redirect (no auth)
+GET  /settings/tokens            - PAT management page (protected)
+POST /settings/tokens            - Create PAT via web form (protected)
+POST /settings/tokens/{id}/revoke - Revoke PAT via web form (protected)
+GET  /tokens                     - PAT management (alias, protected)
+GET  /tokens/new                 - New token form (protected)
+POST /tokens                     - Create PAT (alias, protected)
+POST /tokens/{id}/revoke         - Revoke PAT (alias, protected)
+```
+
+### Auth API (no session required for most)
+```
+GET  /auth/google                - Initiate Google OIDC login
+POST /auth/google                - Initiate Google OIDC login (alias)
+GET  /auth/google/callback       - Google OIDC callback
+POST /auth/magic                 - Request magic link email
+GET  /auth/magic/verify          - Verify magic link token
+POST /auth/register              - Email/password registration
+POST /auth/login                 - Email/password login
+POST /auth/password-reset        - Request password reset email
+POST /auth/password-reset-confirm - Confirm password reset with new password
+POST /auth/logout                - Logout (clear session)
+GET  /auth/logout                - Logout (alias)
+GET  /auth/whoami                - Current user info (requires auth)
+```
+
+### Static Pages (no auth)
+```
+GET  /privacy                    - Privacy policy
+GET  /terms                      - Terms of service
+GET  /about                      - About page
+GET  /docs/api                   - API documentation
+GET  /docs                       - API documentation (alias)
 ```
 
 ### OAuth Provider (for AI clients)
 ```
-GET  /.well-known/oauth-authorization-server     - Metadata
-GET  /.well-known/oauth-protected-resource       - Resource metadata
+GET  /.well-known/oauth-authorization-server     - Auth server metadata
+GET  /.well-known/oauth-protected-resource       - Protected resource metadata
+GET  /.well-known/jwks.json                      - JWKS for token verification
 POST /oauth/register        - Dynamic Client Registration (DCR)
 GET  /oauth/authorize       - Authorization endpoint (PKCE)
+POST /oauth/consent         - Consent form submission
 POST /oauth/token           - Token endpoint (code exchange, refresh)
 ```
 
@@ -232,14 +308,24 @@ JSON-RPC Methods:
   - notifications/cancelled - Cancel running operation
 ```
 
+### Notes API (JSON, rate limited, auth required)
+```
+GET    /api/notes            - List notes (paginated, ?limit=&offset=)
+POST   /api/notes            - Create note
+GET    /api/notes/{id}       - Get note by ID
+PUT    /api/notes/{id}       - Update note
+DELETE /api/notes/{id}       - Delete note
+POST   /api/notes/search     - Search notes (FTS5)
+```
+
 ### Personal Access Tokens (PAT)
 ```
-POST /api/tokens            - Create PAT (requires email + password)
+POST /api/tokens            - Create PAT (requires session auth)
 GET  /api/tokens            - List user's PATs (session auth required)
 DELETE /api/tokens/{id}     - Revoke a PAT (session auth required)
 ```
 
-### Payments
+### Payments (NOT YET IMPLEMENTED)
 ```
 POST /checkout              - Create checkout session
 POST /webhooks/lemon        - LemonSqueezy webhook
@@ -249,7 +335,6 @@ GET  /subscription/status   - Check user's subscription
 ### Admin / Health
 ```
 GET  /health                - Health check
-GET  /metrics               - Prometheus metrics (optional)
 ```
 
 ---
@@ -1032,8 +1117,8 @@ All architectural decisions finalized for MVP:
 | **PAT (API tokens)** | Supported - email/password → 1-year token (stored hashed in user DB) |
 | **OAuth tokens** | Shared `sessions.db` |
 | **Search** | FTS5 default weighting, native operators |
-| **Web UI** | Minimal (OAuth consent + basic CRUD) |
-| **Public notes** | `/{user_id}/{note_id}` URLs |
+| **Web UI** | Full CRUD + OAuth consent + PAT management + static pages (privacy, terms, about, API docs) |
+| **Public notes** | `/public/{user_id}/{note_id}` URLs + `/pub/{short_id}` short URLs |
 | **Rate limits** | Per-user (10/s free, 1000/s paid) |
 | **Fuzzing** | 30 min nightly |
 | **Browsers** | Chromium only |

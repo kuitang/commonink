@@ -72,7 +72,6 @@ func setupWebFormServer(t testing.TB) *webFormServer {
 	return createWebFormServer(tempDir)
 }
 
-
 func createWebFormServer(tempDir string) *webFormServer {
 	// Reset database singleton
 	db.ResetForTesting()
@@ -168,6 +167,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 		sessionService,
 		consentService,
 		mockS3Client,
+		nil, // shortURLSvc - not needed for form tests
 		server.URL,
 	)
 
@@ -1326,4 +1326,3 @@ func TestWebForm_ArbitraryInputs_Properties(t *testing.T) {
 		}
 	})
 }
-

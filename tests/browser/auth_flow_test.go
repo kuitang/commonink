@@ -121,6 +121,7 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 		sessionService,
 		consentService,
 		s3Client,
+		nil, // shortURLSvc not needed for auth tests
 		server.URL,
 	)
 

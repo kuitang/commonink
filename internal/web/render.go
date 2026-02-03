@@ -82,27 +82,7 @@ func (r *Renderer) RenderError(w http.ResponseWriter, code int, message string) 
 		}
 	}
 
-	// Fallback to a simple error page if template fails
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Error %d</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f3f4f6; }
-        .error { text-align: center; padding: 2rem; background: white; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        h1 { color: #dc2626; margin: 0 0 1rem; }
-        p { color: #4b5563; margin: 0; }
-    </style>
-</head>
-<body>
-    <div class="error">
-        <h1>Error %d</h1>
-        <p>%s</p>
-    </div>
-</body>
-</html>`, code, code, template.HTMLEscapeString(message))
+	http.Error(w, fmt.Sprintf("Error %d: %s", code, message), code)
 }
 
 // parseTemplates parses the base template and all page templates.

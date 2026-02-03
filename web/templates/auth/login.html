@@ -1,16 +1,72 @@
 
 {{define "content"}}
-<div class="min-h-full flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-    <div class="max-w-md w-full space-y-8">
+<!-- Magic Link Sent Modal -->
+<div id="magic-link-modal" class="hidden fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+    <div class="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+        <!-- Backdrop -->
+        <div class="fixed inset-0 bg-gray-500 dark:bg-gray-900 bg-opacity-75 dark:bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+
+        <!-- Modal panel -->
+        <div class="relative transform overflow-hidden rounded-xl bg-white dark:bg-gray-800 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-md border border-gray-200 dark:border-gray-700">
+            <div class="px-6 py-8">
+                <!-- Success icon -->
+                <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                    <svg class="h-8 w-8 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                </div>
+
+                <!-- Title -->
+                <h3 class="mt-6 text-center text-2xl font-bold text-gray-900 dark:text-white" id="modal-title">
+                    Check your email!
+                </h3>
+
+                <!-- Email display -->
+                <div class="mt-4 rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4 border border-gray-200 dark:border-gray-600 text-center">
+                    <p class="text-sm text-gray-600 dark:text-gray-400">We've sent a sign-in link to:</p>
+                    <p id="modal-email" class="mt-1 text-lg font-semibold text-gray-900 dark:text-white"></p>
+                </div>
+
+                <!-- Instructions -->
+                <p class="mt-4 text-center text-sm text-gray-600 dark:text-gray-400">
+                    Click the link in the email to sign in. The link expires in 15 minutes.
+                </p>
+
+                <!-- Tip -->
+                <div class="mt-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 p-3 border border-blue-200 dark:border-blue-800">
+                    <div class="flex">
+                        <svg class="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <p class="ml-3 text-sm text-blue-800 dark:text-blue-200">
+                            Check your spam folder if you don't see it.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="bg-gray-50 dark:bg-gray-700/50 px-6 py-4 border-t border-gray-200 dark:border-gray-600">
+                <button type="button" id="close-modal-btn"
+                        class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                    Got it
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="flex-1 flex items-center justify-center py-4 sm:py-8 px-4 sm:px-6 lg:px-8 overflow-y-auto">
+    <div class="max-w-md w-full space-y-4 sm:space-y-6">
         <!-- Header -->
         <div class="text-center">
-            <svg class="mx-auto h-12 w-12 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <svg class="mx-auto h-10 w-10 sm:h-12 sm:w-12 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <h2 class="mt-6 text-3xl font-extrabold text-gray-900 dark:text-white">
+            <h2 class="mt-3 sm:mt-4 text-2xl sm:text-3xl font-extrabold text-gray-900 dark:text-white">
                 Sign in to your account
             </h2>
-            <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+            <p class="mt-1 sm:mt-2 text-sm text-gray-600 dark:text-gray-400">
                 Or
                 <a href="/register" class="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
                     create a new account
@@ -31,16 +87,16 @@
         {{end}}
 
         <!-- Login card -->
-        <div class="bg-white dark:bg-gray-800 shadow-lg rounded-xl p-8 border border-gray-200 dark:border-gray-700">
+        <div class="bg-white dark:bg-gray-800 shadow-lg rounded-xl p-5 sm:p-6 border border-gray-200 dark:border-gray-700">
 
             <!-- Section 1: Google Sign-in -->
-            <div class="space-y-4">
-                <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+            <div class="space-y-3 sm:space-y-4">
+                <h3 class="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
                     Continue with
                 </h3>
                 <form action="/auth/google" method="POST">
                     <button type="submit"
-                            class="w-full flex items-center justify-center gap-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                            class="w-full flex items-center justify-center gap-2 sm:gap-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2.5 sm:px-4 sm:py-3 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
                         <svg class="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                             <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -53,21 +109,21 @@
             </div>
 
             <!-- Divider -->
-            <div class="relative my-6">
+            <div class="relative my-4 sm:my-5">
                 <div class="absolute inset-0 flex items-center" aria-hidden="true">
                     <div class="w-full border-t border-gray-300 dark:border-gray-600"></div>
                 </div>
-                <div class="relative flex justify-center text-sm">
+                <div class="relative flex justify-center text-xs sm:text-sm">
                     <span class="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">or continue with email</span>
                 </div>
             </div>
 
             <!-- Section 2: Magic Link -->
-            <div class="space-y-4">
-                <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+            <div class="space-y-3 sm:space-y-4">
+                <h3 class="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
                     Passwordless sign-in
                 </h3>
-                <form action="/auth/magic" method="POST" class="space-y-4">
+                <form id="magic-link-form" action="/auth/magic" method="POST" class="space-y-3 sm:space-y-4">
                     <div>
                         <label for="magic-email" class="sr-only">Email address</label>
                         <input id="magic-email"
@@ -75,11 +131,11 @@
                                type="email"
                                autocomplete="email"
                                required
-                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-4 py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 bg-white dark:bg-gray-700 focus:border-blue-500 focus:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 sm:text-sm"
+                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 sm:px-4 sm:py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 bg-white dark:bg-gray-700 focus:border-blue-500 focus:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 text-sm"
                                placeholder="Email address">
                     </div>
-                    <button type="submit"
-                            class="w-full flex justify-center rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                    <button type="submit" id="magic-link-submit"
+                            class="w-full flex justify-center rounded-lg bg-blue-600 px-3 py-2.5 sm:px-4 sm:py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
                         <svg class="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                         </svg>
@@ -89,21 +145,21 @@
             </div>
 
             <!-- Divider -->
-            <div class="relative my-6">
+            <div class="relative my-4 sm:my-5">
                 <div class="absolute inset-0 flex items-center" aria-hidden="true">
                     <div class="w-full border-t border-gray-300 dark:border-gray-600"></div>
                 </div>
-                <div class="relative flex justify-center text-sm">
+                <div class="relative flex justify-center text-xs sm:text-sm">
                     <span class="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">or use password</span>
                 </div>
             </div>
 
             <!-- Section 3: Email + Password -->
-            <div class="space-y-4">
-                <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+            <div class="space-y-3 sm:space-y-4">
+                <h3 class="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
                     Sign in with password
                 </h3>
-                <form action="/auth/login" method="POST" class="space-y-4">
+                <form action="/auth/login" method="POST" class="space-y-3 sm:space-y-4">
                     <div>
                         <label for="login-email" class="sr-only">Email address</label>
                         <input id="login-email"
@@ -111,7 +167,7 @@
                                type="email"
                                autocomplete="email"
                                required
-                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-4 py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 bg-white dark:bg-gray-700 focus:border-blue-500 focus:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 sm:text-sm"
+                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 sm:px-4 sm:py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 bg-white dark:bg-gray-700 focus:border-blue-500 focus:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 text-sm"
                                placeholder="Email address">
                     </div>
                     <div>
@@ -121,7 +177,7 @@
                                type="password"
                                autocomplete="current-password"
                                required
-                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-4 py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 bg-white dark:bg-gray-700 focus:border-blue-500 focus:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 sm:text-sm"
+                               class="block w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2.5 sm:px-4 sm:py-3 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 bg-white dark:bg-gray-700 focus:border-blue-500 focus:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 text-sm"
                                placeholder="Password">
                     </div>
                     <div class="flex items-center justify-between">
@@ -141,7 +197,7 @@
                         </div>
                     </div>
                     <button type="submit"
-                            class="w-full flex justify-center rounded-lg bg-gray-800 dark:bg-gray-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-gray-700 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                            class="w-full flex justify-center rounded-lg bg-gray-800 dark:bg-gray-600 px-3 py-2.5 sm:px-4 sm:py-3 text-sm font-semibold text-white shadow-sm hover:bg-gray-700 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
                         Sign In
                     </button>
                 </form>
@@ -149,4 +205,75 @@
         </div>
     </div>
 </div>
+
+<!-- Magic Link Form JavaScript -->
+<script>
+(function() {
+    var form = document.getElementById('magic-link-form');
+    var modal = document.getElementById('magic-link-modal');
+    var modalEmail = document.getElementById('modal-email');
+    var closeBtn = document.getElementById('close-modal-btn');
+    var submitBtn = document.getElementById('magic-link-submit');
+    var emailInput = document.getElementById('magic-email');
+
+    if (form && modal) {
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            var email = emailInput.value;
+            if (!email) return;
+
+            // Disable submit button and show loading state
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<svg class="animate-spin mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Sending...';
+
+            // Submit the form via fetch
+            fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                credentials: 'same-origin'
+            }).then(function() {
+                // Show modal with email
+                modalEmail.textContent = email;
+                modal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            }).catch(function() {
+                // On error, show modal anyway (to prevent email enumeration)
+                modalEmail.textContent = email;
+                modal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            }).finally(function() {
+                // Reset button state
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<svg class="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>Send Magic Link';
+            });
+        });
+
+        // Close modal
+        closeBtn.addEventListener('click', function() {
+            modal.classList.add('hidden');
+            document.body.style.overflow = '';
+            emailInput.value = '';
+        });
+
+        // Close modal on backdrop click
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal || e.target.classList.contains('bg-opacity-75')) {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+                emailInput.value = '';
+            }
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+                emailInput.value = '';
+            }
+        });
+    }
+})();
+</script>
 {{end}}

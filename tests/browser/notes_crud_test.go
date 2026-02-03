@@ -125,6 +125,7 @@ func setupNotesCrudEnv(t *testing.T) *notesCrudEnv {
 		sessionService,
 		consentService,
 		s3Client,
+		nil, // shortURLSvc not needed for notes crud tests
 		"http://localhost:8080",
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)

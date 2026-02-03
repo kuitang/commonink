@@ -181,3 +181,25 @@ DELETE FROM oauth_codes WHERE code_hash = ?;
 
 -- name: DeleteExpiredOAuthCodes :exec
 DELETE FROM oauth_codes WHERE expires_at < ?;
+
+-- Short URL operations
+
+-- name: CreateShortURL :exec
+INSERT INTO short_urls (short_id, full_path, created_at)
+VALUES (?, ?, ?);
+
+-- name: GetShortURLByShortID :one
+SELECT id, short_id, full_path, created_at
+FROM short_urls
+WHERE short_id = ?;
+
+-- name: GetShortURLByFullPath :one
+SELECT id, short_id, full_path, created_at
+FROM short_urls
+WHERE full_path = ?;
+
+-- name: DeleteShortURL :exec
+DELETE FROM short_urls WHERE short_id = ?;
+
+-- name: DeleteShortURLByFullPath :exec
+DELETE FROM short_urls WHERE full_path = ?;

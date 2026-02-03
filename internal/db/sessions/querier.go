@@ -25,6 +25,8 @@ type Querier interface {
 	// Sessions queries for the shared sessions database
 	// Sessions CRUD operations
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
+	// Short URL operations
+	CreateShortURL(ctx context.Context, arg CreateShortURLParams) error
 	// User keys operations
 	CreateUserKey(ctx context.Context, arg CreateUserKeyParams) error
 	DeleteConsent(ctx context.Context, arg DeleteConsentParams) error
@@ -43,6 +45,8 @@ type Querier interface {
 	DeleteOAuthTokensByUserID(ctx context.Context, userID string) error
 	DeleteSession(ctx context.Context, sessionID string) error
 	DeleteSessionsByUserID(ctx context.Context, userID string) error
+	DeleteShortURL(ctx context.Context, shortID string) error
+	DeleteShortURLByFullPath(ctx context.Context, fullPath string) error
 	DeleteUserKey(ctx context.Context, userID string) error
 	GetConsent(ctx context.Context, arg GetConsentParams) (OauthConsent, error)
 	GetMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
@@ -54,6 +58,8 @@ type Querier interface {
 	GetOAuthTokensByUserClient(ctx context.Context, arg GetOAuthTokensByUserClientParams) ([]OauthToken, error)
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	GetSessionsByUserID(ctx context.Context, userID string) ([]Session, error)
+	GetShortURLByFullPath(ctx context.Context, fullPath string) (ShortUrl, error)
+	GetShortURLByShortID(ctx context.Context, shortID string) (ShortUrl, error)
 	GetUserKey(ctx context.Context, userID string) (UserKey, error)
 	GetValidMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
 	GetValidOAuthCode(ctx context.Context, codeHash string) (OauthCode, error)

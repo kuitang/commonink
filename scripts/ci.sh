@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
-# Remote Notes CI Script
+# common.ink CI Script
 # Runs property-based tests, fuzzing, and coverage analysis
 # Usage: ./scripts/ci.sh <level> [options]
 
@@ -12,10 +12,16 @@ if command -v goenv &> /dev/null; then
     eval "$(goenv init -)"
 fi
 
-# Source API keys (required for e2e tests)
+# Source API keys (required for e2e conformance tests)
 if [[ -f "$HOME/openai_key.sh" ]]; then
     source "$HOME/openai_key.sh"
 fi
+
+# CGO flags required for SQLCipher with FTS5 support (CRITICAL)
+# Without these, FTS5 full-text search will fail with "no such module: fts5"
+export CGO_ENABLED=1
+export CGO_CFLAGS="-DSQLITE_ENABLE_FTS5"
+export CGO_LDFLAGS="-lm"
 
 # Build tags required for SQLCipher FTS5 support
 BUILD_TAGS="-tags fts5"
@@ -92,7 +98,7 @@ if [[ "$(printf '%s\n' "$REQUIRED_VERSION" "$GO_VERSION" | sort -V | head -n1)" 
 fi
 
 echo -e "${BLUE}============================================${NC}"
-echo -e "${BLUE}Remote Notes CI - Level: $LEVEL${NC}"
+echo -e "${BLUE}common.ink CI - Level: $LEVEL${NC}"
 echo -e "${BLUE}============================================${NC}"
 echo -e "Go version: $GO_VERSION"
 echo -e "Parallel workers: $PARALLEL"
@@ -105,12 +111,12 @@ if [[ "$LEVEL" == "quick" ]]; then
     echo -e "${YELLOW}Note: Excluding tests/e2e/claude and tests/e2e/openai (conformance tests - run with 'full')${NC}"
     echo -e "${YELLOW}Note: Using -rapid.checks=10 for faster feedback (full CI uses 100)${NC}"
 
-    # Run all Test* functions (rapid tests) EXCLUDING e2e conformance tests
+    # Run all Test* functions (rapid tests) EXCLUDING e2e conformance and browser tests
     # CGO_ENABLED=1 required for SQLCipher, BUILD_TAGS for FTS5
     # -rapid.checks=10 reduces property test iterations for faster feedback
     # (10 samples still catch most bugs while being 10x faster than default 100)
-    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" \
-        $(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai') \
+    go test $BUILD_TAGS -v -parallel "$PARALLEL" \
+        $(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
         -run 'Test' \
         -rapid.checks=10 \
         2>&1 | tee "$OUTPUT_DIR/quick-test.log"
@@ -122,6 +128,15 @@ fi
 # Full level: all tests including e2e conformance + coverage
 if [[ "$LEVEL" == "full" ]]; then
     echo -e "${GREEN}Running full tests (all packages including e2e conformance + coverage)...${NC}"
+
+    # Check for OpenAI API key (required for e2e conformance tests)
+    if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+        echo -e "${RED}Error: OPENAI_API_KEY environment variable is required for full CI${NC}"
+        echo -e "${YELLOW}Hint: source ~/openai_key.sh before running, or create the file with:${NC}"
+        echo -e "${YELLOW}  echo 'export OPENAI_API_KEY=your-key-here' > ~/openai_key.sh${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ OPENAI_API_KEY is set${NC}"
 
     # Install Playwright if needed
     if ! command -v playwright &> /dev/null; then
@@ -137,7 +152,7 @@ if [[ "$LEVEL" == "full" ]]; then
     #   - Browser tests (tests/browser)
     # Note: tests/e2e/openai excluded - requires external OpenAI API (run separately)
     echo -e "${BLUE}Running all tests with coverage...${NC}"
-    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/coverage.out" -coverpkg=./... \
+    go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/coverage.out" -coverpkg=./... \
         $(go list ./... | grep -v 'tests/e2e/openai') \
         2>&1 | tee "$OUTPUT_DIR/full-test.log"
 
@@ -177,12 +192,12 @@ if [[ "$LEVEL" == "fuzz" ]]; then
 
     # First run quick tests as baseline
     echo -e "${BLUE}Running baseline tests...${NC}"
-    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/baseline-coverage.out" ./... \
+    go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/baseline-coverage.out" ./... \
         -run 'Test' \
         2>&1 | tee "$OUTPUT_DIR/baseline-test.log"
 
     # Find all fuzz tests
-    FUZZ_TESTS=$(CGO_ENABLED=1 go test $BUILD_TAGS -list=Fuzz ./... 2>/dev/null | grep '^Fuzz' || true)
+    FUZZ_TESTS=$(go test $BUILD_TAGS -list=Fuzz ./... 2>/dev/null | grep '^Fuzz' || true)
 
     if [[ -z "$FUZZ_TESTS" ]]; then
         echo -e "${YELLOW}No fuzz tests found${NC}"
@@ -207,7 +222,7 @@ if [[ "$LEVEL" == "fuzz" ]]; then
         echo "  Package: $PACKAGE"
 
         # Run fuzzing (will create corpus in testdata/fuzz/)
-        CGO_ENABLED=1 go test $BUILD_TAGS -fuzz="^${fuzz_test}$" -fuzztime="$FUZZ_TIMEOUT" "$PACKAGE" \
+        go test $BUILD_TAGS -fuzz="^${fuzz_test}$" -fuzztime="$FUZZ_TIMEOUT" "$PACKAGE" \
             2>&1 | tee "$OUTPUT_DIR/fuzz-${fuzz_test}.log" || {
                 echo -e "${RED}Fuzz test $fuzz_test found issues!${NC}"
                 echo "See $OUTPUT_DIR/fuzz-${fuzz_test}.log for details"
@@ -218,7 +233,7 @@ if [[ "$LEVEL" == "fuzz" ]]; then
 
     # Run tests again with coverage to see fuzz improvements
     echo -e "${BLUE}Running tests after fuzzing (with coverage)...${NC}"
-    CGO_ENABLED=1 go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/fuzz-coverage.out" ./... \
+    go test $BUILD_TAGS -v -parallel "$PARALLEL" -coverprofile="$OUTPUT_DIR/fuzz-coverage.out" ./... \
         2>&1 | tee "$OUTPUT_DIR/fuzz-test.log"
 
     # Compare baseline vs fuzz coverage

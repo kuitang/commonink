@@ -1,10 +1,10 @@
 
 {{define "content"}}
-<div class="min-h-screen bg-gray-50 dark:bg-gray-900">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1 flex flex-col w-full">
         <!-- Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-8">
-            <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-4 sm:mb-0">My Notes</h1>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 flex-shrink-0">
+            <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3 sm:mb-0">My Notes</h1>
             <a href="/notes/new"
                class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -16,12 +16,12 @@
 
         {{if .Notes}}
         <!-- Notes Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 flex-1 auto-rows-max overflow-y-auto">
             {{range .Notes}}
-            <article class="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-200 overflow-hidden">
-                <a href="/notes/{{.ID}}" class="block p-6">
-                    <div class="flex items-start justify-between mb-3">
-                        <h2 class="text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
+            <article class="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-200 overflow-hidden h-fit">
+                <a href="/notes/{{.ID}}" class="block p-4 sm:p-5">
+                    <div class="flex items-start justify-between mb-2 sm:mb-3">
+                        <h2 class="text-base sm:text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
                             {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
                         </h2>
                         {{if .IsPublic}}
@@ -40,7 +40,7 @@
                         </span>
                         {{end}}
                     </div>
-                    <p class="text-gray-600 dark:text-gray-300 text-sm line-clamp-3 mb-4">
+                    <p class="text-gray-600 dark:text-gray-300 text-sm line-clamp-2 sm:line-clamp-3 mb-3 sm:mb-4">
                         {{if .Content}}{{truncate .Content 150}}{{else}}No content{{end}}
                     </p>
                     <div class="flex items-center text-xs text-gray-500 dark:text-gray-400">
@@ -58,7 +58,7 @@
 
         <!-- Pagination -->
         {{if or .HasPrev .HasNext}}
-        <nav class="flex items-center justify-between mt-8 px-4 py-3 bg-white dark:bg-gray-800 rounded-lg shadow" aria-label="Pagination">
+        <nav class="flex items-center justify-between mt-4 sm:mt-6 px-3 sm:px-4 py-2 sm:py-3 bg-white dark:bg-gray-800 rounded-lg shadow flex-shrink-0" aria-label="Pagination">
             <div class="flex-1 flex justify-between sm:hidden">
                 {{if .HasPrev}}
                 <a href="?page={{sub .Page 1}}"
@@ -129,14 +129,14 @@
 
         {{else}}
         <!-- Empty State -->
-        <div class="text-center py-16 px-4">
-            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900 mb-6">
-                <svg class="w-8 h-8 text-blue-600 dark:text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div class="text-center py-8 sm:py-12 px-4 flex-1 flex flex-col items-center justify-center">
+            <div class="inline-flex items-center justify-center w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-blue-100 dark:bg-blue-900 mb-4 sm:mb-6">
+                <svg class="w-6 h-6 sm:w-8 sm:h-8 text-blue-600 dark:text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
             </div>
-            <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-2">No notes yet</h3>
-            <p class="text-gray-600 dark:text-gray-400 mb-6">Create your first note to get started!</p>
+            <h3 class="text-base sm:text-lg font-medium text-gray-900 dark:text-white mb-2">No notes yet</h3>
+            <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400 mb-4 sm:mb-6">Create your first note to get started!</p>
             <a href="/notes/new"
                class="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

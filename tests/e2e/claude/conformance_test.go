@@ -39,28 +39,30 @@ func TestMain(m *testing.M) {
 // MCP Config Generation
 // =============================================================================
 
-var (
-	mcpConfigPath string
-	mcpConfigOnce sync.Once
-)
-
-func getMCPConfig(t testing.TB) string {
-	mcpConfigOnce.Do(func() {
-		srv := testutil.GetServer(t)
-		tempDir := t.TempDir()
-		mcpConfigPath = filepath.Join(tempDir, ".mcp.json")
-		config := map[string]any{
-			"mcpServers": map[string]any{
-				"agent-notes": map[string]any{
-					"type": "http",
-					"url":  srv.BaseURL + "/mcp",
+// getAuthenticatedMCPConfig creates an MCP config with OAuth bearer token authentication.
+// This is required because our MCP server requires OAuth 2.1 authentication.
+// Claude Code supports bearer tokens via the "headers" field in MCP config.
+func getAuthenticatedMCPConfig(t testing.TB, accessToken string) string {
+	t.Helper()
+	srv := testutil.GetServer(t)
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, ".mcp.json")
+	config := map[string]any{
+		"mcpServers": map[string]any{
+			"agent-notes": map[string]any{
+				"type": "http",
+				"url":  srv.BaseURL + "/mcp",
+				"headers": map[string]string{
+					"Authorization": "Bearer " + accessToken,
 				},
 			},
-		}
-		configBytes, _ := json.MarshalIndent(config, "", "  ")
-		os.WriteFile(mcpConfigPath, configBytes, 0644)
-	})
-	return mcpConfigPath
+		},
+	}
+	configBytes, _ := json.MarshalIndent(config, "", "  ")
+	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
+		t.Fatalf("Failed to write MCP config: %v", err)
+	}
+	return configPath
 }
 
 // =============================================================================
@@ -69,11 +71,11 @@ func getMCPConfig(t testing.TB) string {
 
 // StreamMessage represents a message in Claude's streaming JSON format
 type StreamMessage struct {
-	Type      string           `json:"type"`
-	Subtype   string           `json:"subtype,omitempty"`
-	SessionID string           `json:"session_id,omitempty"`
-	Result    string           `json:"result,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
+	Type      string            `json:"type"`
+	Subtype   string            `json:"subtype,omitempty"`
+	SessionID string            `json:"session_id,omitempty"`
+	Result    string            `json:"result,omitempty"`
+	IsError   bool              `json:"is_error,omitempty"`
 	Message   *AssistantMessage `json:"message,omitempty"`
 }
 
@@ -330,11 +332,17 @@ func TestClaude_MultiTurn_Streaming(t *testing.T) {
 		t.Skip("Skipping in short mode")
 	}
 
-	mcpConfig := getMCPConfig(t)
 	srv := testutil.GetServer(t)
 
-	// Create MCP client for verification
-	mcpClient := testutil.NewMCPClient(srv.BaseURL, "")
+	// Perform OAuth flow to get access token for MCP authentication
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "MultiTurnTest")
+
+	// Create authenticated MCP config with bearer token in headers
+	// (Claude Code supports OAuth via headers in MCP config)
+	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
+
+	// Create authenticated MCP client for verification
+	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
 
 	conv := NewConversation(t, mcpConfig)
 	defer conv.Close()
@@ -383,7 +391,10 @@ func TestClaude_MultiTurn_Streaming(t *testing.T) {
 	// Turn 4: Update note (get ID first)
 	t.Run("Turn4_Update", func(t *testing.T) {
 		// First get the note ID via MCP
-		listResp, _ := mcpClient.CallTool("note_list", map[string]interface{}{})
+		listResp, err := mcpClient.CallTool("note_list", map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("MCP list failed: %v", err)
+		}
 		result, _ := testutil.ParseToolResult(listResp)
 
 		// Parse to find ID
@@ -441,9 +452,14 @@ func TestClaude_OneShot_CRUD(t *testing.T) {
 		t.Skip("Skipping in short mode")
 	}
 
-	mcpConfig := getMCPConfig(t)
 	srv := testutil.GetServer(t)
-	mcpClient := testutil.NewMCPClient(srv.BaseURL, "")
+
+	// Perform OAuth flow to get access token for MCP authentication
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "OneShotTest")
+
+	// Create authenticated MCP config with bearer token in headers
+	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
+	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
 
 	var noteID string
 
@@ -453,7 +469,10 @@ func TestClaude_OneShot_CRUD(t *testing.T) {
 		t.Logf("Response: %s, Tools: %d", resp, len(toolCalls))
 
 		// Verify via MCP
-		listResp, _ := mcpClient.CallTool("note_list", map[string]interface{}{})
+		listResp, err := mcpClient.CallTool("note_list", map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("MCP list failed: %v", err)
+		}
 		result, _ := testutil.ParseToolResult(listResp)
 		if !strings.Contains(result, "One Shot") {
 			t.Fatal("Note not created")

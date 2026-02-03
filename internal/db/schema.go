@@ -85,6 +85,15 @@ CREATE TABLE IF NOT EXISTS oauth_consents (
     UNIQUE(user_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS idx_consents_user_id ON oauth_consents(user_id);
+
+-- Short URLs table: maps short IDs to full paths for public notes
+CREATE TABLE IF NOT EXISTS short_urls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    short_id TEXT UNIQUE NOT NULL,
+    full_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_short_urls_full_path ON short_urls(full_path);
 `
 
 // UserDBSchema contains all the SQL statements for per-user encrypted databases.

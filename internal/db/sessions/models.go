@@ -65,6 +65,13 @@ type Session struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+type ShortUrl struct {
+	ID        int64  `json:"id"`
+	ShortID   string `json:"short_id"`
+	FullPath  string `json:"full_path"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 type UserKey struct {
 	UserID       string        `json:"user_id"`
 	KekVersion   int64         `json:"kek_version"`

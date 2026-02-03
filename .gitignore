@@ -56,3 +56,11 @@ filebrowser.db
 # Test results
 test-results/
 internal/db/data/
+
+# Secret files (API keys, OAuth credentials)
+google_secret.json
+resend_api_key.txt
+.master_key
+
+# Server logs
+server.log

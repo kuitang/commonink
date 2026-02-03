@@ -1,0 +1,36 @@
+{{define "head"}}
+<style>
+    .prose { max-width: 65ch; }
+    .prose h1 { font-size: 2.25rem; font-weight: 800; margin-bottom: 1rem; color: inherit; }
+    .prose h2 { font-size: 1.5rem; font-weight: 700; margin-top: 2rem; margin-bottom: 0.75rem; color: inherit; }
+    .prose h3 { font-size: 1.25rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; color: inherit; }
+    .prose p { margin-bottom: 1rem; line-height: 1.75; }
+    .prose ul, .prose ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+    .prose li { margin-bottom: 0.5rem; }
+    .prose ul { list-style-type: disc; }
+    .prose ol { list-style-type: decimal; }
+    .prose a { color: #3b82f6; text-decoration: underline; }
+    .prose a:hover { color: #2563eb; }
+    .prose code { background-color: #f3f4f6; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-size: 0.875rem; }
+    .dark .prose code { background-color: #374151; }
+    .prose pre { background-color: #1f2937; color: #f9fafb; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 1rem; }
+    .prose pre code { background-color: transparent; padding: 0; }
+    .prose blockquote { border-left: 4px solid #3b82f6; padding-left: 1rem; margin: 1rem 0; font-style: italic; }
+    .prose table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+    .prose th, .prose td { border: 1px solid #e5e7eb; padding: 0.5rem 1rem; text-align: left; }
+    .dark .prose th, .dark .prose td { border-color: #374151; }
+    .prose th { background-color: #f3f4f6; font-weight: 600; }
+    .dark .prose th { background-color: #374151; }
+    .prose strong { font-weight: 600; }
+    .prose hr { border-color: #e5e7eb; margin: 2rem 0; }
+    .dark .prose hr { border-color: #374151; }
+</style>
+{{end}}
+
+{{define "content"}}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <article class="prose dark:prose-invert mx-auto">
+        {{.Content}}
+    </article>
+</div>
+{{end}}

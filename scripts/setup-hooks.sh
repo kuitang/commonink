@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup git hooks for Remote Notes project
+# Setup git hooks for common.ink project
 # Run: ./scripts/setup-hooks.sh
 
 set -e
@@ -15,7 +15,7 @@ mkdir -p "$HOOK_DIR"
 # Create pre-commit hook
 cat > "$PRE_COMMIT_HOOK" << 'EOF'
 #!/bin/bash
-# Pre-commit hook for Remote Notes
+# Pre-commit hook for common.ink
 # Runs go fmt and quick CI tests
 
 set -e

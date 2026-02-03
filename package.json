@@ -1,7 +1,7 @@
 {
-  "name": "remote-notes-microsaas",
+  "name": "common-ink",
   "version": "1.0.0",
-  "description": "Remote Notes MicroSaaS - Encrypted note-taking with MCP support",
+  "description": "common.ink - Encrypted note-taking with MCP support",
   "private": true,
   "devDependencies": {
     "@modelcontextprotocol/conformance": "^0.1.12"

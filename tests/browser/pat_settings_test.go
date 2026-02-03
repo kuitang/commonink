@@ -41,7 +41,7 @@ import (
 
 const (
 	patTestBucketName = "pat-test-bucket"
-	patTestMasterKey  = "test0000000000000000000000000000test0000000000000000000000000000" // low entropy for gitleaks
+	patTestMasterKey  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes, low entropy for gitleaks
 )
 
 // patTestEnv holds all the components needed for PAT settings browser testing.
@@ -121,6 +121,14 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 		w.Write([]byte(`{"status":"healthy"}`))
 	})
 
+	// API endpoint for testing PAT authentication
+	// This endpoint requires authentication and returns 200 if auth succeeds
+	mux.Handle("GET /api/notes", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"notes":[]}`))
+	})))
+
 	// Create web handler
 	webHandler := web.NewWebHandler(
 		renderer,
@@ -130,6 +138,7 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 		sessionService,
 		consentService,
 		s3Client,
+		nil, // shortURLSvc not needed for PAT settings tests
 		"http://localhost:8080",
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)
@@ -344,18 +353,21 @@ func (env *patTestEnv) navigatePAT(t *testing.T, path string) {
 }
 
 // waitForPATSelector waits for an element to appear.
+// For selectors with multiple options (comma-separated), returns the first matching element.
 func (env *patTestEnv) waitForPATSelector(t *testing.T, selector string) playwright.Locator {
 	t.Helper()
 
 	locator := env.page.Locator(selector)
-	err := locator.WaitFor(playwright.LocatorWaitForOptions{
+	// Use First() when selector might match multiple elements
+	first := locator.First()
+	err := first.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(5000),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for selector %s: %v", selector, err)
 	}
-	return locator
+	return first
 }
 
 // generatePATTestEmail generates a unique email for test isolation.
@@ -495,7 +507,7 @@ func TestBrowser_TokenSettings_CreateToken(t *testing.T) {
 	}
 
 	// Verify token value is displayed (only shown once)
-	tokenElement := env.page.Locator("code#new-token")
+	tokenElement := env.page.Locator("code#new-token, code#token-value")
 	err = tokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(5000),
@@ -719,7 +731,7 @@ func TestBrowser_TokenSettings_CopyToken(t *testing.T) {
 	})
 
 	// Get the token value before clicking copy
-	tokenElement := env.waitForPATSelector(t, "code#new-token")
+	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get token value: %v", err)
@@ -938,7 +950,7 @@ func TestBrowser_TokenSettings_ReadOnlyScope(t *testing.T) {
 }
 
 // =============================================================================
-// Test: Unauthenticated Access Returns 401
+// Test: Unauthenticated Access Redirects to Login
 // =============================================================================
 
 func TestBrowser_TokenSettings_RequiresAuth(t *testing.T) {
@@ -956,15 +968,20 @@ func TestBrowser_TokenSettings_RequiresAuth(t *testing.T) {
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// The auth middleware returns 401 Unauthorized with "Unauthorized" in the body
-	pageContent, err := env.page.Content()
-	if err != nil {
-		t.Fatalf("Failed to get page content: %v", err)
-	}
+	// The auth middleware redirects to /login for web pages (RequireAuthWithRedirect)
+	currentURL := env.page.URL()
 
-	// Should show unauthorized message (middleware returns "Unauthorized: no session")
-	if !strings.Contains(pageContent, "Unauthorized") {
-		t.Errorf("Unauthenticated access should show Unauthorized message, got content: %s", pageContent[:min(200, len(pageContent))])
+	// Should be redirected to login page
+	if !strings.Contains(currentURL, "/login") {
+		// If not redirected, check for unauthorized content
+		pageContent, err := env.page.Content()
+		if err != nil {
+			t.Fatalf("Failed to get page content: %v", err)
+		}
+		if !strings.Contains(pageContent, "Unauthorized") && !strings.Contains(pageContent, "Sign in") {
+			t.Errorf("Unauthenticated access should redirect to login or show Unauthorized message, got URL: %s, content: %s",
+				currentURL, pageContent[:min(200, len(pageContent))])
+		}
 	}
 }
 
@@ -1004,5 +1021,411 @@ func TestBrowser_TokenSettings_UsageInstructions(t *testing.T) {
 	}
 	if !curlVisible {
 		t.Error("Example curl command should be visible")
+	}
+}
+
+// =============================================================================
+// Test: Token Shown Only Once (Refresh should mask it)
+// =============================================================================
+
+func TestBrowser_TokenSettings_TokenShownOnceOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping browser test in short mode")
+	}
+
+	env := setupPATTestEnv(t)
+	testEmail := generatePATTestEmail("pat-shown-once")
+	testPassword := "SecurePass123!"
+	env.loginPATTestUser(t, testEmail, testPassword)
+
+	// Navigate to /settings/tokens
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// Create a token
+	env.page.Locator("input#name").Fill("Token for Once Test")
+	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
+		Values: playwright.StringSlice("read_write"),
+	})
+	env.page.Locator("input#email").Fill(testEmail)
+	env.page.Locator("input#password").Fill(testPassword)
+	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+
+	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+
+	// Verify token value is displayed (only shown once)
+	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	tokenValue, err := tokenElement.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get token value: %v", err)
+	}
+
+	// Verify token starts with expected prefix
+	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
+		t.Errorf("Token should start with 'agentnotes_pat_', got: %s", tokenValue)
+	}
+
+	// Save the token value for later verification
+	savedToken := tokenValue
+
+	// Navigate away and back to /settings/tokens
+	env.navigatePAT(t, "/notes")
+	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// Verify the full token value is NOT visible anymore
+	// The new-token element should not exist after navigating away
+	newTokenElement := env.page.Locator("code#new-token, code#token-value")
+	newTokenCount, err := newTokenElement.Count()
+	if err != nil {
+		t.Fatalf("Failed to count new-token elements: %v", err)
+	}
+
+	if newTokenCount > 0 {
+		newTokenVisible, _ := newTokenElement.IsVisible()
+		if newTokenVisible {
+			displayedToken, _ := newTokenElement.TextContent()
+			// Token should not be the same as what was originally displayed
+			if displayedToken == savedToken {
+				t.Error("Token should NOT be visible after navigating away and back")
+			}
+		}
+	}
+
+	// Verify the token row exists in the list but value is masked
+	tokenRow := env.page.Locator("text=Token for Once Test")
+	count, err := tokenRow.Count()
+	if err != nil {
+		t.Fatalf("Failed to count token rows: %v", err)
+	}
+	if count == 0 {
+		t.Error("Token should still appear in the list by name")
+	}
+
+	// The full token value should not appear anywhere on the page
+	pageContent, err := env.page.Content()
+	if err != nil {
+		t.Fatalf("Failed to get page content: %v", err)
+	}
+
+	// The saved token should not appear in the page content anymore
+	// (unless it's in a "new-token" element which we already checked)
+	if strings.Contains(pageContent, savedToken) {
+		// Check if it's ONLY in a new-token element that shouldn't be visible
+		newTokenElementsWithValue := env.page.Locator(fmt.Sprintf("code#new-token:has-text('%s'), code#token-value:has-text('%s')", savedToken, savedToken))
+		visibleCount := 0
+		count, _ := newTokenElementsWithValue.Count()
+		for i := 0; i < count; i++ {
+			visible, _ := newTokenElementsWithValue.Nth(i).IsVisible()
+			if visible {
+				visibleCount++
+			}
+		}
+		if visibleCount > 0 {
+			t.Error("Full token value should not be visible after refresh")
+		}
+	}
+}
+
+// =============================================================================
+// Test: Use Created Token for API Call
+// =============================================================================
+
+func TestBrowser_TokenSettings_UseTokenForAPICall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping browser test in short mode")
+	}
+
+	env := setupPATTestEnv(t)
+	testEmail := generatePATTestEmail("pat-api-call")
+	testPassword := "SecurePass123!"
+	env.loginPATTestUser(t, testEmail, testPassword)
+
+	// Navigate to /settings/tokens
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// Create a token
+	env.page.Locator("input#name").Fill("Token for API Test")
+	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
+		Values: playwright.StringSlice("read_write"),
+	})
+	env.page.Locator("input#email").Fill(testEmail)
+	env.page.Locator("input#password").Fill(testPassword)
+	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+
+	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+
+	// Get the token value
+	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	tokenValue, err := tokenElement.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get token value: %v", err)
+	}
+
+	// Verify token has expected format
+	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
+		t.Fatalf("Token should have proper prefix, got: %s", tokenValue)
+	}
+
+	// Use the token for an API call (GET /api/notes)
+	// We need to make a direct HTTP request to the test server
+	req, err := http.NewRequest("GET", env.baseURL+"/api/notes", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenValue)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to make API request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// The API should accept the token
+	// Note: The actual response depends on whether /api/notes is registered
+	// but we should at least not get a 401 Unauthorized
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Errorf("API call with valid PAT should not return 401, got status: %d", resp.StatusCode)
+	}
+
+	t.Logf("API call with PAT returned status: %d", resp.StatusCode)
+}
+
+// =============================================================================
+// Test: Revoked Token Fails API Call
+// =============================================================================
+
+func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping browser test in short mode")
+	}
+
+	env := setupPATTestEnv(t)
+	testEmail := generatePATTestEmail("pat-revoke-api")
+	testPassword := "SecurePass123!"
+	env.loginPATTestUser(t, testEmail, testPassword)
+
+	// Navigate to /settings/tokens
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// Create a token
+	tokenName := "Token to Revoke for API"
+	nameInput := env.waitForPATSelector(t, "input#name")
+	err := nameInput.Fill(tokenName)
+	if err != nil {
+		t.Fatalf("Failed to fill token name: %v", err)
+	}
+
+	scopeSelect := env.waitForPATSelector(t, "select#scope")
+	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
+		Values: playwright.StringSlice("read_write"),
+	})
+	if err != nil {
+		t.Fatalf("Failed to select scope: %v", err)
+	}
+
+	emailInput := env.waitForPATSelector(t, "input#email")
+	err = emailInput.Fill(testEmail)
+	if err != nil {
+		t.Fatalf("Failed to fill email: %v", err)
+	}
+
+	passwordInput := env.waitForPATSelector(t, "input#password")
+	err = passwordInput.Fill(testPassword)
+	if err != nil {
+		t.Fatalf("Failed to fill password: %v", err)
+	}
+
+	submitButton := env.page.Locator("button[type='submit']:has-text('Create Token')")
+	err = submitButton.Click()
+	if err != nil {
+		t.Fatalf("Failed to click submit: %v", err)
+	}
+
+	// Wait for page to reload with new token
+	err = env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+	if err != nil {
+		t.Fatalf("Page did not reload: %v", err)
+	}
+
+	// Wait for token element to appear with extended timeout
+	// The token might be in code#new-token (settings/tokens.html) or code#token-value (tokens/created.html)
+	tokenElement := env.page.Locator("code#new-token, code#token-value")
+	err = tokenElement.First().WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
+	})
+	if err != nil {
+		// Debug: log page content
+		pageContent, _ := env.page.Content()
+		t.Logf("Page content (first 500 chars): %s", pageContent[:min(500, len(pageContent))])
+		t.Fatalf("Token value element not found: %v", err)
+	}
+
+	tokenValue, err := tokenElement.First().TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get token value: %v", err)
+	}
+
+	// Verify the token works before revocation
+	req1, err := http.NewRequest("GET", env.baseURL+"/api/notes", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req1.Header.Set("Authorization", "Bearer "+tokenValue)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp1, err := client.Do(req1)
+	if err != nil {
+		t.Fatalf("Failed to make API request before revocation: %v", err)
+	}
+	resp1.Body.Close()
+
+	if resp1.StatusCode == http.StatusUnauthorized {
+		t.Errorf("Token should work before revocation, got status: %d", resp1.StatusCode)
+	}
+	t.Logf("Before revocation, API returned status: %d", resp1.StatusCode)
+
+	// Navigate to tokens page to revoke
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// Set up dialog handler for confirmation
+	env.page.OnDialog(func(dialog playwright.Dialog) {
+		dialog.Accept()
+	})
+
+	// Click "Revoke" button for the token
+	revokeButton := env.page.Locator(fmt.Sprintf("tr:has-text('%s') button:has-text('Revoke')", tokenName))
+	err = revokeButton.Click()
+	if err != nil {
+		t.Fatalf("Failed to click Revoke button: %v", err)
+	}
+
+	// Wait for page to reload
+	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+
+	// Verify token no longer works via API
+	req2, err := http.NewRequest("GET", env.baseURL+"/api/notes", nil)
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req2.Header.Set("Authorization", "Bearer "+tokenValue)
+
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("Failed to make API request after revocation: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	// The API should reject the revoked token with 401 Unauthorized
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("API call with revoked PAT should return 401, got status: %d", resp2.StatusCode)
+	}
+
+	t.Logf("After revocation, API returned status: %d (expected 401)", resp2.StatusCode)
+}
+
+// =============================================================================
+// Test: Navigate Away and Back - Token Masked
+// =============================================================================
+
+func TestBrowser_TokenSettings_NavigateAwayMasksToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping browser test in short mode")
+	}
+
+	env := setupPATTestEnv(t)
+	testEmail := generatePATTestEmail("pat-navigate-mask")
+	testPassword := "SecurePass123!"
+	env.loginPATTestUser(t, testEmail, testPassword)
+
+	// Navigate to /settings/tokens
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// Create a token
+	tokenName := "Token for Navigate Test"
+	env.page.Locator("input#name").Fill(tokenName)
+	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
+		Values: playwright.StringSlice("read_write"),
+	})
+	env.page.Locator("input#email").Fill(testEmail)
+	env.page.Locator("input#password").Fill(testPassword)
+	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+
+	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+
+	// Verify token is displayed
+	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	tokenValue, err := tokenElement.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get token value: %v", err)
+	}
+
+	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
+		t.Errorf("Token should be visible immediately after creation")
+	}
+
+	// Navigate away to /notes
+	env.navigatePAT(t, "/notes")
+	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
+
+	// Navigate back to /settings/tokens
+	env.navigatePAT(t, "/settings/tokens")
+	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+
+	// The new-token element should not be visible
+	newTokenElement := env.page.Locator("code#new-token, code#token-value")
+	err = newTokenElement.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(2000),
+	})
+
+	// We EXPECT this to timeout/fail because the token should NOT be visible
+	if err == nil {
+		// The element is visible - check if it contains the actual token
+		displayedToken, _ := newTokenElement.TextContent()
+		if displayedToken == tokenValue {
+			t.Error("Full token value should NOT be visible after navigating away and back")
+		}
+	}
+
+	// Verify the token is listed but not in raw form
+	tokenRow := env.page.Locator(fmt.Sprintf("text=%s", tokenName))
+	count, err := tokenRow.Count()
+	if err != nil {
+		t.Fatalf("Failed to count token rows: %v", err)
+	}
+	if count == 0 {
+		t.Error("Token should still appear in the list by name")
+	}
+
+	// Token list should show masked values (not full token)
+	// Look for "agentnotes_pat_" prefix in the table - there should be none
+	// because the list shows token names, not raw values
+	listContent := env.page.Locator("table")
+	tableContent, _ := listContent.TextContent()
+	if strings.Contains(tableContent, tokenValue) {
+		t.Error("Token list should not contain the full raw token value")
 	}
 }

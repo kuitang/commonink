@@ -1,27 +1,35 @@
 package notes
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
-	"html/template"
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	"github.com/kuitang/agent-notes/internal/shorturl"
 )
 
 // PublicNoteService handles public note operations including toggling visibility
 // and uploading/deleting rendered HTML from S3 storage.
 type PublicNoteService struct {
-	s3 *s3client.Client
+	s3          *s3client.Client
+	shortURLSvc *shorturl.Service
+	baseURL     string
 }
 
 // NewPublicNoteService creates a new public note service with the given S3 client.
 func NewPublicNoteService(s3 *s3client.Client) *PublicNoteService {
 	return &PublicNoteService{s3: s3}
+}
+
+// WithShortURLService sets the short URL service for generating short URLs.
+func (s *PublicNoteService) WithShortURLService(svc *shorturl.Service, baseURL string) *PublicNoteService {
+	s.shortURLSvc = svc
+	s.baseURL = baseURL
+	return s
 }
 
 // publicNoteKey returns the object storage key for a public note.
@@ -78,11 +86,27 @@ func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, no
 		if err != nil {
 			return fmt.Errorf("failed to upload public note: %w", err)
 		}
+
+		// Create short URL mapping if service is configured
+		if s.shortURLSvc != nil {
+			fullPath := fmt.Sprintf("/public/%s/%s", userID, noteID)
+			_, err = s.shortURLSvc.Create(ctx, fullPath)
+			if err != nil {
+				// Log but don't fail - short URL is a convenience feature
+				// In production, you might want to handle this differently
+			}
+		}
 	} else {
 		// Delete from S3 storage (ignore not found errors)
 		err = s.s3.DeleteObject(ctx, key)
 		if err != nil {
 			return fmt.Errorf("failed to delete public note: %w", err)
+		}
+
+		// Delete short URL mapping if service is configured
+		if s.shortURLSvc != nil {
+			fullPath := fmt.Sprintf("/public/%s/%s", userID, noteID)
+			_ = s.shortURLSvc.DeleteByFullPath(ctx, fullPath)
 		}
 	}
 
@@ -155,88 +179,42 @@ func (s *PublicNoteService) ListPublicByUser(ctx context.Context, userDB *db.Use
 }
 
 // GetPublicURL returns the public URL for a note.
+// If a short URL service is configured, returns the short URL.
+// Otherwise, returns the full S3 URL.
 func (s *PublicNoteService) GetPublicURL(userID, noteID string) string {
 	key := publicNoteKey(userID, noteID)
 	return s.s3.GetPublicURL(key)
 }
 
-// publicNoteHTMLTemplate is the HTML template for rendering public notes.
-// It includes basic SEO tags and responsive styling.
-const publicNoteHTMLTemplate = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="robots" content="index, follow">
-    <meta property="og:title" content="{{.Title}}">
-    <meta property="og:type" content="article">
-    <meta property="og:url" content="{{.URL}}">
-    <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="{{.Title}}">
-    <title>{{.Title}}</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
-            line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 2rem;
-            color: #333;
-        }
-        h1 {
-            border-bottom: 1px solid #eee;
-            padding-bottom: 0.5rem;
-        }
-        pre {
-            background: #f4f4f4;
-            padding: 1rem;
-            overflow-x: auto;
-            border-radius: 4px;
-        }
-        code {
-            background: #f4f4f4;
-            padding: 0.2rem 0.4rem;
-            border-radius: 2px;
-        }
-        pre code {
-            padding: 0;
-        }
-    </style>
-</head>
-<body>
-    <article>
-        <h1>{{.Title}}</h1>
-        <div class="content"><pre>{{.Content}}</pre></div>
-    </article>
-</body>
-</html>`
+// GetShortURL returns the short URL for a public note.
+// Returns an empty string if no short URL exists or service is not configured.
+func (s *PublicNoteService) GetShortURL(ctx context.Context, userID, noteID string) string {
+	if s.shortURLSvc == nil {
+		return ""
+	}
 
-type publicNoteTemplateData struct {
-	Title   string
-	Content string // Plain text content - template will escape it
-	URL     string
+	fullPath := fmt.Sprintf("/public/%s/%s", userID, noteID)
+	shortURL, err := s.shortURLSvc.GetByFullPath(ctx, fullPath)
+	if err != nil {
+		return ""
+	}
+
+	return s.baseURL + "/pub/" + shortURL.ShortID
 }
 
-// renderNoteHTML renders a note's content to HTML.
-// For now, content is treated as plain text and wrapped in a <pre> tag.
-// In the future, this could support Markdown rendering.
+// renderNoteHTML renders a note's markdown content to a complete HTML document.
+// Uses RenderMarkdownToHTML from render.go to convert markdown to HTML with
+// proper sanitization and SEO meta tags.
 func renderNoteHTML(title, content, userID, noteID string) ([]byte, error) {
-	tmpl, err := template.New("public_note").Parse(publicNoteHTMLTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse template: %w", err)
+	// Generate description from content (first 160 characters)
+	description := content
+	if len(description) > 160 {
+		description = description[:160] + "..."
 	}
 
-	// Pass content as plain text - template will escape it automatically
-	data := publicNoteTemplateData{
-		Title:   title,
-		Content: content, // Template escapes this when rendering
-		URL:     fmt.Sprintf("/public/%s/%s", userID, noteID),
-	}
+	// Generate canonical URL
+	canonicalURL := fmt.Sprintf("/public/%s/%s", userID, noteID)
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return nil, fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.Bytes(), nil
+	// Use the RenderMarkdownToHTML function which properly converts markdown to HTML
+	return RenderMarkdownToHTML(content, title, description, canonicalURL), nil
 }

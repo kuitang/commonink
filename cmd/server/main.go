@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/johannesboyne/gofakes3"
@@ -35,6 +35,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/oauth"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
 )
 
@@ -133,13 +134,45 @@ func main() {
 	}
 	log.Printf("Template renderer initialized with templates from %s", templatesDir)
 
-	// Initialize services (using mocks for M2/M3)
-	emailService := email.NewMockEmailService()
-	oidcClient := auth.NewMockOIDCClient()
-
 	baseURL := os.Getenv("BASE_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost" + addr
+	}
+
+	// Initialize services - use real or mock based on environment
+	var emailService email.EmailService
+	useMockEmail := os.Getenv("USE_MOCK_EMAIL")
+	if useMockEmail == "" || useMockEmail == "true" {
+		emailService = email.NewMockEmailService()
+		log.Println("Using mock email service")
+	} else {
+		resendAPIKey := os.Getenv("RESEND_API_KEY")
+		resendFromEmail := os.Getenv("RESEND_FROM_EMAIL")
+		if resendFromEmail == "" {
+			resendFromEmail = "onboarding@resend.dev"
+		}
+		emailService = email.NewResendEmailService(resendAPIKey, resendFromEmail)
+		log.Println("Using real Resend email service")
+	}
+
+	var oidcClient auth.OIDCClient
+	useMockOIDC := os.Getenv("USE_MOCK_OIDC")
+	if useMockOIDC == "" || useMockOIDC == "true" {
+		oidcClient = auth.NewMockOIDCClient()
+		log.Println("Using mock OIDC client")
+	} else {
+		googleClientID := os.Getenv("GOOGLE_CLIENT_ID")
+		googleClientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
+		googleRedirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
+		if googleRedirectURL == "" {
+			googleRedirectURL = baseURL + "/auth/google/callback"
+		}
+		realOIDC, err := auth.NewGoogleOIDCClient(googleClientID, googleClientSecret, googleRedirectURL)
+		if err != nil {
+			log.Fatalf("Failed to initialize Google OIDC client: %v", err)
+		}
+		oidcClient = realOIDC
+		log.Printf("Using real Google OIDC client (redirect: %s)", googleRedirectURL)
 	}
 
 	// Disable secure cookies for local development (HTTP)
@@ -175,8 +208,12 @@ func main() {
 	// Initialize OAuth handler with consent service
 	oauthHandler := oauth.NewHandler(oauthProvider, sessionService, consentService, renderer)
 
-	// Initialize public notes service
-	publicNotes := notes.NewPublicNoteService(s3Client)
+	// Initialize short URL service
+	shortURLSvc := shorturl.NewService(sessionsDB.Queries())
+	log.Println("Short URL service initialized")
+
+	// Initialize public notes service with short URL support
+	publicNotes := notes.NewPublicNoteService(s3Client).WithShortURLService(shortURLSvc, baseURL)
 
 	// Initialize auth middleware and handlers
 	// Create an OAuth token verifier adapter that wraps the OAuth provider
@@ -197,6 +234,7 @@ func main() {
 		sessionService,
 		consentService,
 		s3Client,
+		shortURLSvc,
 		baseURL,
 	)
 
@@ -223,6 +261,19 @@ func main() {
 	// Register web UI routes (handles /, /login, /register, /notes/*, /public/*, /oauth/consent)
 	webHandler.RegisterRoutes(mux, authMiddleware)
 	log.Println("Web UI routes registered")
+
+	// Initialize and register static page handler (privacy, terms, about, api-docs)
+	staticGenDir := os.Getenv("STATIC_GEN_DIR")
+	if staticGenDir == "" {
+		staticGenDir = "./static/gen"
+	}
+	staticSrcDir := os.Getenv("STATIC_SRC_DIR")
+	if staticSrcDir == "" {
+		staticSrcDir = "./static/src"
+	}
+	staticHandler := web.NewStaticHandler(renderer, staticGenDir, staticSrcDir)
+	staticHandler.RegisterRoutes(mux)
+	log.Println("Static page routes registered at /privacy, /terms, /about, /docs/api")
 
 	// Register auth API routes (no auth required for these)
 	authHandler.RegisterRoutes(mux)
@@ -297,7 +348,13 @@ func main() {
 		log.Println("    GET  /notes/{id}                 - View note (protected)")
 		log.Println("    GET  /notes/{id}/edit            - Edit note form (protected)")
 		log.Println("    GET  /public/{user_id}/{note_id} - Public note view")
+		log.Println("    GET  /pub/{short_id}             - Short URL redirect")
 		log.Println("    GET  /oauth/consent              - OAuth consent page (protected)")
+		log.Println("  Static Pages:")
+		log.Println("    GET  /privacy                    - Privacy policy")
+		log.Println("    GET  /terms                      - Terms of service")
+		log.Println("    GET  /about                      - About page")
+		log.Println("    GET  /docs/api                   - API documentation")
 		log.Println("  Auth API:")
 		log.Println("    GET  /auth/google                - Google OIDC login")
 		log.Println("    GET  /auth/google/callback       - Google OIDC callback")
@@ -305,8 +362,8 @@ func main() {
 		log.Println("    GET  /auth/magic/verify          - Verify magic link")
 		log.Println("    POST /auth/register              - Email/password registration")
 		log.Println("    POST /auth/login                 - Email/password login")
-		log.Println("    POST /auth/password/reset        - Request password reset")
-		log.Println("    POST /auth/password/reset/confirm - Confirm password reset")
+		log.Println("    POST /auth/password-reset         - Request password reset")
+		log.Println("    POST /auth/password-reset-confirm - Confirm password reset")
 		log.Println("    POST /auth/logout                - Logout")
 		log.Println("    GET  /auth/whoami                - Current user info")
 		log.Println("  Notes API (rate limited):")
@@ -395,9 +452,9 @@ func createMockS3Client() (*s3client.Client, func()) {
 
 	// Create S3 client configured for the mock server
 	ctx := context.Background()
-	sdkConfig, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(
+	sdkConfig, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
 		),
 	)

@@ -10,6 +10,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	"github.com/kuitang/agent-notes/internal/shorturl"
 )
 
 // WebHandler provides HTTP handlers for web UI pages.
@@ -21,6 +22,7 @@ type WebHandler struct {
 	sessionService *auth.SessionService
 	consentService *auth.ConsentService
 	s3Client       *s3client.Client
+	shortURLSvc    *shorturl.Service
 	baseURL        string
 }
 
@@ -33,6 +35,7 @@ func NewWebHandler(
 	sessionService *auth.SessionService,
 	consentService *auth.ConsentService,
 	s3Client *s3client.Client,
+	shortURLSvc *shorturl.Service,
 	baseURL string,
 ) *WebHandler {
 	return &WebHandler{
@@ -43,6 +46,7 @@ func NewWebHandler(
 		sessionService: sessionService,
 		consentService: consentService,
 		s3Client:       s3Client,
+		shortURLSvc:    shortURLSvc,
 		baseURL:        baseURL,
 	}
 }
@@ -52,19 +56,11 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	// Landing page
 	mux.Handle("GET /", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleLanding)))
 
-	// Auth pages (no auth required)
-	// Note: /auth/google and /auth/google/callback are registered by internal/auth/handlers.go
+	// Auth pages (HTML pages only - POST routes are registered by internal/auth/handlers.go)
 	mux.HandleFunc("GET /login", h.HandleLoginPage)
-	mux.HandleFunc("POST /auth/login", h.HandleLogin)
-	mux.HandleFunc("POST /auth/magic", h.HandleMagicLinkRequest)
-	mux.HandleFunc("GET /auth/magic/verify", h.HandleMagicLinkVerify)
-	mux.HandleFunc("POST /auth/register", h.HandleRegister)
-	mux.HandleFunc("POST /auth/logout", h.HandleLogout)
-	mux.HandleFunc("GET /password-reset", h.HandlePasswordResetPage)
-	mux.HandleFunc("POST /auth/password-reset", h.HandlePasswordReset)
-	mux.HandleFunc("GET /auth/password-reset-confirm", h.HandlePasswordResetConfirmPage)
-	mux.HandleFunc("POST /auth/password-reset-confirm", h.HandlePasswordResetConfirm)
 	mux.HandleFunc("GET /register", h.HandleRegisterPage)
+	mux.HandleFunc("GET /password-reset", h.HandlePasswordResetPage)
+	mux.HandleFunc("GET /auth/password-reset-confirm", h.HandlePasswordResetConfirmPage)
 
 	// Notes CRUD (auth required - redirect to login for web pages)
 	mux.Handle("GET /notes", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNotesList)))
@@ -79,14 +75,23 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	// Public notes (no auth required)
 	mux.HandleFunc("GET /public/{user_id}/{note_id}", h.HandlePublicNote)
 
-	// OAuth consent (auth required - redirect to login for web pages)
+	// Short URL redirect (no auth required)
+	mux.HandleFunc("GET /pub/{short_id}", h.HandleShortURLRedirect)
+
+	// OAuth consent page (auth required - redirect to login for web pages)
+	// NOTE: POST /oauth/consent is handled by oauth.Handler.RegisterRoutes() - not here
 	mux.Handle("GET /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleConsentPage)))
-	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleConsentDecision)))
 
 	// Settings - Token management (auth required - redirect to login for web pages)
 	mux.Handle("GET /settings/tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTokenSettings)))
 	mux.Handle("POST /settings/tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateToken)))
 	mux.Handle("POST /settings/tokens/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeToken)))
+
+	// Token management - short URLs (aliases for /settings/tokens)
+	mux.Handle("GET /tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTokenSettings)))
+	mux.Handle("GET /tokens/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewTokenPage)))
+	mux.Handle("POST /tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateToken)))
+	mux.Handle("POST /tokens/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeToken)))
 }
 
 // PageData contains common data passed to all templates.
@@ -773,6 +778,29 @@ func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request)
 	}
 
 	http.Redirect(w, r, "/notes/"+noteID, http.StatusFound)
+}
+
+// HandleShortURLRedirect handles GET /pub/{short_id} - redirects to full public note URL.
+func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Request) {
+	shortID := r.PathValue("short_id")
+	if shortID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if h.shortURLSvc == nil {
+		http.Error(w, "Short URL service not configured", http.StatusInternalServerError)
+		return
+	}
+
+	fullPath, err := h.shortURLSvc.Resolve(r.Context(), shortID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Redirect to the full public note path
+	http.Redirect(w, r, fullPath, http.StatusMovedPermanently)
 }
 
 // HandlePublicNote handles GET /public/{user_id}/{note_id} - shows a public note.

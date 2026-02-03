@@ -158,7 +158,8 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 		sessionService,
 		consentService,
 		s3Client,
-		"", // baseURL will be set after server starts
+		nil, // shortURLSvc not needed for public notes tests
+		"",  // baseURL will be set after server starts
 	)
 
 	// Register routes

@@ -25,8 +25,9 @@ func NewHandler(oidcClient OIDCClient, userService *UserService, sessionService 
 
 // RegisterRoutes registers all auth routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	// Google OIDC
+	// Google OIDC (support both GET and POST for flexibility)
 	mux.HandleFunc("GET /auth/google", h.HandleGoogleLogin)
+	mux.HandleFunc("POST /auth/google", h.HandleGoogleLogin)
 	mux.HandleFunc("GET /auth/google/callback", h.HandleGoogleCallback)
 
 	// Magic Link
@@ -37,12 +38,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/register", h.HandleRegister)
 	mux.HandleFunc("POST /auth/login", h.HandleLogin)
 
-	// Password Reset
-	mux.HandleFunc("POST /auth/password/reset", h.HandlePasswordResetRequest)
-	mux.HandleFunc("POST /auth/password/reset/confirm", h.HandlePasswordResetConfirm)
+	// Password Reset (use same paths as web forms)
+	mux.HandleFunc("POST /auth/password-reset", h.HandlePasswordResetRequest)
+	mux.HandleFunc("POST /auth/password-reset-confirm", h.HandlePasswordResetConfirm)
 
-	// Session
+	// Session (support both GET and POST for logout)
 	mux.HandleFunc("POST /auth/logout", h.HandleLogout)
+	mux.HandleFunc("GET /auth/logout", h.HandleLogout)
 	mux.HandleFunc("GET /auth/whoami", h.HandleWhoami)
 }
 
@@ -146,24 +148,25 @@ type MagicLinkRequest struct {
 
 // HandleMagicLinkRequest sends a magic login link.
 func (h *Handler) HandleMagicLinkRequest(w http.ResponseWriter, r *http.Request) {
-	var req MagicLinkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
+	// Support both URL-encoded and multipart form data (JS fetch sends multipart)
+	if err := r.ParseMultipartForm(32 << 10); err != nil {
+		if err2 := r.ParseForm(); err2 != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
 	}
 
-	if req.Email == "" {
+	email := r.FormValue("email")
+	if email == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
 		return
 	}
 
 	// Send magic link (always succeed to prevent email enumeration)
-	_ = h.userService.SendMagicLink(r.Context(), req.Email)
+	_ = h.userService.SendMagicLink(r.Context(), email)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "If that email exists, a magic link has been sent",
-	})
+	// Redirect to login with success message
+	http.Redirect(w, r, "/login?magic=sent", http.StatusSeeOther)
 }
 
 // HandleMagicLinkVerify verifies a magic link token.
@@ -202,32 +205,34 @@ type RegisterRequest struct {
 
 // HandleRegister handles email/password registration.
 func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Email == "" || req.Password == "" {
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+
+	if email == "" || password == "" {
 		http.Error(w, "Email and password are required", http.StatusBadRequest)
 		return
 	}
 
 	// Validate password strength
-	if err := ValidatePasswordStrength(req.Password); err != nil {
+	if err := ValidatePasswordStrength(password); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Find or create user
-	user, err := h.userService.FindOrCreateByEmail(r.Context(), req.Email)
+	user, err := h.userService.FindOrCreateByEmail(r.Context(), email)
 	if err != nil {
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
 	}
 
 	// Hash and store password (in full implementation)
-	_, err = HashPassword(req.Password)
+	_, err = HashPassword(password)
 	if err != nil {
 		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 		return
@@ -243,12 +248,8 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	// Set session cookie
 	SetCookie(w, sessionID)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"user_id": user.ID,
-		"email":   user.Email,
-	})
+	// Redirect to notes page
+	http.Redirect(w, r, "/notes", http.StatusSeeOther)
 }
 
 // LoginRequest is the request body for login.
@@ -259,19 +260,22 @@ type LoginRequest struct {
 
 // HandleLogin handles email/password login.
 func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Email == "" || req.Password == "" {
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+	_ = password // TODO: verify against stored hash
+
+	if email == "" || password == "" {
 		http.Error(w, "Email and password are required", http.StatusBadRequest)
 		return
 	}
 
 	// Find user (in full implementation, would verify password)
-	user, err := h.userService.FindOrCreateByEmail(r.Context(), req.Email)
+	user, err := h.userService.FindOrCreateByEmail(r.Context(), email)
 	if err != nil {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
@@ -290,11 +294,8 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Set session cookie
 	SetCookie(w, sessionID)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"user_id": user.ID,
-		"email":   user.Email,
-	})
+	// Redirect to notes page
+	http.Redirect(w, r, "/notes", http.StatusSeeOther)
 }
 
 // PasswordResetRequest is the request body for password reset.
@@ -304,24 +305,22 @@ type PasswordResetRequest struct {
 
 // HandlePasswordResetRequest sends a password reset email.
 func (h *Handler) HandlePasswordResetRequest(w http.ResponseWriter, r *http.Request) {
-	var req PasswordResetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Email == "" {
+	email := r.FormValue("email")
+	if email == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
 		return
 	}
 
 	// Send reset email (always succeed to prevent email enumeration)
-	_ = h.userService.SendPasswordReset(r.Context(), req.Email)
+	_ = h.userService.SendPasswordReset(r.Context(), email)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "If that email exists, a reset link has been sent",
-	})
+	// Redirect to login with success message
+	http.Redirect(w, r, "/login?reset=requested", http.StatusSeeOther)
 }
 
 // PasswordResetConfirmRequest is the request body for confirming password reset.
@@ -332,18 +331,20 @@ type PasswordResetConfirmRequest struct {
 
 // HandlePasswordResetConfirm confirms a password reset.
 func (h *Handler) HandlePasswordResetConfirm(w http.ResponseWriter, r *http.Request) {
-	var req PasswordResetConfirmRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Token == "" || req.NewPassword == "" {
+	token := r.FormValue("token")
+	newPassword := r.FormValue("new_password")
+
+	if token == "" || newPassword == "" {
 		http.Error(w, "Token and new password are required", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.userService.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+	if err := h.userService.ResetPassword(r.Context(), token, newPassword); err != nil {
 		if err == ErrWeakPassword {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -356,10 +357,8 @@ func (h *Handler) HandlePasswordResetConfirm(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Password reset successful",
-	})
+	// Redirect to login page with success message
+	http.Redirect(w, r, "/login?reset=success", http.StatusSeeOther)
 }
 
 // HandleLogout logs out the current user.
@@ -373,10 +372,8 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	// Clear session cookie
 	ClearCookie(w)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Logged out successfully",
-	})
+	// Redirect to home page
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // WhoamiResponse is the response for the whoami endpoint.

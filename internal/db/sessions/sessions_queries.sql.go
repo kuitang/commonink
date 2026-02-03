@@ -182,6 +182,24 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const createShortURL = `-- name: CreateShortURL :exec
+
+INSERT INTO short_urls (short_id, full_path, created_at)
+VALUES (?, ?, ?)
+`
+
+type CreateShortURLParams struct {
+	ShortID   string `json:"short_id"`
+	FullPath  string `json:"full_path"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// Short URL operations
+func (q *Queries) CreateShortURL(ctx context.Context, arg CreateShortURLParams) error {
+	_, err := q.db.ExecContext(ctx, createShortURL, arg.ShortID, arg.FullPath, arg.CreatedAt)
+	return err
+}
+
 const createUserKey = `-- name: CreateUserKey :exec
 
 INSERT INTO user_keys (user_id, kek_version, encrypted_dek, created_at)
@@ -338,6 +356,24 @@ DELETE FROM sessions WHERE user_id = ?
 
 func (q *Queries) DeleteSessionsByUserID(ctx context.Context, userID string) error {
 	_, err := q.db.ExecContext(ctx, deleteSessionsByUserID, userID)
+	return err
+}
+
+const deleteShortURL = `-- name: DeleteShortURL :exec
+DELETE FROM short_urls WHERE short_id = ?
+`
+
+func (q *Queries) DeleteShortURL(ctx context.Context, shortID string) error {
+	_, err := q.db.ExecContext(ctx, deleteShortURL, shortID)
+	return err
+}
+
+const deleteShortURLByFullPath = `-- name: DeleteShortURLByFullPath :exec
+DELETE FROM short_urls WHERE full_path = ?
+`
+
+func (q *Queries) DeleteShortURLByFullPath(ctx context.Context, fullPath string) error {
+	_, err := q.db.ExecContext(ctx, deleteShortURLByFullPath, fullPath)
 	return err
 }
 
@@ -589,6 +625,42 @@ func (q *Queries) GetSessionsByUserID(ctx context.Context, userID string) ([]Ses
 		return nil, err
 	}
 	return items, nil
+}
+
+const getShortURLByFullPath = `-- name: GetShortURLByFullPath :one
+SELECT id, short_id, full_path, created_at
+FROM short_urls
+WHERE full_path = ?
+`
+
+func (q *Queries) GetShortURLByFullPath(ctx context.Context, fullPath string) (ShortUrl, error) {
+	row := q.db.QueryRowContext(ctx, getShortURLByFullPath, fullPath)
+	var i ShortUrl
+	err := row.Scan(
+		&i.ID,
+		&i.ShortID,
+		&i.FullPath,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getShortURLByShortID = `-- name: GetShortURLByShortID :one
+SELECT id, short_id, full_path, created_at
+FROM short_urls
+WHERE short_id = ?
+`
+
+func (q *Queries) GetShortURLByShortID(ctx context.Context, shortID string) (ShortUrl, error) {
+	row := q.db.QueryRowContext(ctx, getShortURLByShortID, shortID)
+	var i ShortUrl
+	err := row.Scan(
+		&i.ID,
+		&i.ShortID,
+		&i.FullPath,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getUserKey = `-- name: GetUserKey :one

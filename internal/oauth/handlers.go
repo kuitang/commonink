@@ -246,7 +246,7 @@ func (h *Handler) renderConsentPage(w http.ResponseWriter, r *http.Request, req 
 		Value:    base64.RawURLEncoding.EncodeToString([]byte(authReqData.Encode())),
 		Path:     "/oauth",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   auth.GetSecureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600, // 10 minutes
 	})
@@ -370,7 +370,7 @@ func (h *Handler) HandleConsentSubmit(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/oauth",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   auth.GetSecureCookies(),
 		MaxAge:   -1,
 	})
 

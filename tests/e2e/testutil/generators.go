@@ -68,3 +68,17 @@ func ClientNameGenerator() *rapid.Generator[string] {
 func PKCEVerifierGenerator() *rapid.Generator[string] {
 	return rapid.StringMatching(`[A-Za-z0-9_-]{43,128}`)
 }
+
+// =============================================================================
+// OIDC Generators
+// =============================================================================
+
+// OIDCSubjectGenerator generates valid OIDC subject identifiers.
+func OIDCSubjectGenerator() *rapid.Generator[string] {
+	return rapid.StringMatching(`[a-z0-9]{20,40}`)
+}
+
+// OIDCNameGenerator generates valid OIDC user names.
+func OIDCNameGenerator() *rapid.Generator[string] {
+	return rapid.StringMatching(`[A-Za-z][A-Za-z ]{2,30}`)
+}

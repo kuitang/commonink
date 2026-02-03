@@ -136,17 +136,18 @@ http_request() {
     HTTP_BODY=$(echo "$response" | sed '$d')
 }
 
-# Extract JSON field using jq (or grep fallback)
+# Extract JSON field using jq
 json_field() {
     local json="$1"
     local field="$2"
 
-    if command -v jq &> /dev/null; then
-        echo "$json" | jq -r ".$field // empty"
-    else
-        # Fallback: basic grep extraction (works for simple cases)
-        echo "$json" | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | sed 's/.*: *"\([^"]*\)".*/\1/'
+    if ! command -v jq &> /dev/null; then
+        echo -e "${RED}Error: jq is required but not installed${NC}"
+        echo "Install with: sudo apt-get install jq"
+        exit 1
     fi
+
+    echo "$json" | jq -r ".$field // empty"
 }
 
 # =============================================================================

@@ -1,10 +1,10 @@
 
 {{define "content"}}
-<div class="min-h-screen bg-gray-50 dark:bg-gray-900">
-    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 overflow-y-auto">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 w-full">
         <!-- Back Link -->
         <a href="/notes"
-           class="inline-flex items-center text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-6 transition-colors duration-200">
+           class="inline-flex items-center text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-4 sm:mb-6 transition-colors duration-200">
             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
             </svg>
@@ -14,10 +14,10 @@
         <!-- Note Card -->
         <article class="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
             <!-- Header -->
-            <div class="px-6 py-5 border-b border-gray-200 dark:border-gray-700">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div class="px-4 sm:px-6 py-4 sm:py-5 border-b border-gray-200 dark:border-gray-700">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
                     <div class="flex-1">
-                        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+                        <h1 class="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
                             {{if .Note.Title}}{{.Note.Title}}{{else}}Untitled{{end}}
                         </h1>
                         <div class="flex items-center mt-2 text-sm text-gray-500 dark:text-gray-400">
@@ -50,8 +50,8 @@
             </div>
 
             <!-- Content -->
-            <div class="px-6 py-6">
-                <div class="prose prose-gray dark:prose-invert max-w-none">
+            <div class="px-4 sm:px-6 py-4 sm:py-6">
+                <div class="prose prose-sm sm:prose prose-gray dark:prose-invert max-w-none">
                     {{if .Note.Content}}
                     {{markdown .Note.Content}}
                     {{else}}
@@ -62,8 +62,8 @@
 
             {{if .IsOwner}}
             <!-- Actions (Owner Only) -->
-            <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
-                <div class="flex flex-col sm:flex-row gap-3">
+            <div class="px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
+                <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
                     <!-- Edit Button -->
                     <a href="/notes/{{.Note.ID}}/edit"
                        class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">

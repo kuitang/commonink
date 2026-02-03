@@ -43,6 +43,16 @@ const (
 	MagicTokenExpiry = 15 * time.Minute
 )
 
+// Clock abstracts time for testability.
+type Clock interface {
+	Now() time.Time
+}
+
+// realClock implements Clock using the real system time.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
 // User represents a user account.
 type User struct {
 	ID        string
@@ -57,6 +67,7 @@ type UserService struct {
 	db           *db.SessionsDB
 	emailService email.EmailService
 	baseURL      string // Base URL for magic link generation
+	clock        Clock  // Clock for time operations (defaults to real time)
 }
 
 // NewUserService creates a new user service.
@@ -65,7 +76,13 @@ func NewUserService(sessionsDB *db.SessionsDB, emailSvc email.EmailService, base
 		db:           sessionsDB,
 		emailService: emailSvc,
 		baseURL:      baseURL,
+		clock:        realClock{},
 	}
+}
+
+// SetClock replaces the clock used by the service. Intended for testing.
+func (s *UserService) SetClock(c Clock) {
+	s.clock = c
 }
 
 // FindOrCreateByEmail finds a user by email or creates a new one.
@@ -80,7 +97,7 @@ func (s *UserService) FindOrCreateByEmail(ctx context.Context, emailAddr string)
 	return &User{
 		ID:        userID,
 		Email:     emailAddr,
-		CreatedAt: time.Now(),
+		CreatedAt: s.clock.Now(),
 	}, nil
 }
 
@@ -115,13 +132,14 @@ func (s *UserService) SendMagicLink(ctx context.Context, emailAddr string) error
 	}
 
 	// Store hashed token
-	expiresAt := time.Now().Add(MagicTokenExpiry)
+	now := s.clock.Now()
+	expiresAt := now.Add(MagicTokenExpiry)
 	err = s.db.Queries().UpsertMagicToken(ctx, sessions.UpsertMagicTokenParams{
 		TokenHash: tokenHash,
 		Email:     emailAddr,
 		UserID:    sql.NullString{String: user.ID, Valid: true},
 		ExpiresAt: expiresAt.Unix(),
-		CreatedAt: time.Now().Unix(),
+		CreatedAt: now.Unix(),
 	})
 	if err != nil {
 		return fmt.Errorf("store magic token: %w", err)
@@ -146,13 +164,20 @@ func (s *UserService) VerifyMagicToken(ctx context.Context, token string) (*User
 	// Hash the provided token
 	tokenHash := hashToken(token)
 
-	// Look up the token
-	magicToken, err := s.db.Queries().GetValidMagicToken(ctx, tokenHash)
+	// Look up the token (without SQL-level time filtering so the clock is testable)
+	magicToken, err := s.db.Queries().GetMagicToken(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrInvalidToken
 		}
 		return nil, fmt.Errorf("get magic token: %w", err)
+	}
+
+	// Check expiry using the service clock
+	if magicToken.ExpiresAt <= s.clock.Now().Unix() {
+		// Token is expired; delete it and return error
+		_ = s.db.Queries().DeleteMagicToken(ctx, tokenHash)
+		return nil, ErrInvalidToken
 	}
 
 	// Delete the token (consume it)
@@ -266,20 +291,21 @@ func (s *UserService) SendPasswordReset(ctx context.Context, emailAddr string) e
 	}
 
 	// Store hashed token
-	expiresAt := time.Now().Add(MagicTokenExpiry)
+	now := s.clock.Now()
+	expiresAt := now.Add(MagicTokenExpiry)
 	err = s.db.Queries().UpsertMagicToken(ctx, sessions.UpsertMagicTokenParams{
 		TokenHash: tokenHash,
 		Email:     emailAddr,
 		UserID:    sql.NullString{String: user.ID, Valid: true},
 		ExpiresAt: expiresAt.Unix(),
-		CreatedAt: time.Now().Unix(),
+		CreatedAt: now.Unix(),
 	})
 	if err != nil {
 		return fmt.Errorf("store reset token: %w", err)
 	}
 
 	// Send email with reset link
-	link := fmt.Sprintf("%s/auth/password/reset/confirm?token=%s", s.baseURL, token)
+	link := fmt.Sprintf("%s/auth/password-reset-confirm?token=%s", s.baseURL, token)
 	err = s.emailService.Send(emailAddr, email.TemplatePasswordReset, email.PasswordResetData{
 		Link:      link,
 		ExpiresIn: "15 minutes",

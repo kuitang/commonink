@@ -1292,10 +1292,10 @@ func testIntegration_OAuthMCP_Properties(t *rapid.T) {
 
 	// Step 1: Register OAuth client
 	dcrReq := map[string]interface{}{
-		"client_name":               "TestMCPClient",
-		"redirect_uris":             []string{"http://localhost:8080/callback"},
-		"grant_types":               []string{"authorization_code", "refresh_token"},
-		"response_types":            []string{"code"},
+		"client_name":                "TestMCPClient",
+		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none", // Public client
 	}
 	dcrBody, _ := json.Marshal(dcrReq)
@@ -1649,10 +1649,10 @@ func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
 
 	// Register a public OAuth client
 	dcrReq := map[string]interface{}{
-		"client_name":               "MCPCRUDTestClient",
-		"redirect_uris":             []string{"http://localhost:8080/callback"},
-		"grant_types":               []string{"authorization_code", "refresh_token"},
-		"response_types":            []string{"code"},
+		"client_name":                "MCPCRUDTestClient",
+		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
 	}
 	dcrBody, _ := json.Marshal(dcrReq)
@@ -1858,8 +1858,13 @@ func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
 			"query": searchTerm,
 		},
 	}, 6)
-	// Search may fail if FTS is not configured - that's okay for coverage
-	_ = searchResult
+	if errObj, ok := searchResult["error"]; ok {
+		t.Fatalf("note_search failed: %v", errObj)
+	}
+	searchContent := searchResult["result"].(map[string]interface{})["content"].([]interface{})
+	if len(searchContent) == 0 {
+		t.Fatalf("Search for %q returned empty content", searchTerm)
+	}
 
 	// Step 7: Delete note
 	deleteResult, _ := makeMCPCall("tools/call", map[string]interface{}{
@@ -1908,10 +1913,10 @@ func testIntegration_RefreshToken_Properties(t *rapid.T) {
 
 	// Step 1: Register OAuth client
 	dcrReq := map[string]interface{}{
-		"client_name":               "RefreshTestClient",
-		"redirect_uris":             []string{"http://localhost:8080/callback"},
-		"grant_types":               []string{"authorization_code", "refresh_token"},
-		"response_types":            []string{"code"},
+		"client_name":                "RefreshTestClient",
+		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
 	}
 	dcrBody, _ := json.Marshal(dcrReq)
@@ -2089,10 +2094,10 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	// Step 4: OAuth authorize for MCP client
 	// ==========================================================
 	dcrReq := map[string]interface{}{
-		"client_name":               "JourneyTestClient",
-		"redirect_uris":             []string{"http://localhost:8080/callback"},
-		"grant_types":               []string{"authorization_code", "refresh_token"},
-		"response_types":            []string{"code"},
+		"client_name":                "JourneyTestClient",
+		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
 	}
 	dcrBody, _ := json.Marshal(dcrReq)
@@ -2305,11 +2310,11 @@ func TestIntegration_NotesAPI_CRUD(t *testing.T) {
 	client := ts.Client()
 	client.Jar = jar
 
-	// Register
+	// Register (redirects to /notes, final status is 200)
 	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	require.NoError(t, err)
 	regResp.Body.Close()
-	require.Equal(t, http.StatusCreated, regResp.StatusCode)
+	require.Equal(t, http.StatusOK, regResp.StatusCode)
 
 	t.Run("Create note", func(t *testing.T) {
 		noteBody := `{"title":"Test Note","content":"Test content"}`

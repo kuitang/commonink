@@ -516,9 +516,7 @@ func (c *MCPClient) Call(method string, params interface{}) (*MCPResponse, error
 	req, _ := http.NewRequest("POST", c.BaseURL+"/mcp", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if c.AccessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.AccessToken)
-	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	if c.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
@@ -593,9 +591,7 @@ func (c *MCPClient) Initialize() error {
 	req, _ := http.NewRequest("POST", c.BaseURL+"/mcp", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if c.AccessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.AccessToken)
-	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	if c.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
