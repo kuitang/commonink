@@ -49,6 +49,29 @@ const (
 	DefaultBucketName = "remote-notes"
 )
 
+// =============================================================================
+// OAuth Token Verifier Adapter
+// =============================================================================
+
+// OAuthProviderVerifier adapts oauth.Provider to implement auth.OAuthTokenVerifier.
+type OAuthProviderVerifier struct {
+	provider *oauth.Provider
+}
+
+// VerifyAccessToken verifies an OAuth JWT and returns the claims.
+func (v *OAuthProviderVerifier) VerifyAccessToken(token string) (*auth.OAuthTokenClaims, error) {
+	claims, err := v.provider.VerifyAccessToken(token)
+	if err != nil {
+		return nil, err
+	}
+
+	return &auth.OAuthTokenClaims{
+		Subject:  claims.Subject,
+		ClientID: claims.ClientID,
+		Scope:    claims.Scope,
+	}, nil
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.Println("Remote Notes MicroSaaS - Starting server (Milestone 3)...")
@@ -119,6 +142,12 @@ func main() {
 		baseURL = "http://localhost" + addr
 	}
 
+	// Disable secure cookies for local development (HTTP)
+	if strings.HasPrefix(baseURL, "http://localhost") || strings.HasPrefix(baseURL, "http://127.0.0.1") {
+		auth.SetSecureCookies(false)
+		log.Println("Secure cookies disabled for local development (HTTP)")
+	}
+
 	publicNotesURL := os.Getenv("PUBLIC_NOTES_URL")
 	if publicNotesURL == "" {
 		publicNotesURL = baseURL + "/public"
@@ -150,7 +179,13 @@ func main() {
 	publicNotes := notes.NewPublicNoteService(s3Client)
 
 	// Initialize auth middleware and handlers
+	// Create an OAuth token verifier adapter that wraps the OAuth provider
+	oauthTokenVerifier := &OAuthProviderVerifier{provider: oauthProvider}
+	resourceMetadataURL := baseURL + "/.well-known/oauth-protected-resource"
+
 	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
+	authMiddleware.WithOAuthVerifier(oauthTokenVerifier, resourceMetadataURL)
+
 	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
 
 	// Initialize web handler with all services
@@ -225,8 +260,8 @@ func main() {
 
 	// Create and mount MCP server (requires auth + rate limiting)
 	mcpHandler := &AuthenticatedMCPHandler{}
-	mux.Handle("/mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
-	log.Println("MCP server mounted at /mcp (protected with rate limiting)")
+	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
+	log.Println("MCP server mounted at POST /mcp (protected with rate limiting)")
 
 	// Create HTTP server
 	server := &http.Server{

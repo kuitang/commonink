@@ -18,10 +18,26 @@ const (
 	userDBKey contextKey = "userDB"
 )
 
+// OAuthTokenVerifier is an interface for verifying OAuth JWT access tokens.
+// This is implemented by oauth.Provider.
+type OAuthTokenVerifier interface {
+	VerifyAccessToken(token string) (claims *OAuthTokenClaims, err error)
+}
+
+// OAuthTokenClaims holds the claims extracted from an OAuth JWT.
+// This matches the claims structure used by oauth.Provider.
+type OAuthTokenClaims struct {
+	Subject  string // user_id (sub claim)
+	ClientID string // client_id
+	Scope    string // scope
+}
+
 // Middleware provides authentication middleware for HTTP handlers.
 type Middleware struct {
-	sessionService *SessionService
-	keyManager     *crypto.KeyManager
+	sessionService     *SessionService
+	keyManager         *crypto.KeyManager
+	oauthVerifier      OAuthTokenVerifier
+	resourceMetadataURL string
 }
 
 // NewMiddleware creates a new auth middleware.
@@ -32,8 +48,16 @@ func NewMiddleware(sessionService *SessionService, keyManager *crypto.KeyManager
 	}
 }
 
+// WithOAuthVerifier adds an OAuth token verifier to the middleware.
+// This enables Bearer token authentication with OAuth JWTs for the MCP endpoint.
+func (m *Middleware) WithOAuthVerifier(verifier OAuthTokenVerifier, resourceMetadataURL string) *Middleware {
+	m.oauthVerifier = verifier
+	m.resourceMetadataURL = resourceMetadataURL
+	return m
+}
+
 // RequireAuth is middleware that requires valid authentication.
-// Supports both session cookies and Personal Access Tokens (PAT).
+// Supports session cookies, Personal Access Tokens (PAT), and OAuth JWT tokens.
 // Returns 401 Unauthorized if no valid authentication is present.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +65,7 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 		var userDB *db.UserDB
 		var err error
 
-		// Check for Bearer token (PAT) first
+		// Check for Bearer token first (PAT or OAuth JWT)
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
@@ -50,27 +74,32 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			if IsPATToken(token) {
 				userID, userDB, err = m.authenticateWithPAT(r.Context(), token)
 				if err != nil {
-					http.Error(w, "Unauthorized: invalid token", http.StatusUnauthorized)
+					m.writeUnauthorized(w, "invalid_token", "Invalid personal access token")
 					return
 				}
-			} else {
-				// Not a PAT - could be an OAuth JWT, let OAuthMiddleware handle it
-				// For now, fall through to session auth
+			} else if m.oauthVerifier != nil {
+				// Try OAuth JWT verification
+				userID, userDB, err = m.authenticateWithOAuthJWT(r.Context(), token)
+				if err != nil {
+					fmt.Printf("[AUTH] OAuth JWT verification failed: %v\n", err)
+					m.writeUnauthorized(w, "invalid_token", err.Error())
+					return
+				}
 			}
 		}
 
-		// If not authenticated via PAT, try session cookie
+		// If not authenticated via token, try session cookie
 		if userID == "" {
 			sessionID, err := GetFromRequest(r)
 			if err != nil {
-				http.Error(w, "Unauthorized: no session", http.StatusUnauthorized)
+				m.writeUnauthorized(w, "missing_token", "No valid authentication provided")
 				return
 			}
 
 			// Validate session
 			userID, err = m.sessionService.Validate(r.Context(), sessionID)
 			if err != nil {
-				http.Error(w, "Unauthorized: invalid session", http.StatusUnauthorized)
+				m.writeUnauthorized(w, "invalid_token", "Invalid or expired session")
 				return
 			}
 
@@ -99,6 +128,45 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// authenticateWithOAuthJWT validates an OAuth JWT token and returns the user ID and database.
+func (m *Middleware) authenticateWithOAuthJWT(ctx context.Context, token string) (string, *db.UserDB, error) {
+	claims, err := m.oauthVerifier.VerifyAccessToken(token)
+	if err != nil {
+		return "", nil, err
+	}
+
+	userID := claims.Subject
+	if userID == "" {
+		return "", nil, fmt.Errorf("token has no subject claim")
+	}
+
+	// Get or create user DEK and open database
+	dek, err := m.keyManager.GetOrCreateUserDEK(userID)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to get user DEK: %w", err)
+	}
+
+	// Open user database with DEK
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to open user database: %w", err)
+	}
+
+	return userID, userDB, nil
+}
+
+// writeUnauthorized writes a 401 response with WWW-Authenticate header per RFC 6750.
+func (m *Middleware) writeUnauthorized(w http.ResponseWriter, errorType, errorDesc string) {
+	if m.resourceMetadataURL != "" {
+		challenge := fmt.Sprintf(`Bearer resource_metadata="%s", error="%s", error_description="%s"`,
+			m.resourceMetadataURL, errorType, errorDesc)
+		w.Header().Set("WWW-Authenticate", challenge)
+	} else {
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer error="%s", error_description="%s"`, errorType, errorDesc))
+	}
+	http.Error(w, "Unauthorized: "+errorDesc, http.StatusUnauthorized)
 }
 
 // RequireAuthWithRedirect is middleware for web pages that redirects to login

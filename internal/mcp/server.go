@@ -46,9 +46,16 @@ func NewServer(notesSvc *notes.Service) *Server {
 			return mcpServer
 		},
 		&mcp.StreamableHTTPOptions{
-			// JSONResponse: false allows SSE streaming for long operations
-			// Set to true for simpler JSON-only responses
-			JSONResponse: false,
+			// JSONResponse: true returns application/json responses
+			// This is simpler for clients that don't support SSE streaming
+			// Per MCP spec §2.1.5, JSON responses are valid for all operations
+			JSONResponse: true,
+
+			// Stateless: true because each request is authenticated independently
+			// via OAuth/PAT tokens. The server is created per-user per-request,
+			// so session state doesn't need to persist across requests.
+			// With stateless mode, initialize/initialized handshake is skipped.
+			Stateless: true,
 		},
 	)
 
