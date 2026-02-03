@@ -1,6 +1,9 @@
 package email
 
-import "sync"
+import (
+	"log"
+	"sync"
+)
 
 // EmailService defines the interface for sending emails.
 // In Milestone 2, only the mock implementation is used.
@@ -34,7 +37,7 @@ func NewMockEmailService() *MockEmailService {
 	}
 }
 
-// Send captures the email instead of sending it.
+// Send captures the email instead of sending it and logs for manual testing.
 func (m *MockEmailService) Send(to, templateName string, data any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -43,6 +46,20 @@ func (m *MockEmailService) Send(to, templateName string, data any) error {
 		Template: templateName,
 		Data:     data,
 	})
+
+	// Log email for manual testing visibility
+	log.Printf("[EMAIL] To: %s | Template: %s", to, templateName)
+	switch d := data.(type) {
+	case MagicLinkData:
+		log.Printf("[EMAIL] Magic Link: %s (expires in %s)", d.Link, d.ExpiresIn)
+	case PasswordResetData:
+		log.Printf("[EMAIL] Password Reset Link: %s (expires in %s)", d.Link, d.ExpiresIn)
+	case WelcomeData:
+		log.Printf("[EMAIL] Welcome %s!", d.Name)
+	default:
+		log.Printf("[EMAIL] Data: %+v", data)
+	}
+
 	return nil
 }
 
