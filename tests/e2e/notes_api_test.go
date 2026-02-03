@@ -17,6 +17,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/api"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/notes"
+	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 	"pgregory.net/rapid"
 )
 
@@ -210,28 +211,6 @@ func (s *notesTestServer) searchNotes(query string) (*http.Response, []byte, err
 }
 
 // =============================================================================
-// Generators for property-based testing
-// =============================================================================
-
-// titleGenerator generates valid note titles (non-empty strings)
-func noteTitleGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z0-9 ]{1,50}`)
-}
-
-// contentGenerator generates note content (can be empty)
-func noteContentGenerator() *rapid.Generator[string] {
-	return rapid.OneOf(
-		rapid.Just(""),
-		rapid.StringMatching(`[A-Za-z0-9 .,!?]{1,200}`),
-	)
-}
-
-// searchTermGenerator generates valid search terms
-func noteSearchTermGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-z]{4,15}`)
-}
-
-// =============================================================================
 // Property: Create roundtrip via HTTP - created note can be read back
 // =============================================================================
 
@@ -239,8 +218,8 @@ func testNotesAPI_Create_Roundtrip_Properties(t *rapid.T) {
 	srv := setupNotesTestServerRapid(t)
 	defer srv.cleanup()
 
-	title := noteTitleGenerator().Draw(t, "title")
-	content := noteContentGenerator().Draw(t, "content")
+	title := testutil.NoteTitleGenerator().Draw(t, "title")
+	content := testutil.NoteContentGenerator().Draw(t, "content")
 
 	// Property: POST /notes returns 201 with created note
 	resp, data, err := srv.createNote(title, content)
@@ -308,7 +287,7 @@ func testNotesAPI_Create_RequiresTitle_Properties(t *rapid.T) {
 	srv := setupNotesTestServerRapid(t)
 	defer srv.cleanup()
 
-	content := noteContentGenerator().Draw(t, "content")
+	content := testutil.NoteContentGenerator().Draw(t, "content")
 
 	// Property: POST /notes with empty title returns 400
 	resp, data, err := srv.createNote("", content)
@@ -375,8 +354,8 @@ func testNotesAPI_Update_Properties(t *rapid.T) {
 	defer srv.cleanup()
 
 	// Create initial note
-	title := noteTitleGenerator().Draw(t, "title")
-	content := noteContentGenerator().Draw(t, "content")
+	title := testutil.NoteTitleGenerator().Draw(t, "title")
+	content := testutil.NoteContentGenerator().Draw(t, "content")
 
 	resp, data, err := srv.createNote(title, content)
 	if err != nil {
@@ -390,8 +369,8 @@ func testNotesAPI_Update_Properties(t *rapid.T) {
 	json.Unmarshal(data, &created)
 
 	// Generate new values
-	newTitle := noteTitleGenerator().Draw(t, "newTitle")
-	newContent := noteContentGenerator().Draw(t, "newContent")
+	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
+	newContent := testutil.NoteContentGenerator().Draw(t, "newContent")
 
 	// Property: PUT /notes/{id} updates the note
 	resp, data, err = srv.updateNote(created.ID, &newTitle, &newContent)
@@ -443,7 +422,7 @@ func testNotesAPI_Update_NonExistent_Properties(t *rapid.T) {
 	defer srv.cleanup()
 
 	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
-	newTitle := noteTitleGenerator().Draw(t, "newTitle")
+	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
 
 	// Property: PUT /notes/{id} for non-existent note returns 404
 	resp, data, err := srv.updateNote(nonExistentID, &newTitle, nil)
@@ -473,8 +452,8 @@ func testNotesAPI_Delete_Properties(t *rapid.T) {
 	defer srv.cleanup()
 
 	// Create a note
-	title := noteTitleGenerator().Draw(t, "title")
-	content := noteContentGenerator().Draw(t, "content")
+	title := testutil.NoteTitleGenerator().Draw(t, "title")
+	content := testutil.NoteContentGenerator().Draw(t, "content")
 
 	resp, data, _ := srv.createNote(title, content)
 	if resp.StatusCode != http.StatusCreated {
@@ -553,7 +532,7 @@ func testNotesAPI_List_Pagination_Properties(t *rapid.T) {
 	for i := 0; i < numNotes; i++ {
 		// Use fixed prefix to ensure non-empty title
 		title := fmt.Sprintf("Note%d", i)
-		content := noteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
+		content := testutil.NoteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
 		resp, data, _ := srv.createNote(title, content)
 		if resp.StatusCode == http.StatusCreated {
 			var created noteResponse
@@ -605,11 +584,11 @@ func testNotesAPI_Search_Properties(t *rapid.T) {
 	defer srv.cleanup()
 
 	// Generate a unique search term
-	searchTerm := noteSearchTermGenerator().Draw(t, "searchTerm")
+	searchTerm := testutil.NoteSearchTermGenerator().Draw(t, "searchTerm")
 
 	// Create a note containing the search term
-	title := searchTerm + " " + noteTitleGenerator().Draw(t, "titleSuffix")
-	content := noteContentGenerator().Draw(t, "content")
+	title := searchTerm + " " + testutil.NoteTitleGenerator().Draw(t, "titleSuffix")
+	content := testutil.NoteContentGenerator().Draw(t, "content")
 
 	resp, data, _ := srv.createNote(title, content)
 	if resp.StatusCode != http.StatusCreated {
@@ -690,10 +669,10 @@ func testNotesAPI_CRUD_Workflow_Properties(t *rapid.T) {
 	srv := setupNotesTestServerRapid(t)
 	defer srv.cleanup()
 
-	title := noteTitleGenerator().Draw(t, "title")
-	content := noteContentGenerator().Draw(t, "content")
-	newTitle := noteTitleGenerator().Draw(t, "newTitle")
-	newContent := noteContentGenerator().Draw(t, "newContent")
+	title := testutil.NoteTitleGenerator().Draw(t, "title")
+	content := testutil.NoteContentGenerator().Draw(t, "content")
+	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
+	newContent := testutil.NoteContentGenerator().Draw(t, "newContent")
 
 	// Create
 	resp, data, _ := srv.createNote(title, content)
@@ -753,7 +732,7 @@ func testNotesAPI_Create_AllowsEmptyContent_Properties(t *rapid.T) {
 	srv := setupNotesTestServerRapid(t)
 	defer srv.cleanup()
 
-	title := noteTitleGenerator().Draw(t, "title")
+	title := testutil.NoteTitleGenerator().Draw(t, "title")
 
 	// Property: POST /notes with empty content returns 201
 	resp, data, err := srv.createNote(title, "")
@@ -791,8 +770,8 @@ func testNotesAPI_Search_NoMatches_Properties(t *rapid.T) {
 	// Create some notes without the search term
 	numNotes := rapid.IntRange(1, 5).Draw(t, "numNotes")
 	for i := 0; i < numNotes; i++ {
-		title := noteTitleGenerator().Draw(t, fmt.Sprintf("title%d", i))
-		content := noteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
+		title := testutil.NoteTitleGenerator().Draw(t, fmt.Sprintf("title%d", i))
+		content := testutil.NoteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
 		srv.createNote(title, content)
 	}
 
@@ -837,8 +816,8 @@ func testNotesAPI_MultipleNotes_Independence_Properties(t *rapid.T) {
 
 	// Create multiple notes
 	for i := 0; i < numNotes; i++ {
-		title := noteTitleGenerator().Draw(t, fmt.Sprintf("title%d", i))
-		content := noteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
+		title := testutil.NoteTitleGenerator().Draw(t, fmt.Sprintf("title%d", i))
+		content := testutil.NoteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
 
 		resp, data, _ := srv.createNote(title, content)
 		if resp.StatusCode == http.StatusCreated {
@@ -897,8 +876,8 @@ func testNotesAPI_List_Offset_Properties(t *rapid.T) {
 	// Create a set of notes
 	numNotes := rapid.IntRange(5, 15).Draw(t, "numNotes")
 	for i := 0; i < numNotes; i++ {
-		title := noteTitleGenerator().Draw(t, fmt.Sprintf("title%d", i))
-		content := noteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
+		title := testutil.NoteTitleGenerator().Draw(t, fmt.Sprintf("title%d", i))
+		content := testutil.NoteContentGenerator().Draw(t, fmt.Sprintf("content%d", i))
 		srv.createNote(title, content)
 	}
 
@@ -942,8 +921,8 @@ func testNotesAPI_Update_PartialUpdate_Properties(t *rapid.T) {
 	defer srv.cleanup()
 
 	// Create initial note
-	originalTitle := noteTitleGenerator().Draw(t, "originalTitle")
-	originalContent := noteContentGenerator().Draw(t, "originalContent")
+	originalTitle := testutil.NoteTitleGenerator().Draw(t, "originalTitle")
+	originalContent := testutil.NoteContentGenerator().Draw(t, "originalContent")
 
 	resp, data, _ := srv.createNote(originalTitle, originalContent)
 	if resp.StatusCode != http.StatusCreated {
@@ -954,7 +933,7 @@ func testNotesAPI_Update_PartialUpdate_Properties(t *rapid.T) {
 	json.Unmarshal(data, &created)
 
 	// Update only title
-	newTitle := noteTitleGenerator().Draw(t, "newTitle")
+	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
 	resp, data, _ = srv.updateNote(created.ID, &newTitle, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Update failed: %d", resp.StatusCode)

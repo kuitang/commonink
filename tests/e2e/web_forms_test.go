@@ -38,6 +38,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/web"
+	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
 // =============================================================================
@@ -170,13 +171,15 @@ func createWebFormServer(tempDir string) *webFormServer {
 		server.URL,
 	)
 
-	// Register ALL web routes (including form endpoints)
+	// Register ALL web routes (GET pages only - not POST form handlers)
 	webHandler.RegisterRoutes(mux, authMiddleware)
-	// Note: auth.Handler.RegisterRoutes() and oauth.Handler.RegisterRoutes() are NOT called
-	// here because web.WebHandler.RegisterRoutes() already registers HTML form routes
-	// for the same paths, which would cause route conflicts
 
-	// Register OAuth metadata routes only (not HTML form routes which conflict)
+	// Register auth API routes (POST /auth/* for form handling)
+	oidcClient := auth.NewMockOIDCClient()
+	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
+	authHandler.RegisterRoutes(mux)
+
+	// Register OAuth metadata routes
 	oauthProvider.RegisterMetadataRoutes(mux)
 
 	// Health check
@@ -260,27 +263,6 @@ func findWebFormTemplatesDir() string {
 	}
 
 	panic("Cannot find templates directory")
-}
-
-// =============================================================================
-// RAPID GENERATORS
-// =============================================================================
-
-func webFormEmailGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-z]{5,10}@example\.com`)
-}
-
-func webFormPasswordGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z0-9!@#]{12,20}`)
-}
-
-func webFormNoteTitleGenerator() *rapid.Generator[string] {
-	// Ensure title has at least one letter to be distinctive
-	return rapid.StringMatching(`[A-Za-z][A-Za-z0-9 ]{4,49}`)
-}
-
-func webFormNoteContentGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z0-9 .,!?]{10,200}`)
 }
 
 // =============================================================================
@@ -370,8 +352,8 @@ func TestWebForm_Registration_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
-		password := webFormPasswordGenerator().Draw(rt, "password")
+		email := testutil.EmailGenerator().Draw(rt, "email")
+		password := testutil.PasswordGenerator().Draw(rt, "password")
 
 		jar, _ := cookiejar.New(nil)
 		client := ts.Client()
@@ -438,7 +420,7 @@ func TestWebForm_RegistrationValidation_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
+		email := testutil.EmailGenerator().Draw(rt, "email")
 
 		client := ts.Client()
 
@@ -519,13 +501,12 @@ func TestWebForm_Login_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
-		password := webFormPasswordGenerator().Draw(rt, "password")
+		email := testutil.EmailGenerator().Draw(rt, "email")
+		password := testutil.PasswordGenerator().Draw(rt, "password")
 
 		// First register the user via API
 		apiClient := ts.Client()
-		regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-		regResp, err := apiClient.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+		regResp, err := apiClient.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 		if err != nil {
 			rt.Fatalf("Registration failed: %v", err)
 		}
@@ -580,7 +561,7 @@ func TestWebForm_MagicLink_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
+		email := testutil.EmailGenerator().Draw(rt, "email")
 
 		// Clear previous emails for this iteration
 		ts.emailService.Clear()
@@ -603,10 +584,10 @@ func TestWebForm_MagicLink_Properties(t *testing.T) {
 		}
 		defer magicResp.Body.Close()
 
-		// Should show success page or redirect
-		if magicResp.StatusCode != http.StatusOK && magicResp.StatusCode != http.StatusFound {
+		// Should redirect to login page (303 See Other)
+		if magicResp.StatusCode != http.StatusSeeOther && magicResp.StatusCode != http.StatusFound {
 			body, _ := io.ReadAll(magicResp.Body)
-			rt.Fatalf("Magic link should succeed, got %d: %s", magicResp.StatusCode, string(body))
+			rt.Fatalf("Magic link should redirect (302/303), got %d: %s", magicResp.StatusCode, string(body))
 		}
 
 		// Property 2: Email should be sent
@@ -678,14 +659,13 @@ func TestWebForm_PasswordReset_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
-		password := webFormPasswordGenerator().Draw(rt, "password")
-		newPassword := webFormPasswordGenerator().Draw(rt, "newPassword")
+		email := testutil.EmailGenerator().Draw(rt, "email")
+		password := testutil.PasswordGenerator().Draw(rt, "password")
+		newPassword := testutil.PasswordGenerator().Draw(rt, "newPassword")
 
 		// Register user first
 		apiClient := ts.Client()
-		regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-		regResp, _ := apiClient.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+		regResp, _ := apiClient.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 		regResp.Body.Close()
 
 		// Clear emails
@@ -730,9 +710,8 @@ func TestWebForm_PasswordReset_Properties(t *testing.T) {
 
 		// Property 4: POST /auth/password-reset-confirm with form data resets password
 		confirmForm := url.Values{
-			"token":            {token},
-			"password":         {newPassword},
-			"confirm_password": {newPassword},
+			"token":        {token},
+			"new_password": {newPassword},
 		}
 
 		confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", confirmForm)
@@ -749,9 +728,8 @@ func TestWebForm_PasswordReset_Properties(t *testing.T) {
 
 		// Property 5: Token should be consumed
 		confirmForm2 := url.Values{
-			"token":            {token},
-			"password":         {"AnotherPassword789!"},
-			"confirm_password": {"AnotherPassword789!"},
+			"token":        {token},
+			"new_password": {"AnotherPassword789!"},
 		}
 
 		reuse, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", confirmForm2)
@@ -778,10 +756,10 @@ func TestWebForm_NotesCRUD_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
-		noteTitle := webFormNoteTitleGenerator().Draw(rt, "title")
-		noteContent := webFormNoteContentGenerator().Draw(rt, "content")
-		updatedContent := webFormNoteContentGenerator().Draw(rt, "updatedContent")
+		email := testutil.EmailGenerator().Draw(rt, "email")
+		noteTitle := testutil.NoteTitleGenerator().Draw(rt, "title")
+		noteContent := testutil.NoteContentGenerator().Draw(rt, "content")
+		updatedContent := testutil.NoteContentGenerator().Draw(rt, "updatedContent")
 
 		// Create user and get session
 		ctx := context.Background()
@@ -935,9 +913,9 @@ func TestWebForm_SessionIsolation_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email1 := webFormEmailGenerator().Draw(rt, "email1")
-		email2 := webFormEmailGenerator().Draw(rt, "email2")
-		noteTitle := webFormNoteTitleGenerator().Draw(rt, "title")
+		email1 := testutil.EmailGenerator().Draw(rt, "email1")
+		email2 := testutil.EmailGenerator().Draw(rt, "email2")
+		noteTitle := testutil.NoteTitleGenerator().Draw(rt, "title")
 
 		// Create two users
 		ctx := context.Background()
@@ -1032,7 +1010,7 @@ func TestWebForm_Logout_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
+		email := testutil.EmailGenerator().Draw(rt, "email")
 
 		ctx := context.Background()
 		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
@@ -1101,7 +1079,7 @@ func TestWebForm_EmptyStateAndPagination_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
+		email := testutil.EmailGenerator().Draw(rt, "email")
 
 		ctx := context.Background()
 		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
@@ -1178,9 +1156,9 @@ func TestWebForm_PublicNotes_Properties(t *testing.T) {
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		email := webFormEmailGenerator().Draw(rt, "email")
-		noteTitle := webFormNoteTitleGenerator().Draw(rt, "title")
-		noteContent := webFormNoteContentGenerator().Draw(rt, "content")
+		email := testutil.EmailGenerator().Draw(rt, "email")
+		noteTitle := testutil.NoteTitleGenerator().Draw(rt, "title")
+		noteContent := testutil.NoteContentGenerator().Draw(rt, "content")
 
 		ctx := context.Background()
 		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
@@ -1307,7 +1285,7 @@ func TestWebForm_ArbitraryInputs_Properties(t *testing.T) {
 
 		// Property 5: XSS characters in note content are escaped
 		ctx := context.Background()
-		xssEmail := webFormEmailGenerator().Draw(rt, "xss_email")
+		xssEmail := testutil.EmailGenerator().Draw(rt, "xss_email")
 		user, _ := ts.userService.FindOrCreateByEmail(ctx, xssEmail)
 		sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 

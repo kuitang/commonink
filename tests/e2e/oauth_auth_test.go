@@ -40,6 +40,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/internal/oauth"
 	"github.com/kuitang/agent-notes/internal/web"
+	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
 // =============================================================================
@@ -162,10 +163,10 @@ func createOAuthTestServer(tempDir string) *oauthTestServer {
 	mux.HandleFunc("GET /auth/magic/verify", func(w http.ResponseWriter, r *http.Request) {
 		handleTestMagicLinkVerify(w, r, userService, sessionService)
 	})
-	mux.HandleFunc("POST /auth/password/reset", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /auth/password-reset", func(w http.ResponseWriter, r *http.Request) {
 		handleTestPasswordResetRequest(w, r, userService)
 	})
-	mux.HandleFunc("POST /auth/password/reset/confirm", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /auth/password-reset-confirm", func(w http.ResponseWriter, r *http.Request) {
 		handleTestPasswordResetConfirm(w, r, userService)
 	})
 	mux.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -999,32 +1000,31 @@ func handleTestLoginPage(w http.ResponseWriter, r *http.Request) {
 
 // handleTestRegister handles POST /auth/register for testing
 func handleTestRegister(w http.ResponseWriter, r *http.Request, userService *auth.UserService, sessionService *auth.SessionService) {
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Email == "" || req.Password == "" {
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+
+	if email == "" || password == "" {
 		http.Error(w, "Email and password are required", http.StatusBadRequest)
 		return
 	}
 
-	if err := auth.ValidatePasswordStrength(req.Password); err != nil {
+	if err := auth.ValidatePasswordStrength(password); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	user, err := userService.FindOrCreateByEmail(r.Context(), req.Email)
+	user, err := userService.FindOrCreateByEmail(r.Context(), email)
 	if err != nil {
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
 	}
 
-	_, err = auth.HashPassword(req.Password)
+	_, err = auth.HashPassword(password)
 	if err != nil {
 		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 		return
@@ -1048,21 +1048,19 @@ func handleTestRegister(w http.ResponseWriter, r *http.Request, userService *aut
 
 // handleTestMagicLinkRequest handles POST /auth/magic for testing
 func handleTestMagicLinkRequest(w http.ResponseWriter, r *http.Request, userService *auth.UserService) {
-	var req struct {
-		Email string `json:"email"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Email == "" {
+	email := r.FormValue("email")
+	if email == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
 		return
 	}
 
 	// Always succeed to prevent email enumeration
-	_ = userService.SendMagicLink(r.Context(), req.Email)
+	_ = userService.SendMagicLink(r.Context(), email)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -1094,23 +1092,21 @@ func handleTestMagicLinkVerify(w http.ResponseWriter, r *http.Request, userServi
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// handleTestPasswordResetRequest handles POST /auth/password/reset for testing
+// handleTestPasswordResetRequest handles POST /auth/password-reset for testing
 func handleTestPasswordResetRequest(w http.ResponseWriter, r *http.Request, userService *auth.UserService) {
-	var req struct {
-		Email string `json:"email"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Email == "" {
+	email := r.FormValue("email")
+	if email == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
 		return
 	}
 
 	// Always succeed to prevent email enumeration
-	_ = userService.SendPasswordReset(r.Context(), req.Email)
+	_ = userService.SendPasswordReset(r.Context(), email)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -1118,23 +1114,22 @@ func handleTestPasswordResetRequest(w http.ResponseWriter, r *http.Request, user
 	})
 }
 
-// handleTestPasswordResetConfirm handles POST /auth/password/reset/confirm for testing
+// handleTestPasswordResetConfirm handles POST /auth/password-reset-confirm for testing
 func handleTestPasswordResetConfirm(w http.ResponseWriter, r *http.Request, userService *auth.UserService) {
-	var req struct {
-		Token       string `json:"token"`
-		NewPassword string `json:"new_password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Token == "" || req.NewPassword == "" {
+	token := r.FormValue("token")
+	newPassword := r.FormValue("new_password")
+
+	if token == "" || newPassword == "" {
 		http.Error(w, "Token and new password are required", http.StatusBadRequest)
 		return
 	}
 
-	if err := userService.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+	if err := userService.ResetPassword(r.Context(), token, newPassword); err != nil {
 		if err == auth.ErrWeakPassword {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -1395,30 +1390,12 @@ func TestBothClientsCompatibility(t *testing.T) {
 // PROPERTY-BASED OAUTH TESTS
 // =============================================================================
 
-// Generators for OAuth property tests
-func stateGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-zA-Z0-9_-]{16,64}`)
-}
-
-func scopeGenerator() *rapid.Generator[string] {
-	return rapid.SampledFrom([]string{"notes:read", "notes:write", "notes:read notes:write"})
-}
-
-func clientNameGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z][A-Za-z0-9 _-]{2,30}`)
-}
-
-func pkceVerifierGenerator() *rapid.Generator[string] {
-	// PKCE verifier must be 43-128 characters, URL-safe
-	return rapid.StringMatching(`[A-Za-z0-9_-]{43,128}`)
-}
-
 // testOAuth_FullFlow_Properties tests the full OAuth flow with random parameters
 func testOAuth_FullFlow_Properties(t *rapid.T) {
 	// Note: This test uses a shared server to avoid mutex contention in rapid tests
 	// Each iteration generates random state and scopes
-	state := stateGenerator().Draw(t, "state")
-	scope := scopeGenerator().Draw(t, "scope")
+	state := testutil.StateGenerator().Draw(t, "state")
+	scope := testutil.ScopeGenerator().Draw(t, "scope")
 
 	// Property: State must be preserved through the flow
 	// Property: Scopes in token must match requested scopes
@@ -1443,7 +1420,7 @@ func TestOAuth_FullFlow_Properties(t *testing.T) {
 
 // testOAuth_PKCE_Properties tests PKCE with random verifiers
 func testOAuth_PKCE_Properties(t *rapid.T) {
-	verifier := pkceVerifierGenerator().Draw(t, "verifier")
+	verifier := testutil.PKCEVerifierGenerator().Draw(t, "verifier")
 
 	// Compute S256 challenge
 	h := sha256.Sum256([]byte(verifier))
@@ -1486,7 +1463,7 @@ func testOAuth_RefreshToken_Properties(t *rapid.T) {
 	defer ts.cleanup()
 
 	// Setup: Register client and get initial tokens
-	clientName := clientNameGenerator().Draw(t, "clientName")
+	clientName := testutil.ClientNameGenerator().Draw(t, "clientName")
 
 	// Create client (use localhost redirect for testing)
 	result, err := ts.oauthProvider.CreateClient(context.Background(), oauth.CreateClientParams{
@@ -1565,35 +1542,19 @@ func TestOAuth_RefreshToken_Properties(t *testing.T) {
 // PROPERTY-BASED AUTH API TESTS
 // =============================================================================
 
-// Generators for Auth property tests
-func emailGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-z]{5,10}@[a-z]{4,8}\.(com|org|net)`)
-}
-
-func passwordGenerator() *rapid.Generator[string] {
-	// Generate valid passwords (8+ chars)
-	return rapid.StringMatching(`[A-Za-z0-9!@#$%^&*]{8,32}`)
-}
-
-func weakPasswordGenerator() *rapid.Generator[string] {
-	// Generate weak passwords (less than 8 chars)
-	return rapid.StringMatching(`[a-z]{1,7}`)
-}
-
 // testAuth_Registration_Properties tests registration with random emails/passwords
 func testAuth_Registration_Properties(t *rapid.T) {
 	ts := setupOAuthTestServerRapid()
 	defer ts.cleanup()
 
-	email := emailGenerator().Draw(t, "email")
-	password := passwordGenerator().Draw(t, "password")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	// Use the test server's TLS-capable client
 	client := ts.Client()
 
 	// Property: Valid registration should succeed
-	body := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	resp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(body))
+	resp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Registration request failed: %v", err)
 	}
@@ -1642,15 +1603,14 @@ func testAuth_Registration_WeakPassword_Properties(t *rapid.T) {
 	ts := setupOAuthTestServerRapid()
 	defer ts.cleanup()
 
-	email := emailGenerator().Draw(t, "email")
-	weakPassword := weakPasswordGenerator().Draw(t, "weakPassword")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	weakPassword := testutil.WeakPasswordGenerator().Draw(t, "weakPassword")
 
 	// Use the test server's TLS-capable client
 	client := ts.Client()
 
 	// Property: Weak password should be rejected
-	body := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, weakPassword)
-	resp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(body))
+	resp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {weakPassword}})
 	if err != nil {
 		t.Fatalf("Registration request failed: %v", err)
 	}
@@ -1671,26 +1631,21 @@ func testAuth_Login_Properties(t *rapid.T) {
 	ts := setupOAuthTestServerRapid()
 	defer ts.cleanup()
 
-	email := emailGenerator().Draw(t, "email")
-	password := passwordGenerator().Draw(t, "password")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	// Use the test server's TLS-capable client
 	client := ts.Client()
 
 	// First register the user
-	regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Registration failed: %v", err)
 	}
 	regResp.Body.Close()
 
 	// Property: Login should succeed for registered user
-	form := url.Values{
-		"email":    {email},
-		"password": {password},
-	}
-	loginResp, err := client.PostForm(ts.URL+"/auth/login", form)
+	loginResp, err := client.PostForm(ts.URL+"/auth/login", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Login request failed: %v", err)
 	}
@@ -1728,14 +1683,13 @@ func testAuth_MagicLink_Properties(t *rapid.T) {
 	ts := setupOAuthTestServerRapid()
 	defer ts.cleanup()
 
-	email := emailGenerator().Draw(t, "email")
+	email := testutil.EmailGenerator().Draw(t, "email")
 
 	// Use the test server's TLS-capable client
 	client := ts.Client()
 
 	// Property: Magic link request should always succeed (to prevent enumeration)
-	body := fmt.Sprintf(`{"email":"%s"}`, email)
-	resp, err := client.Post(ts.URL+"/auth/magic", "application/json", strings.NewReader(body))
+	resp, err := client.PostForm(ts.URL+"/auth/magic", url.Values{"email": {email}})
 	if err != nil {
 		t.Fatalf("Magic link request failed: %v", err)
 	}
@@ -1775,14 +1729,13 @@ func testAuth_PasswordReset_Properties(t *rapid.T) {
 	ts := setupOAuthTestServerRapid()
 	defer ts.cleanup()
 
-	email := emailGenerator().Draw(t, "email")
+	email := testutil.EmailGenerator().Draw(t, "email")
 
 	// Use the test server's TLS-capable client
 	client := ts.Client()
 
 	// Property: Password reset request should always succeed (to prevent enumeration)
-	body := fmt.Sprintf(`{"email":"%s"}`, email)
-	resp, err := client.Post(ts.URL+"/auth/password/reset", "application/json", strings.NewReader(body))
+	resp, err := client.PostForm(ts.URL+"/auth/password-reset", url.Values{"email": {email}})
 	if err != nil {
 		t.Fatalf("Password reset request failed: %v", err)
 	}
@@ -1817,8 +1770,8 @@ func testAuth_Session_Properties(t *rapid.T) {
 	ts := setupOAuthTestServerRapid()
 	defer ts.cleanup()
 
-	email := emailGenerator().Draw(t, "email")
-	password := passwordGenerator().Draw(t, "password")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	// Use the test server's TLS-capable client with cookie jar
 	jar, err := cookiejar.New(nil)
@@ -1829,8 +1782,7 @@ func testAuth_Session_Properties(t *rapid.T) {
 	client.Jar = jar
 
 	// Register user
-	regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Registration failed: %v", err)
 	}
@@ -1853,7 +1805,7 @@ func testAuth_Session_Properties(t *rapid.T) {
 	}
 
 	// Property: Logout should succeed
-	logoutResp, err := client.Post(ts.URL+"/auth/logout", "application/json", nil)
+	logoutResp, err := client.PostForm(ts.URL+"/auth/logout", nil)
 	if err != nil {
 		t.Fatalf("Logout request failed: %v", err)
 	}
@@ -1899,7 +1851,7 @@ func testOAuth_StatePreservation_Properties(t *rapid.T) {
 	defer ts.cleanup()
 
 	// Generate random state
-	state := stateGenerator().Draw(t, "state")
+	state := testutil.StateGenerator().Draw(t, "state")
 
 	// Create a client
 	result, err := ts.oauthProvider.CreateClient(context.Background(), oauth.CreateClientParams{

@@ -38,7 +38,12 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/oauth"
 	"github.com/kuitang/agent-notes/internal/web"
+	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
 
 // =============================================================================
 // FULL APP TEST SERVER - Uses REAL handlers
@@ -507,30 +512,6 @@ func writeIntegrationError(w http.ResponseWriter, status int, message string) {
 }
 
 // =============================================================================
-// RAPID GENERATORS FOR PROPERTY-BASED TESTS
-// =============================================================================
-
-func integrationEmailGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-z]{5,10}@example\.com`)
-}
-
-func integrationPasswordGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z0-9!@#]{12,20}`)
-}
-
-func integrationNoteTitleGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z0-9 ]{5,50}`)
-}
-
-func integrationNoteContentGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[A-Za-z0-9 .,!?]{10,200}`)
-}
-
-func integrationOAuthStateGenerator() *rapid.Generator[string] {
-	return rapid.StringMatching(`[a-zA-Z0-9_-]{16,64}`)
-}
-
-// =============================================================================
 // TEST 1: Auth API Flow (tests internal/auth/handlers.go)
 // =============================================================================
 
@@ -538,8 +519,8 @@ func testIntegration_AuthAPI_Properties(t *rapid.T) {
 	ts := setupFullAppServerRapid()
 	defer ts.cleanup()
 
-	email := integrationEmailGenerator().Draw(t, "email")
-	password := integrationPasswordGenerator().Draw(t, "password")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	client := ts.Client()
 	jar, err := cookiejar.New(nil)
@@ -548,45 +529,19 @@ func testIntegration_AuthAPI_Properties(t *rapid.T) {
 	}
 	client.Jar = jar
 
-	// Property 1: POST /auth/register -> 201
-	regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+	// Property 1: POST /auth/register -> redirects to /notes (200 OK)
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Registration request failed: %v", err)
 	}
 	defer regResp.Body.Close()
 
-	if regResp.StatusCode != http.StatusCreated {
+	if regResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(regResp.Body)
-		t.Fatalf("Expected 201 for registration, got %d: %s", regResp.StatusCode, string(body))
+		t.Fatalf("Expected 200 after registration redirect, got %d: %s", regResp.StatusCode, string(body))
 	}
 
-	var regResult map[string]string
-	if err := json.NewDecoder(regResp.Body).Decode(&regResult); err != nil {
-		t.Fatalf("Failed to decode registration response: %v", err)
-	}
-
-	// Property 2: Response contains user_id and email
-	if regResult["user_id"] == "" {
-		t.Fatal("Registration response should contain user_id")
-	}
-	if regResult["email"] != email {
-		t.Fatalf("Registration response email mismatch: expected %s, got %s", email, regResult["email"])
-	}
-
-	// Property 3: Session cookie is set
-	sessionCookieFound := false
-	for _, c := range regResp.Cookies() {
-		if c.Name == "session_id" {
-			sessionCookieFound = true
-			break
-		}
-	}
-	if !sessionCookieFound {
-		t.Fatal("Session cookie should be set after registration")
-	}
-
-	// Property 4: GET /auth/whoami -> authenticated: true
+	// Property 2: GET /auth/whoami -> authenticated: true
 	whoamiResp, err := client.Get(ts.URL + "/auth/whoami")
 	if err != nil {
 		t.Fatalf("Whoami request failed: %v", err)
@@ -602,18 +557,14 @@ func testIntegration_AuthAPI_Properties(t *rapid.T) {
 		t.Fatal("Should be authenticated after registration")
 	}
 
-	// Property 5: POST /auth/logout -> clears session
-	logoutResp, err := client.Post(ts.URL+"/auth/logout", "application/json", nil)
+	// Property 3: POST /auth/logout -> redirects to /
+	logoutResp, err := client.PostForm(ts.URL+"/auth/logout", nil)
 	if err != nil {
 		t.Fatalf("Logout request failed: %v", err)
 	}
 	logoutResp.Body.Close()
 
-	if logoutResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected 200 for logout, got %d", logoutResp.StatusCode)
-	}
-
-	// Property 6: GET /auth/whoami -> authenticated: false after logout
+	// Property 4: GET /auth/whoami -> authenticated: false after logout
 	whoami2Resp, err := client.Get(ts.URL + "/auth/whoami")
 	if err != nil {
 		t.Fatalf("Whoami request after logout failed: %v", err)
@@ -629,9 +580,8 @@ func testIntegration_AuthAPI_Properties(t *rapid.T) {
 		t.Fatal("Should NOT be authenticated after logout")
 	}
 
-	// Property 7: POST /auth/login -> 200 + session cookie
-	loginResp, err := client.Post(ts.URL+"/auth/login", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)))
+	// Property 5: POST /auth/login -> redirects to /notes
+	loginResp, err := client.PostForm(ts.URL+"/auth/login", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Login request failed: %v", err)
 	}
@@ -639,19 +589,23 @@ func testIntegration_AuthAPI_Properties(t *rapid.T) {
 
 	if loginResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(loginResp.Body)
-		t.Fatalf("Expected 200 for login, got %d: %s", loginResp.StatusCode, string(body))
+		t.Fatalf("Expected 200 after login redirect, got %d: %s", loginResp.StatusCode, string(body))
 	}
 
-	// Property 8: Session cookie is set after login
-	loginSessionFound := false
-	for _, c := range loginResp.Cookies() {
-		if c.Name == "session_id" {
-			loginSessionFound = true
-			break
-		}
+	// Property 6: GET /auth/whoami -> authenticated: true after login
+	whoami3Resp, err := client.Get(ts.URL + "/auth/whoami")
+	if err != nil {
+		t.Fatalf("Whoami request after login failed: %v", err)
 	}
-	if !loginSessionFound {
-		t.Fatal("Session cookie should be set after login")
+	defer whoami3Resp.Body.Close()
+
+	var whoami3Result map[string]interface{}
+	if err := json.NewDecoder(whoami3Resp.Body).Decode(&whoami3Result); err != nil {
+		t.Fatalf("Failed to decode whoami response: %v", err)
+	}
+
+	if whoami3Result["authenticated"] != true {
+		t.Fatal("Should be authenticated after login")
 	}
 }
 
@@ -675,11 +629,10 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	client := ts.Client()
 
 	// Generate valid and invalid inputs
-	validEmail := integrationEmailGenerator().Draw(t, "validEmail")
+	validEmail := testutil.EmailGenerator().Draw(t, "validEmail")
 
 	// Property 1: Register with missing email should fail
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json",
-		strings.NewReader(`{"password":"ValidPassword123!"}`))
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"password": {"ValidPassword123!"}})
 	if err != nil {
 		t.Fatalf("Register request failed: %v", err)
 	}
@@ -690,8 +643,7 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 
 	// Property 2: Register with missing password should fail
-	regResp2, err := client.Post(ts.URL+"/auth/register", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s"}`, validEmail)))
+	regResp2, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {validEmail}})
 	if err != nil {
 		t.Fatalf("Register request failed: %v", err)
 	}
@@ -702,8 +654,7 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 
 	// Property 3: Register with weak password should fail
-	regResp3, err := client.Post(ts.URL+"/auth/register", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"weak"}`, validEmail)))
+	regResp3, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {validEmail}, "password": {"weak"}})
 	if err != nil {
 		t.Fatalf("Register request failed: %v", err)
 	}
@@ -714,8 +665,7 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 
 	// Property 4: Login with missing email should fail
-	loginResp, err := client.Post(ts.URL+"/auth/login", "application/json",
-		strings.NewReader(`{"password":"SomePassword123!"}`))
+	loginResp, err := client.PostForm(ts.URL+"/auth/login", url.Values{"password": {"SomePassword123!"}})
 	if err != nil {
 		t.Fatalf("Login request failed: %v", err)
 	}
@@ -726,8 +676,7 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 
 	// Property 5: Login with missing password should fail
-	loginResp2, err := client.Post(ts.URL+"/auth/login", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s"}`, validEmail)))
+	loginResp2, err := client.PostForm(ts.URL+"/auth/login", url.Values{"email": {validEmail}})
 	if err != nil {
 		t.Fatalf("Login request failed: %v", err)
 	}
@@ -738,8 +687,7 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 
 	// Property 6: Magic link with missing email should fail
-	magicResp, err := client.Post(ts.URL+"/auth/magic", "application/json",
-		strings.NewReader(`{}`))
+	magicResp, err := client.PostForm(ts.URL+"/auth/magic", url.Values{})
 	if err != nil {
 		t.Fatalf("Magic link request failed: %v", err)
 	}
@@ -750,8 +698,7 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 
 	// Property 7: Password reset with missing email should fail
-	resetResp, err := client.Post(ts.URL+"/auth/password/reset", "application/json",
-		strings.NewReader(`{}`))
+	resetResp, err := client.PostForm(ts.URL+"/auth/password-reset", url.Values{})
 	if err != nil {
 		t.Fatalf("Password reset request failed: %v", err)
 	}
@@ -761,16 +708,15 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 		t.Fatalf("Password reset with missing email should return 400, got %d", resetResp.StatusCode)
 	}
 
-	// Property 8: Invalid JSON should return 400
-	invalidJSONResp, err := client.Post(ts.URL+"/auth/register", "application/json",
-		strings.NewReader(`{invalid json}`))
+	// Property 8: Empty form data should return 400
+	emptyResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{})
 	if err != nil {
-		t.Fatalf("Invalid JSON request failed: %v", err)
+		t.Fatalf("Empty form request failed: %v", err)
 	}
-	invalidJSONResp.Body.Close()
+	emptyResp.Body.Close()
 
-	if invalidJSONResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("Invalid JSON should return 400, got %d", invalidJSONResp.StatusCode)
+	if emptyResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Empty form should return 400, got %d", emptyResp.StatusCode)
 	}
 
 	// Property 9: Whoami when not authenticated should return authenticated: false
@@ -805,7 +751,7 @@ func testIntegration_MagicLink_Properties(t *rapid.T) {
 	ts := setupFullAppServerRapid()
 	defer ts.cleanup()
 
-	email := integrationEmailGenerator().Draw(t, "email")
+	email := testutil.EmailGenerator().Draw(t, "email")
 
 	client := ts.Client()
 	jar, err := cookiejar.New(nil)
@@ -814,30 +760,20 @@ func testIntegration_MagicLink_Properties(t *rapid.T) {
 	}
 	client.Jar = jar
 
-	// Property 1: POST /auth/magic with email -> 200 (always succeeds to prevent enumeration)
-	magicResp, err := client.Post(ts.URL+"/auth/magic", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s"}`, email)))
+	// Property 1: POST /auth/magic with email -> redirects to login (always succeeds to prevent enumeration)
+	magicResp, err := client.PostForm(ts.URL+"/auth/magic", url.Values{"email": {email}})
 	if err != nil {
 		t.Fatalf("Magic link request failed: %v", err)
 	}
 	defer magicResp.Body.Close()
 
+	// After redirect, we end up at /login with 200 OK
 	if magicResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(magicResp.Body)
-		t.Fatalf("Expected 200 for magic link, got %d: %s", magicResp.StatusCode, string(body))
+		t.Fatalf("Expected 200 after redirect, got %d: %s", magicResp.StatusCode, string(body))
 	}
 
-	// Property 2: Response contains generic message
-	var magicResult map[string]string
-	if err := json.NewDecoder(magicResp.Body).Decode(&magicResult); err != nil {
-		t.Fatalf("Failed to decode magic link response: %v", err)
-	}
-
-	if magicResult["message"] == "" {
-		t.Fatal("Magic link response should contain message")
-	}
-
-	// Property 3: Email was sent via mock service
+	// Property 2: Email was sent via mock service
 	emailCount := ts.emailService.Count()
 	if emailCount == 0 {
 		t.Fatal("Magic link email should have been sent")
@@ -925,15 +861,14 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	ts := setupFullAppServerRapid()
 	defer ts.cleanup()
 
-	email := integrationEmailGenerator().Draw(t, "email")
-	password := integrationPasswordGenerator().Draw(t, "password")
-	newPassword := integrationPasswordGenerator().Draw(t, "newPassword")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	password := testutil.PasswordGenerator().Draw(t, "password")
+	newPassword := testutil.PasswordGenerator().Draw(t, "newPassword")
 
 	client := ts.Client()
 
 	// First register the user
-	regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Registration failed: %v", err)
 	}
@@ -942,30 +877,20 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	// Clear emails from registration
 	ts.emailService.Clear()
 
-	// Property 1: POST /auth/password/reset with email -> 200
-	resetResp, err := client.Post(ts.URL+"/auth/password/reset", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s"}`, email)))
+	// Property 1: POST /auth/password-reset with email -> redirects to login
+	resetResp, err := client.PostForm(ts.URL+"/auth/password-reset", url.Values{"email": {email}})
 	if err != nil {
 		t.Fatalf("Password reset request failed: %v", err)
 	}
 	defer resetResp.Body.Close()
 
+	// After redirect, we end up at /login with 200 OK
 	if resetResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resetResp.Body)
-		t.Fatalf("Expected 200 for password reset, got %d: %s", resetResp.StatusCode, string(body))
+		t.Fatalf("Expected 200 after redirect, got %d: %s", resetResp.StatusCode, string(body))
 	}
 
-	// Property 2: Response contains generic message
-	var resetResult map[string]string
-	if err := json.NewDecoder(resetResp.Body).Decode(&resetResult); err != nil {
-		t.Fatalf("Failed to decode password reset response: %v", err)
-	}
-
-	if resetResult["message"] == "" {
-		t.Fatal("Password reset response should contain message")
-	}
-
-	// Property 3: Reset email was sent
+	// Property 2: Reset email was sent
 	emailCount := ts.emailService.Count()
 	if emailCount == 0 {
 		t.Fatal("Password reset email should have been sent")
@@ -993,34 +918,21 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 		t.Fatal("Reset link should contain token")
 	}
 
-	// Property 5: POST /auth/password/reset/confirm with valid token -> 200
-	confirmBody := fmt.Sprintf(`{"token":"%s","new_password":"%s"}`, token, newPassword)
-	confirmResp, err := client.Post(ts.URL+"/auth/password/reset/confirm", "application/json",
-		strings.NewReader(confirmBody))
+	// Property 4: POST /auth/password-reset-confirm with valid token -> redirects to login
+	confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token}, "new_password": {newPassword}})
 	if err != nil {
 		t.Fatalf("Password reset confirm request failed: %v", err)
 	}
 	defer confirmResp.Body.Close()
 
+	// After redirect, we end up at /login with 200 OK
 	if confirmResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(confirmResp.Body)
-		t.Fatalf("Expected 200 for password reset confirm, got %d: %s", confirmResp.StatusCode, string(body))
-	}
-
-	// Property 6: Response should contain success message
-	var confirmResult map[string]string
-	if err := json.NewDecoder(confirmResp.Body).Decode(&confirmResult); err != nil {
-		t.Fatalf("Failed to decode confirm response: %v", err)
-	}
-
-	if confirmResult["message"] == "" {
-		t.Fatal("Password reset confirm response should contain message")
+		t.Fatalf("Expected 200 after redirect, got %d: %s", confirmResp.StatusCode, string(body))
 	}
 
 	// Property 7: Token should be consumed (reusing should fail)
-	confirmBody2 := fmt.Sprintf(`{"token":"%s","new_password":"AnotherPassword123!"}`, token)
-	confirmResp2, err := client.Post(ts.URL+"/auth/password/reset/confirm", "application/json",
-		strings.NewReader(confirmBody2))
+	confirmResp2, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token}, "new_password": {"AnotherPassword123!"}})
 	if err != nil {
 		t.Fatalf("Second password reset confirm request failed: %v", err)
 	}
@@ -1032,8 +944,7 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 
 	// Property 8: Weak password should be rejected
 	// First request a new reset token
-	resetResp2, err := client.Post(ts.URL+"/auth/password/reset", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s"}`, email)))
+	resetResp2, err := client.PostForm(ts.URL+"/auth/password-reset", url.Values{"email": {email}})
 	if err != nil {
 		t.Fatalf("Second password reset request failed: %v", err)
 	}
@@ -1045,9 +956,7 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	token2 := linkURL2.Query().Get("token")
 
 	// Try with weak password
-	weakBody := fmt.Sprintf(`{"token":"%s","new_password":"weak"}`, token2)
-	weakResp, err := client.Post(ts.URL+"/auth/password/reset/confirm", "application/json",
-		strings.NewReader(weakBody))
+	weakResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token2}, "new_password": {"weak"}})
 	if err != nil {
 		t.Fatalf("Weak password reset confirm request failed: %v", err)
 	}
@@ -1094,9 +1003,7 @@ func testIntegration_InvalidTokens_Properties(t *rapid.T) {
 	}
 
 	// Property 2: Password reset confirm with arbitrary token should fail
-	confirmBody := fmt.Sprintf(`{"token":"%s","new_password":"%s"}`, arbitraryToken, arbitraryPassword)
-	confirmResp, err := client.Post(ts.URL+"/auth/password/reset/confirm", "application/json",
-		strings.NewReader(confirmBody))
+	confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {arbitraryToken}, "new_password": {arbitraryPassword}})
 	if err != nil {
 		t.Fatalf("Password reset confirm request failed: %v", err)
 	}
@@ -1130,9 +1037,7 @@ func testIntegration_InvalidTokens_Properties(t *rapid.T) {
 	}
 
 	// Property 5: Empty fields in password reset confirm should be rejected
-	emptyFieldsBody := `{"token":"","new_password":""}`
-	emptyFieldsResp, err := client.Post(ts.URL+"/auth/password/reset/confirm", "application/json",
-		strings.NewReader(emptyFieldsBody))
+	emptyFieldsResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {""}, "new_password": {""}})
 	if err != nil {
 		t.Fatalf("Empty fields password reset confirm request failed: %v", err)
 	}
@@ -1161,7 +1066,7 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 	defer ts.cleanup()
 
 	// Generate arbitrary email for this test
-	testEmail := integrationEmailGenerator().Draw(t, "email")
+	testEmail := testutil.EmailGenerator().Draw(t, "email")
 
 	client := ts.Client()
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -1379,9 +1284,9 @@ func testIntegration_OAuthMCP_Properties(t *rapid.T) {
 	ts := setupFullAppServerRapid()
 	defer ts.cleanup()
 
-	noteTitle := integrationNoteTitleGenerator().Draw(t, "title")
-	noteContent := integrationNoteContentGenerator().Draw(t, "content")
-	state := integrationOAuthStateGenerator().Draw(t, "state")
+	noteTitle := testutil.NoteTitleGenerator().Draw(t, "title")
+	noteContent := testutil.NoteContentGenerator().Draw(t, "content")
+	state := testutil.StateGenerator().Draw(t, "state")
 
 	client := ts.Client()
 
@@ -1732,9 +1637,9 @@ func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
 	ts := setupFullAppServerRapid()
 	defer ts.cleanup()
 
-	noteTitle := integrationNoteTitleGenerator().Draw(t, "title")
-	noteContent := integrationNoteContentGenerator().Draw(t, "content")
-	updatedContent := integrationNoteContentGenerator().Draw(t, "updatedContent")
+	noteTitle := testutil.NoteTitleGenerator().Draw(t, "title")
+	noteContent := testutil.NoteContentGenerator().Draw(t, "content")
+	updatedContent := testutil.NoteContentGenerator().Draw(t, "updatedContent")
 
 	client := ts.Client()
 
@@ -2105,10 +2010,10 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	ts := setupFullAppServerRapid()
 	defer ts.cleanup()
 
-	email := integrationEmailGenerator().Draw(t, "email")
-	password := integrationPasswordGenerator().Draw(t, "password")
-	noteTitle := integrationNoteTitleGenerator().Draw(t, "title")
-	noteContent := integrationNoteContentGenerator().Draw(t, "content")
+	email := testutil.EmailGenerator().Draw(t, "email")
+	password := testutil.PasswordGenerator().Draw(t, "password")
+	noteTitle := testutil.NoteTitleGenerator().Draw(t, "title")
+	noteContent := testutil.NoteContentGenerator().Draw(t, "content")
 
 	// Create HTTP client with cookie jar
 	jar, _ := cookiejar.New(nil)
@@ -2116,18 +2021,18 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	client.Jar = jar
 
 	// ==========================================================
-	// Step 1: Register via API
+	// Step 1: Register via web form (redirects to /notes)
 	// ==========================================================
-	regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	if err != nil {
 		t.Fatalf("Registration failed: %v", err)
 	}
 	defer regResp.Body.Close()
 
-	if regResp.StatusCode != http.StatusCreated {
+	// After redirect, we end up at /notes with 200 OK
+	if regResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(regResp.Body)
-		t.Fatalf("Expected 201, got %d: %s", regResp.StatusCode, string(body))
+		t.Fatalf("Expected 200 after registration redirect, got %d: %s", regResp.StatusCode, string(body))
 	}
 
 	// ==========================================================
@@ -2322,8 +2227,7 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	client.Jar = jar2
 
 	// Login again to get fresh session
-	loginResp, _ := client.Post(ts.URL+"/auth/login", "application/json",
-		strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)))
+	loginResp, _ := client.PostForm(ts.URL+"/auth/login", url.Values{"email": {email}, "password": {password}})
 	loginResp.Body.Close()
 
 	deleteReq, _ := http.NewRequest("DELETE", ts.URL+"/api/notes/"+noteID, nil)
@@ -2353,7 +2257,7 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	// ==========================================================
 	// Step 8: Logout
 	// ==========================================================
-	logoutResp, _ := client.Post(ts.URL+"/auth/logout", "application/json", nil)
+	logoutResp, _ := client.PostForm(ts.URL+"/auth/logout", nil)
 	logoutResp.Body.Close()
 
 	// Property: Should not be authenticated after logout
@@ -2402,8 +2306,7 @@ func TestIntegration_NotesAPI_CRUD(t *testing.T) {
 	client.Jar = jar
 
 	// Register
-	regBody := fmt.Sprintf(`{"email":"%s","password":"%s"}`, email, password)
-	regResp, err := client.Post(ts.URL+"/auth/register", "application/json", strings.NewReader(regBody))
+	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
 	require.NoError(t, err)
 	regResp.Body.Close()
 	require.Equal(t, http.StatusCreated, regResp.StatusCode)
