@@ -1,9 +1,14 @@
 // Package config provides centralized configuration management for the common.ink application.
-// It loads configuration from environment variables, validates required fields, and provides sensible defaults.
+// It loads configuration from CLI flags and environment variables, validates required fields,
+// and provides sensible defaults.
+//
+// CLI flags control which services are mocked (--no-email, --no-s3, --no-oidc, --test).
+// Environment variables provide secrets and service configuration.
 package config
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -28,17 +33,17 @@ type Config struct {
 	// Rate limiting
 	RateLimitConfig ratelimit.Config
 
-	// Mock service flags (for development/testing)
-	UseMockOIDC  bool // If true, use mock OIDC provider
-	UseMockEmail bool // If true, use mock email service
-	UseMockS3    bool // If true, use in-memory S3
+	// Mock service flags (controlled by CLI flags, not env vars)
+	NoOIDC  bool // If true, use mock OIDC provider (--no-oidc)
+	NoEmail bool // If true, use mock email service (--no-email)
+	NoS3    bool // If true, use in-memory S3 (--no-s3)
 
-	// Google OIDC (real integration for M4)
+	// Google OIDC
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 
-	// Resend Email (real integration for M4)
+	// Resend Email
 	ResendAPIKey    string
 	ResendFromEmail string
 
@@ -53,6 +58,7 @@ type Config struct {
 	S3SecretAccessKey string
 	S3Bucket          string
 	S3PublicURL       string
+
 }
 
 // ValidationError represents a configuration validation error with multiple issues.
@@ -61,16 +67,45 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-	return fmt.Sprintf("configuration validation failed: %s", strings.Join(e.Errors, "; "))
+	return fmt.Sprintf("configuration validation failed:\n  - %s", strings.Join(e.Errors, "\n  - "))
 }
 
-// LoadConfig loads configuration from environment variables.
-// It validates required fields and returns an error if critical config is missing.
-func LoadConfig() (*Config, error) {
+// ParseFlags parses CLI flags and returns them. Call before LoadConfig.
+// This registers and parses --no-email, --no-s3, --no-oidc, --test, and --addr flags.
+func ParseFlags() (noEmail, noS3, noOIDC bool, addr string) {
+	var testMode bool
+	flag.BoolVar(&noEmail, "no-email", false, "Use mock email service (logs emails to console)")
+	flag.BoolVar(&noS3, "no-s3", false, "Use mock S3 storage (in-memory)")
+	flag.BoolVar(&noOIDC, "no-oidc", false, "Use mock Google OIDC provider")
+	flag.BoolVar(&testMode, "test", false, "Shorthand for --no-email --no-s3 --no-oidc")
+	flag.StringVar(&addr, "addr", "", "Listen address (default :8080, overrides LISTEN_ADDR env var)")
+	flag.Parse()
+
+	if testMode {
+		noEmail = true
+		noS3 = true
+		noOIDC = true
+	}
+
+	return noEmail, noS3, noOIDC, addr
+}
+
+// LoadConfig loads configuration from environment variables and CLI flag values.
+// The noEmail, noS3, noOIDC flags control which services use mocks.
+// The addr flag overrides the LISTEN_ADDR env var if non-empty.
+func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	cfg := &Config{}
+
+	// CLI flag values
+	cfg.NoEmail = noEmail
+	cfg.NoS3 = noS3
+	cfg.NoOIDC = noOIDC
 
 	// Server settings
 	cfg.ListenAddr = getEnvOrDefault("LISTEN_ADDR", ":8080")
+	if addr != "" {
+		cfg.ListenAddr = addr
+	}
 	cfg.BaseURL = os.Getenv("BASE_URL")
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "http://localhost" + cfg.ListenAddr
@@ -91,11 +126,6 @@ func LoadConfig() (*Config, error) {
 		CleanupInterval: parseDurationOrDefault("RATE_LIMIT_CLEANUP_INTERVAL", time.Hour),
 	}
 
-	// Mock service flags (default to true for development)
-	cfg.UseMockOIDC = parseBoolOrDefault("USE_MOCK_OIDC", true)
-	cfg.UseMockEmail = parseBoolOrDefault("USE_MOCK_EMAIL", true)
-	cfg.UseMockS3 = parseBoolOrDefault("USE_MOCK_S3", true)
-
 	// Google OIDC
 	cfg.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")
 	cfg.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
@@ -106,7 +136,7 @@ func LoadConfig() (*Config, error) {
 
 	// Resend Email
 	cfg.ResendAPIKey = os.Getenv("RESEND_API_KEY")
-	cfg.ResendFromEmail = getEnvOrDefault("RESEND_FROM_EMAIL", "noreply@remotenotes.app")
+	cfg.ResendFromEmail = getEnvOrDefault("RESEND_FROM_EMAIL", "noreply@common.ink")
 
 	// OAuth 2.1 Provider
 	cfg.OAuthHMACSecret = os.Getenv("OAUTH_HMAC_SECRET")
@@ -129,49 +159,57 @@ func LoadConfig() (*Config, error) {
 }
 
 // Validate checks that all required configuration is present and valid.
-// Returns a ValidationError if any issues are found.
+// When mocks are NOT active for a service, the corresponding secrets are required.
 func (c *Config) Validate() error {
 	var errs []string
 
-	// In production mode (mocks disabled), require real service credentials
-	if !c.UseMockOIDC {
+	// OIDC: require Google credentials unless --no-oidc
+	if !c.NoOIDC {
 		if c.GoogleClientID == "" {
-			errs = append(errs, "GOOGLE_CLIENT_ID is required when USE_MOCK_OIDC=false")
+			errs = append(errs, "GOOGLE_CLIENT_ID is required (set env var or use --no-oidc)")
 		}
 		if c.GoogleClientSecret == "" {
-			errs = append(errs, "GOOGLE_CLIENT_SECRET is required when USE_MOCK_OIDC=false")
+			errs = append(errs, "GOOGLE_CLIENT_SECRET is required (set env var or use --no-oidc)")
 		}
 	}
 
-	if !c.UseMockEmail {
+	// Email: require Resend API key unless --no-email
+	if !c.NoEmail {
 		if c.ResendAPIKey == "" {
-			errs = append(errs, "RESEND_API_KEY is required when USE_MOCK_EMAIL=false")
+			errs = append(errs, "RESEND_API_KEY is required (set env var or use --no-email)")
 		}
 	}
 
-	if !c.UseMockS3 {
+	// S3: require S3 credentials unless --no-s3
+	if !c.NoS3 {
 		if c.S3Endpoint == "" {
-			errs = append(errs, "S3_ENDPOINT is required when USE_MOCK_S3=false")
+			errs = append(errs, "S3_ENDPOINT is required (set env var or use --no-s3)")
 		}
 		if c.S3AccessKeyID == "" {
-			errs = append(errs, "S3_ACCESS_KEY_ID is required when USE_MOCK_S3=false")
+			errs = append(errs, "S3_ACCESS_KEY_ID is required (set env var or use --no-s3)")
 		}
 		if c.S3SecretAccessKey == "" {
-			errs = append(errs, "S3_SECRET_ACCESS_KEY is required when USE_MOCK_S3=false")
+			errs = append(errs, "S3_SECRET_ACCESS_KEY is required (set env var or use --no-s3)")
 		}
 	}
 
-	// Validate MasterKey format if provided
-	if c.MasterKey != "" && len(c.MasterKey) != 64 {
+	// MasterKey: always required (losing it = all user DBs unreadable)
+	if c.MasterKey == "" {
+		errs = append(errs, "MASTER_KEY is required (generate with: openssl rand -hex 32)")
+	} else if len(c.MasterKey) != 64 {
 		errs = append(errs, "MASTER_KEY must be 64 hex characters (32 bytes)")
 	}
 
-	// Validate OAuth secrets format if provided
-	if c.OAuthHMACSecret != "" && len(c.OAuthHMACSecret) < 64 {
+	// OAuth secrets: always required (no mock for OAuth provider)
+	if c.OAuthHMACSecret == "" {
+		errs = append(errs, "OAUTH_HMAC_SECRET is required (generate with: openssl rand -hex 32)")
+	} else if len(c.OAuthHMACSecret) < 64 {
 		errs = append(errs, "OAUTH_HMAC_SECRET must be at least 64 hex characters (32 bytes)")
 	}
 
-	if c.OAuthSigningKey != "" && len(c.OAuthSigningKey) != 64 {
+	if c.OAuthSigningKey == "" {
+		errs = append(errs, "OAUTH_SIGNING_KEY is required (generate with: openssl rand -hex 32)")
+	} else if len(c.OAuthSigningKey) != 64 {
 		errs = append(errs, "OAUTH_SIGNING_KEY must be 64 hex characters (ed25519 seed)")
 	}
 
@@ -192,12 +230,12 @@ func (c *Config) Validate() error {
 
 // IsProduction returns true if all mock services are disabled.
 func (c *Config) IsProduction() bool {
-	return !c.UseMockOIDC && !c.UseMockEmail && !c.UseMockS3
+	return !c.NoOIDC && !c.NoEmail && !c.NoS3
 }
 
 // IsDevelopment returns true if any mock services are enabled.
 func (c *Config) IsDevelopment() bool {
-	return c.UseMockOIDC || c.UseMockEmail || c.UseMockS3
+	return c.NoOIDC || c.NoEmail || c.NoS3
 }
 
 // RequireSecureCookies returns true if secure cookies should be required.
@@ -205,6 +243,41 @@ func (c *Config) IsDevelopment() bool {
 func (c *Config) RequireSecureCookies() bool {
 	return !strings.HasPrefix(c.BaseURL, "http://localhost") &&
 		!strings.HasPrefix(c.BaseURL, "http://127.0.0.1")
+}
+
+// PrintStartupSummary prints a human-readable summary of the configuration to stderr.
+func (c *Config) PrintStartupSummary() {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "commonink server starting...")
+
+	// Auth
+	if c.NoOIDC {
+		fmt.Fprintln(os.Stderr, "  Auth:    Mock OIDC (--no-oidc)")
+	} else {
+		fmt.Fprintln(os.Stderr, "  Auth:    Google OIDC (real)")
+	}
+
+	// Email
+	if c.NoEmail {
+		fmt.Fprintln(os.Stderr, "  Email:   Mock (--no-email)")
+	} else {
+		fmt.Fprintf(os.Stderr, "  Email:   Resend (real, from: %s)\n", c.ResendFromEmail)
+	}
+
+	// Storage
+	if c.NoS3 {
+		fmt.Fprintln(os.Stderr, "  Storage: Mock S3 (--no-s3)")
+	} else {
+		fmt.Fprintf(os.Stderr, "  Storage: Tigris S3 (real, endpoint: %s)\n", c.S3Endpoint)
+	}
+
+	// Master key
+	fmt.Fprintln(os.Stderr, "  Master:  From MASTER_KEY env var")
+
+	// Listen address
+	fmt.Fprintf(os.Stderr, "  Listen:  %s\n", c.ListenAddr)
+	fmt.Fprintf(os.Stderr, "  Base:    %s\n", c.BaseURL)
+	fmt.Fprintln(os.Stderr, "")
 }
 
 // Helper functions for parsing environment variables
@@ -215,15 +288,6 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
-}
-
-func parseBoolOrDefault(key string, defaultValue bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	value = strings.ToLower(value)
-	return value == "true" || value == "1" || value == "yes"
 }
 
 func parseIntOrDefault(key string, defaultValue int) int {
@@ -264,8 +328,8 @@ func parseDurationOrDefault(key string, defaultValue time.Duration) time.Duratio
 
 // MustLoadConfig loads configuration and panics if validation fails.
 // Use this in main() when you want the application to fail fast on bad config.
-func MustLoadConfig() *Config {
-	cfg, err := LoadConfig()
+func MustLoadConfig(noEmail, noS3, noOIDC bool, addr string) *Config {
+	cfg, err := LoadConfig(noEmail, noS3, noOIDC, addr)
 	if err != nil {
 		var validationErr *ValidationError
 		if errors.As(err, &validationErr) {

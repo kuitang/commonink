@@ -895,7 +895,10 @@ func TestWebForm_NotesCRUD_Properties(t *testing.T) {
 		}
 
 		// Property 8: Deleted note should not be in list
-		list2Resp, _ := client.Get(ts.URL + "/notes")
+		list2Resp, err := client.Get(ts.URL + "/notes")
+		if err != nil {
+			rt.Fatalf("List notes after delete failed: %v", err)
+		}
 		defer list2Resp.Body.Close()
 		list2Body, _ := io.ReadAll(list2Resp.Body)
 		if strings.Contains(string(list2Body), noteID) {
@@ -962,7 +965,10 @@ func TestWebForm_SessionIsolation_Properties(t *testing.T) {
 			Path:  "/",
 		}})
 
-		viewResp, _ := client2.Get(ts.URL + "/notes/" + noteID)
+		viewResp, err := client2.Get(ts.URL + "/notes/" + noteID)
+		if err != nil {
+			rt.Fatalf("View note as user 2 failed: %v", err)
+		}
 		defer viewResp.Body.Close()
 
 		// Should return 404 or redirect to error page
@@ -979,7 +985,10 @@ func TestWebForm_SessionIsolation_Properties(t *testing.T) {
 			return http.ErrUseLastResponse
 		}
 
-		unauthResp, _ := client3.Get(ts.URL + "/notes")
+		unauthResp, err := client3.Get(ts.URL + "/notes")
+		if err != nil {
+			rt.Fatalf("Unauthenticated notes request failed: %v", err)
+		}
 		defer unauthResp.Body.Close()
 
 		// Should either redirect to login OR show empty/login prompt (both are secure)
@@ -1100,7 +1109,10 @@ func TestWebForm_EmptyStateAndPagination_Properties(t *testing.T) {
 		}})
 
 		// Property 1: Empty notes list shows appropriate message
-		emptyResp, _ := client.Get(ts.URL + "/notes")
+		emptyResp, err := client.Get(ts.URL + "/notes")
+		if err != nil {
+			rt.Fatalf("Empty notes list request failed: %v", err)
+		}
 		defer emptyResp.Body.Close()
 
 		emptyBody, _ := io.ReadAll(emptyResp.Body)

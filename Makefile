@@ -1,92 +1,125 @@
-.PHONY: all build test test-db clean help check fmt vet gosec mod-tidy
+# Go environment setup via goenv
+export GOENV_ROOT := $(HOME)/.goenv
+export PATH := $(GOENV_ROOT)/bin:$(GOENV_ROOT)/shims:$(PATH)
+SHELL := /bin/bash
 
-# Go parameters - use goenv
-GOENV_ROOT := $(HOME)/.goenv
-GOENV_BIN := $(GOENV_ROOT)/shims
-GOCMD := $(GOENV_BIN)/go
-GOBUILD := $(GOCMD) build
-GOTEST := $(GOCMD) test
-GOCLEAN := $(GOCMD) clean
-GOFMT := $(GOCMD) fmt
-GOVET := $(GOCMD) vet
-GOMOD := $(GOCMD) mod
-GOSEC := $(GOENV_BIN)/gosec
-
-# CGO parameters for SQLCipher with FTS5 support
-export CGO_ENABLED=1
-export CGO_CFLAGS=-DSQLITE_ENABLE_FTS5
-export CGO_LDFLAGS=-lm
+# CGO flags required for SQLCipher + FTS5
+export CGO_ENABLED := 1
+export CGO_CFLAGS := -DSQLITE_ENABLE_FTS5
+export CGO_LDFLAGS := -lm
 
 # Build tags required for go-sqlcipher FTS5 support
-BUILD_TAGS=-tags fts5
+BUILD_TAGS := -tags fts5
 
 # Build output
-BINARY_NAME=agent-notes
-BINARY_PATH=./bin/$(BINARY_NAME)
+BINARY_NAME := server
+BINARY_PATH := ./bin/$(BINARY_NAME)
+
+# Identifiers and URLs (not secrets - safe to commit)
+export GOOGLE_CLIENT_ID := 194850132916-dkdltj0gjc9t7inllg2cuvk30inuulen.apps.googleusercontent.com
+export GOOGLE_REDIRECT_URL := http://localhost:8080/auth/google/callback
+export RESEND_FROM_EMAIL := onboarding@resend.dev
+export S3_ENDPOINT :=
+export S3_REGION := auto
+export S3_BUCKET := remote-notes
+export S3_PUBLIC_URL :=
+export LISTEN_ADDR := :8080
+export BASE_URL := http://localhost:8080
+
+# Deterministic test secrets (safe to commit - only used for local testing)
+# These propagate to all child processes (go test, subprocess servers) via os.Environ().
+# `make run` overrides these by sourcing secrets.sh in a subshell.
+export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+
+.PHONY: all build run run-test run-email test test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
-## check: Run fmt, vet, gosec, and mod tidy (runs before every build)
-check: fmt vet gosec mod-tidy
-
-## build: Build the application binary (runs fmt/vet/mod-tidy first)
-build: check
+## build: Build the server binary
+build: fmt mod-tidy
 	@echo "Building $(BINARY_NAME)..."
-	$(GOBUILD) $(BUILD_TAGS) -o $(BINARY_PATH) ./cmd/server/
+	go build $(BUILD_TAGS) -o $(BINARY_PATH) ./cmd/server/
 
-## test: Run all tests (runs fmt/vet/mod-tidy first)
-test: check
-	@echo "Running all tests with FTS5 support..."
-	$(GOTEST) $(BUILD_TAGS) -v -count=1 ./...
+## run: Run with ALL real services (requires secrets.sh)
+run: build
+	@if [ ! -f secrets.sh ]; then echo "ERROR: secrets.sh not found. Copy secrets.sh.example and fill in values."; exit 1; fi
+	@bash -c 'source secrets.sh && $(BINARY_PATH)'
+
+## run-test: Run with all mocks (deterministic test secrets from Makefile)
+run-test: build
+	$(BINARY_PATH) --test
+
+## run-email: Run with real email only (mock OIDC + S3)
+run-email: build
+	@if [ ! -f secrets.sh ]; then echo "ERROR: secrets.sh not found. Copy secrets.sh.example and fill in values."; exit 1; fi
+	@bash -c 'source secrets.sh && $(BINARY_PATH) --no-oidc --no-s3'
+
+## test: Quick tests (rapid property tests, excludes e2e conformance + browser)
+test:
+	go test $(BUILD_TAGS) -v -parallel $$(nproc 2>/dev/null || echo 4) \
+		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
+		-run 'Test' -rapid.checks=10
+
+## test-full: Full tests with coverage (requires OPENAI_API_KEY for conformance)
+test-full:
+	@if [ -z "$$OPENAI_API_KEY" ]; then echo "ERROR: OPENAI_API_KEY required. Run: source secrets.sh"; exit 1; fi
+	@mkdir -p test-results
+	go test $(BUILD_TAGS) -v -parallel $$(nproc 2>/dev/null || echo 4) -coverprofile=test-results/coverage.out -coverpkg=./... \
+		$$(go list ./... | grep -v 'tests/e2e/openai') \
+		2>&1 | tee test-results/full-test.log
+	go tool cover -html=test-results/coverage.out -o test-results/coverage.html
+	go tool cover -func=test-results/coverage.out
+
+## test-fuzz: Fuzz testing (30+ min, coverage-guided)
+test-fuzz:
+	./scripts/fuzz.sh fuzz
 
 ## test-db: Run database layer tests only
-test-db: check
+test-db:
 	@echo "Running database layer tests with FTS5 support..."
-	$(GOTEST) $(BUILD_TAGS) -v -count=1 ./internal/db/
+	go test $(BUILD_TAGS) -v -count=1 ./internal/db/
 
 ## test-coverage: Run tests with coverage report
-test-coverage: check
+test-coverage:
 	@echo "Running tests with coverage..."
-	$(GOTEST) $(BUILD_TAGS) -v -count=1 -coverprofile=coverage.out ./...
-	$(GOCMD) tool cover -html=coverage.out -o coverage.html
+	go test $(BUILD_TAGS) -v -count=1 -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
-## clean: Clean build artifacts and test data
+## fmt: Format Go code
+fmt:
+	@echo "Formatting code..."
+	go fmt ./...
+
+## vet: Run go vet
+vet:
+	@echo "Running go vet..."
+	go vet ./...
+
+## gosec: Run security scanner
+gosec:
+	@echo "Running gosec security scan..."
+	@gosec -quiet -severity=medium -exclude=G101,G203,G407 -exclude-dir=internal/db/sessions -exclude-dir=internal/db/userdb ./...
+
+## mod-tidy: Tidy up go.mod
+mod-tidy:
+	@echo "Tidying go.mod..."
+	go mod tidy
+
+## clean: Remove build artifacts and test data
 clean:
-	@echo "Cleaning..."
-	$(GOCLEAN)
-	rm -rf $(BINARY_PATH)
+	rm -rf bin/ test-results/
 	rm -rf ./data/
 	rm -rf ./internal/db/testdata/
 	rm -rf ./tests/e2e/testdata/
 	rm -f coverage.out coverage.html
 
-## fmt: Format Go code
-fmt:
-	@echo "Formatting code..."
-	$(GOFMT) ./...
+## deploy: Deploy to Fly.io
+deploy:
+	./scripts/deploy.sh
 
-## vet: Run go vet
-vet:
-	@echo "Running go vet..."
-	$(GOVET) ./...
-
-## gosec: Run security scanner
-## Excludes:
-##   G101 - false positives on sqlc query names containing "password"
-##   G203 - template.HTML with bluemonday-sanitized content is safe
-##   G407 - nonce is randomly generated but gosec can't trace dataflow
-## Only fails on medium+ severity (G104 unhandled Close in error paths is low)
-gosec:
-	@echo "Running gosec security scan..."
-	@$(GOSEC) -quiet -severity=medium -exclude=G101,G203,G407 -exclude-dir=internal/db/sessions -exclude-dir=internal/db/userdb ./...
-
-## mod-tidy: Tidy up go.mod
-mod-tidy:
-	@echo "Tidying go.mod..."
-	$(GOMOD) tidy
-
-## help: Show this help message
+## help: Show this help
 help:
-	@echo "Available targets:"
-	@grep -E '^## ' Makefile | sed 's/## /  /'
+	@grep -E '^## ' Makefile | sed 's/## //' | column -t -s ':'

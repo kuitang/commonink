@@ -2184,7 +2184,10 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 
 	// Use a fresh client for token exchange
 	tokenClient := ts.Client()
-	tokenResp, _ := tokenClient.PostForm(ts.URL+"/oauth/token", tokenParams)
+	tokenResp, err := tokenClient.PostForm(ts.URL+"/oauth/token", tokenParams)
+	if err != nil {
+		t.Fatalf("Token exchange failed: %v", err)
+	}
 	defer tokenResp.Body.Close()
 
 	var tokenResult map[string]interface{}
@@ -2251,7 +2254,10 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	// ==========================================================
 	// Step 7: Verify note is gone
 	// ==========================================================
-	getResp, _ := client.Get(ts.URL + "/api/notes/" + noteID)
+	getResp, err := client.Get(ts.URL + "/api/notes/" + noteID)
+	if err != nil {
+		t.Fatalf("Get deleted note failed: %v", err)
+	}
 	defer getResp.Body.Close()
 
 	// Property: Deleted note should return 404
@@ -2266,7 +2272,10 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	logoutResp.Body.Close()
 
 	// Property: Should not be authenticated after logout
-	whoamiResp, _ := client.Get(ts.URL + "/auth/whoami")
+	whoamiResp, err := client.Get(ts.URL + "/auth/whoami")
+	if err != nil {
+		t.Fatalf("Whoami request failed: %v", err)
+	}
 	defer whoamiResp.Body.Close()
 
 	var whoamiResult map[string]interface{}

@@ -269,4 +269,3 @@ func FuzzMagicToken_SingleUse_Properties(f *testing.F) {
 		testMagicToken_SingleUse(t, svc, clk, emailSvc)
 	}))
 }
-

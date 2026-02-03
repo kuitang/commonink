@@ -62,7 +62,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		t.Fatal("OPENAI_API_KEY not set - run: source ~/openai_key.sh")
+		t.Fatal("OPENAI_API_KEY not set - run: source secrets.sh")
 	}
 
 	srv := testutil.GetServer(t)

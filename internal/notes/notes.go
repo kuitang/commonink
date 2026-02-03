@@ -42,19 +42,39 @@ func NewServiceForHardcodedUser() (*Service, error) {
 	return &Service{userDB: userDB}, nil
 }
 
+// GetStorageUsage returns the current storage usage for this user
+func (s *Service) GetStorageUsage() (StorageUsageInfo, error) {
+	ctx := context.Background()
+	totalSize, err := s.userDB.GetTotalNotesSize(ctx)
+	if err != nil {
+		return StorageUsageInfo{}, fmt.Errorf("failed to get storage usage: %w", err)
+	}
+	return NewStorageUsageInfo(totalSize), nil
+}
+
 // Create creates a new note
 func (s *Service) Create(params CreateNoteParams) (*Note, error) {
 	if params.Title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
 
+	ctx := context.Background()
+
+	// Check storage limit before creating
+	currentSize, err := s.userDB.GetTotalNotesSize(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check storage: %w", err)
+	}
+	newContentSize := int64(len(params.Title) + len(params.Content))
+	if err := CheckStorageLimit(currentSize, newContentSize); err != nil {
+		return nil, err
+	}
+
 	noteID := uuid.New().String()
 	now := time.Now().UTC()
 	nowUnix := now.Unix()
 
-	ctx := context.Background()
-
-	err := s.userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+	err = s.userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 		ID:        noteID,
 		Title:     params.Title,
 		Content:   params.Content,
@@ -127,6 +147,19 @@ func (s *Service) Update(id string, params UpdateNoteParams) (*Note, error) {
 	}
 	if params.Content != nil {
 		newContent = *params.Content
+	}
+
+	// Check storage limit for the size delta
+	oldSize := int64(len(existing.Title) + len(existing.Content))
+	newSize := int64(len(newTitle) + len(newContent))
+	if newSize > oldSize {
+		currentTotalSize, err := s.userDB.GetTotalNotesSize(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check storage: %w", err)
+		}
+		if err := CheckStorageLimitForUpdate(currentTotalSize, oldSize, newSize); err != nil {
+			return nil, err
+		}
 	}
 
 	nowUnix := time.Now().UTC().Unix()

@@ -129,6 +129,19 @@ func EscapeFTS5Query(query string) string {
 	return `"` + escaped + `"`
 }
 
+// GetTotalNotesSize returns the total size of all notes (title + content) in bytes.
+// This is used for storage limit enforcement.
+func (u *UserDB) GetTotalNotesSize(ctx context.Context) (int64, error) {
+	var totalSize int64
+	err := u.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(length(title) + length(content)), 0) FROM notes`,
+	).Scan(&totalSize)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total notes size: %w", err)
+	}
+	return totalSize, nil
+}
+
 // SearchNotes performs a full-text search on notes using FTS5
 // The query parameter is user-provided input that will be automatically escaped
 // to prevent FTS5 syntax errors and injection attacks.

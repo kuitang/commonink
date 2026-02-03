@@ -1,4 +1,4 @@
-// Package auth provides Personal Access Token (PAT) management for programmatic API access.
+// Package auth provides API Key management for programmatic API access.
 package auth
 
 import (
@@ -19,43 +19,43 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
-// PAT-related errors.
+// API Key related errors.
 var (
-	ErrPATNotFound     = errors.New("pat: token not found")
-	ErrPATExpired      = errors.New("pat: token expired")
-	ErrPATInvalidScope = errors.New("pat: invalid scope")
-	ErrInvalidPATName  = errors.New("pat: name is required")
-	ErrInvalidExpiry   = errors.New("pat: invalid expiry (max 1 year)")
+	ErrAPIKeyNotFound     = errors.New("apikey: token not found")
+	ErrAPIKeyExpired      = errors.New("apikey: token expired")
+	ErrAPIKeyInvalidScope = errors.New("apikey: invalid scope")
+	ErrInvalidAPIKeyName  = errors.New("apikey: name is required")
+	ErrInvalidExpiry      = errors.New("apikey: invalid expiry (max 1 year)")
 )
 
 const (
-	// PATTokenBytes is the number of random bytes for PAT generation (48 bytes = 64 chars base64url).
-	PATTokenBytes = 48
+	// APIKeyTokenBytes is the number of random bytes for API key generation (48 bytes = 64 chars base64url).
+	APIKeyTokenBytes = 48
 
-	// MaxPATExpiry is the maximum token validity period (1 year).
-	MaxPATExpiry = 365 * 24 * time.Hour
+	// MaxAPIKeyExpiry is the maximum token validity period (1 year).
+	MaxAPIKeyExpiry = 365 * 24 * time.Hour
 
-	// PATPrefix is the prefix for PAT tokens to distinguish them from other tokens.
-	// Format: agentnotes_pat_{user_id}_{random_token}
-	PATPrefix = "agentnotes_pat_"
+	// APIKeyPrefix is the prefix for API key tokens to distinguish them from other tokens.
+	// Format: agentnotes_key_{user_id}_{random_token}
+	APIKeyPrefix = "agentnotes_key_"
 )
 
-// IsPATToken checks if a token looks like a PAT based on its prefix.
-func IsPATToken(token string) bool {
-	return strings.HasPrefix(token, PATPrefix)
+// IsAPIKeyToken checks if a token looks like an API key based on its prefix.
+func IsAPIKeyToken(token string) bool {
+	return strings.HasPrefix(token, APIKeyPrefix)
 }
 
-// ParsePATToken extracts the user ID and token hash source from a PAT.
-// PAT format: agentnotes_pat_{user_id}_{random_token}
+// ParseAPIKeyToken extracts the user ID and token hash source from an API key.
+// API key format: agentnotes_key_{user_id}_{random_token}
 // User ID format: user-{UUID} where UUID is 36 characters (8-4-4-4-12 hex with hyphens)
 // Token part: 64 characters (48 bytes base64url encoded, may contain underscores)
-func ParsePATToken(token string) (userID, tokenPart string, ok bool) {
-	if !strings.HasPrefix(token, PATPrefix) {
+func ParseAPIKeyToken(token string) (userID, tokenPart string, ok bool) {
+	if !strings.HasPrefix(token, APIKeyPrefix) {
 		return "", "", false
 	}
 
 	// Remove prefix
-	remainder := token[len(PATPrefix):]
+	remainder := token[len(APIKeyPrefix):]
 
 	// User ID is in format "user-{UUID}" where UUID is 36 chars
 	// So userID is 5 ("user-") + 36 (UUID) = 41 chars
@@ -87,8 +87,8 @@ func ParsePATToken(token string) (userID, tokenPart string, ok bool) {
 	return userID, tokenPart, true
 }
 
-// PAT represents a Personal Access Token with its metadata.
-type PAT struct {
+// APIKey represents an API Key with its metadata.
+type APIKey struct {
 	ID         string     `json:"id"`
 	Name       string     `json:"name"`
 	Scope      string     `json:"scope"`
@@ -97,8 +97,8 @@ type PAT struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
-// CreatePATRequest is the request body for creating a new PAT.
-type CreatePATRequest struct {
+// CreateAPIKeyRequest is the request body for creating a new API Key.
+type CreateAPIKeyRequest struct {
 	Name      string `json:"name"`
 	Scope     string `json:"scope,omitempty"` // Default: "read_write"
 	ExpiresIn int64  `json:"expires_in"`      // Seconds until expiry, max 1 year
@@ -106,9 +106,9 @@ type CreatePATRequest struct {
 	Password  string `json:"password"`        // Required for password re-auth
 }
 
-// CreatePATResponse is the response when creating a new PAT.
+// CreateAPIKeyResponse is the response when creating a new API Key.
 // The Token field is only returned once - it cannot be retrieved later.
-type CreatePATResponse struct {
+type CreateAPIKeyResponse struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Token     string    `json:"token"` // Only returned once!
@@ -117,26 +117,26 @@ type CreatePATResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// ListPATsResponse is the response for listing PATs.
-type ListPATsResponse struct {
-	Tokens []PAT `json:"tokens"`
+// ListAPIKeysResponse is the response for listing API Keys.
+type ListAPIKeysResponse struct {
+	Tokens []APIKey `json:"tokens"`
 }
 
-// PATHandler provides HTTP handlers for PAT management.
-type PATHandler struct {
+// APIKeyHandler provides HTTP handlers for API Key management.
+type APIKeyHandler struct {
 	userService *UserService
 }
 
-// NewPATHandler creates a new PAT handler.
-func NewPATHandler(userService *UserService) *PATHandler {
-	return &PATHandler{
+// NewAPIKeyHandler creates a new API Key handler.
+func NewAPIKeyHandler(userService *UserService) *APIKeyHandler {
+	return &APIKeyHandler{
 		userService: userService,
 	}
 }
 
-// CreatePAT handles POST /api/tokens - creates a new Personal Access Token.
+// CreateAPIKey handles POST /api/keys - creates a new API Key.
 // Requires password re-authentication for security.
-func (h *PATHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
+func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userDB := GetUserDB(r.Context())
 	if userDB == nil {
 		writeJSONError(w, http.StatusInternalServerError, "internal server error")
@@ -149,7 +149,7 @@ func (h *PATHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req CreatePATRequest
+	var req CreateAPIKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -188,14 +188,14 @@ func (h *PATHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Note: If no password hash exists (e.g., Google OAuth user), we allow PAT creation
+	// Note: If no password hash exists (e.g., Google OAuth user), we allow API key creation
 	// since they've authenticated via session
 
 	// Validate expiry
 	if req.ExpiresIn <= 0 {
-		req.ExpiresIn = int64(MaxPATExpiry.Seconds()) // Default to max
+		req.ExpiresIn = int64(MaxAPIKeyExpiry.Seconds()) // Default to max
 	}
-	if time.Duration(req.ExpiresIn)*time.Second > MaxPATExpiry {
+	if time.Duration(req.ExpiresIn)*time.Second > MaxAPIKeyExpiry {
 		writeJSONError(w, http.StatusBadRequest, "expiry cannot exceed 1 year")
 		return
 	}
@@ -206,22 +206,22 @@ func (h *PATHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate secure token
-	token, err := generatePATToken()
+	token, err := generateAPIKeyToken()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 
 	// Hash token for storage
-	tokenHash := hashPATToken(token)
+	tokenHash := hashAPIKeyToken(token)
 
-	// Create PAT record
+	// Create API key record
 	now := time.Now()
-	patID := uuid.New().String()
+	keyID := uuid.New().String()
 	expiresAt := now.Add(time.Duration(req.ExpiresIn) * time.Second)
 
-	err = userDB.Queries().CreatePAT(r.Context(), userdb.CreatePATParams{
-		ID:        patID,
+	err = userDB.Queries().CreateAPIKey(r.Context(), userdb.CreateAPIKeyParams{
+		ID:        keyID,
 		Name:      req.Name,
 		TokenHash: tokenHash,
 		Scope:     sql.NullString{String: req.Scope, Valid: true},
@@ -234,10 +234,10 @@ func (h *PATHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return response with plaintext token (shown only once)
-	// Format: agentnotes_pat_{user_id}_{random_token}
-	fullToken := fmt.Sprintf("%s%s_%s", PATPrefix, userID, token)
-	resp := CreatePATResponse{
-		ID:        patID,
+	// Format: agentnotes_key_{user_id}_{random_token}
+	fullToken := fmt.Sprintf("%s%s_%s", APIKeyPrefix, userID, token)
+	resp := CreateAPIKeyResponse{
+		ID:        keyID,
 		Name:      req.Name,
 		Token:     fullToken,
 		Scope:     req.Scope,
@@ -250,24 +250,24 @@ func (h *PATHandler) CreatePAT(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// ListPATs handles GET /api/tokens - lists all PATs for the user.
+// ListAPIKeys handles GET /api/keys - lists all API Keys for the user.
 // Token values are never returned, only metadata.
-func (h *PATHandler) ListPATs(w http.ResponseWriter, r *http.Request) {
+func (h *APIKeyHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	userDB := GetUserDB(r.Context())
 	if userDB == nil {
 		writeJSONError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	rows, err := userDB.Queries().ListPATs(r.Context())
+	rows, err := userDB.Queries().ListAPIKeys(r.Context())
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to list tokens")
 		return
 	}
 
-	pats := make([]PAT, 0, len(rows))
+	keys := make([]APIKey, 0, len(rows))
 	for _, row := range rows {
-		pat := PAT{
+		key := APIKey{
 			ID:        row.ID,
 			Name:      row.Name,
 			Scope:     row.Scope.String,
@@ -276,32 +276,32 @@ func (h *PATHandler) ListPATs(w http.ResponseWriter, r *http.Request) {
 		}
 		if row.LastUsedAt.Valid {
 			t := time.Unix(row.LastUsedAt.Int64, 0)
-			pat.LastUsedAt = &t
+			key.LastUsedAt = &t
 		}
-		pats = append(pats, pat)
+		keys = append(keys, key)
 	}
 
-	resp := ListPATsResponse{Tokens: pats}
+	resp := ListAPIKeysResponse{Tokens: keys}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// RevokePAT handles DELETE /api/tokens/{id} - revokes a PAT.
-func (h *PATHandler) RevokePAT(w http.ResponseWriter, r *http.Request) {
+// RevokeAPIKey handles DELETE /api/keys/{id} - revokes an API Key.
+func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	userDB := GetUserDB(r.Context())
 	if userDB == nil {
 		writeJSONError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	patID := r.PathValue("id")
-	if patID == "" {
+	keyID := r.PathValue("id")
+	if keyID == "" {
 		writeJSONError(w, http.StatusBadRequest, "token ID is required")
 		return
 	}
 
-	// Verify the PAT exists and belongs to this user
-	_, err := userDB.Queries().GetPATByID(r.Context(), patID)
+	// Verify the API key exists and belongs to this user
+	_, err := userDB.Queries().GetAPIKeyByID(r.Context(), keyID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSONError(w, http.StatusNotFound, "token not found")
@@ -311,8 +311,8 @@ func (h *PATHandler) RevokePAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete the PAT
-	err = userDB.Queries().DeletePAT(r.Context(), patID)
+	// Delete the API key
+	err = userDB.Queries().DeleteAPIKey(r.Context(), keyID)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to revoke token")
 		return
@@ -321,33 +321,33 @@ func (h *PATHandler) RevokePAT(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ValidatePATWithDB validates a PAT against the user's database and returns the scope if valid.
+// ValidateAPIKeyWithDB validates an API Key against the user's database and returns the scope if valid.
 // This is used by the middleware to authenticate API requests when the userDB is already open.
-func ValidatePATWithDB(ctx context.Context, userDB *db.UserDB, tokenPart string) (string, error) {
+func ValidateAPIKeyWithDB(ctx context.Context, userDB *db.UserDB, tokenPart string) (string, error) {
 	// Hash the token part
-	tokenHash := hashPATToken(tokenPart)
+	tokenHash := hashAPIKeyToken(tokenPart)
 
-	// Look up the PAT
-	pat, err := userDB.Queries().GetPATByHash(ctx, tokenHash)
+	// Look up the API key
+	key, err := userDB.Queries().GetAPIKeyByHash(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrPATNotFound
+			return "", ErrAPIKeyNotFound
 		}
-		return "", fmt.Errorf("failed to validate PAT: %w", err)
+		return "", fmt.Errorf("failed to validate API key: %w", err)
 	}
 
 	// Check expiry
-	if time.Now().Unix() > pat.ExpiresAt {
-		return "", ErrPATExpired
+	if time.Now().Unix() > key.ExpiresAt {
+		return "", ErrAPIKeyExpired
 	}
 
 	// Update last used timestamp
-	_ = userDB.Queries().UpdatePATLastUsed(ctx, userdb.UpdatePATLastUsedParams{
+	_ = userDB.Queries().UpdateAPIKeyLastUsed(ctx, userdb.UpdateAPIKeyLastUsedParams{
 		LastUsedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
-		ID:         pat.ID,
+		ID:         key.ID,
 	})
 
-	scope := pat.Scope.String
+	scope := key.Scope.String
 	if scope == "" {
 		scope = "read_write"
 	}
@@ -357,15 +357,15 @@ func ValidatePATWithDB(ctx context.Context, userDB *db.UserDB, tokenPart string)
 
 // Helper functions
 
-func generatePATToken() (string, error) {
-	bytes := make([]byte, PATTokenBytes)
+func generateAPIKeyToken() (string, error) {
+	bytes := make([]byte, APIKeyTokenBytes)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(bytes), nil
 }
 
-func hashPATToken(token string) string {
+func hashAPIKeyToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return base64.URLEncoding.EncodeToString(hash[:])
 }

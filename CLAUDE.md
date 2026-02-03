@@ -53,15 +53,19 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 
 **DO NOT use `/usr/bin/go`** - it's an outdated system Go (1.19).
 
-### API Keys (REQUIRED for CI)
+### Secrets Setup (REQUIRED)
 
-**OpenAI API Key** - Required for e2e conformance tests:
+All secrets (MASTER_KEY, OAUTH_HMAC_SECRET, OAUTH_SIGNING_KEY, API keys) are **hard-required** -- there is no fallback generation. Secrets are managed in two places:
+
+- **`secrets.sh`** -- Contains ONLY secrets (GOOGLE_CLIENT_SECRET, RESEND_API_KEY, OPENAI_API_KEY, etc.). Gitignored.
+- **`Makefile`** -- Contains identifiers/URLs (GOOGLE_CLIENT_ID, BASE_URL, etc.) and deterministic test secrets (MASTER_KEY, OAUTH_HMAC_SECRET, OAUTH_SIGNING_KEY). Make's `export` only propagates to child processes, not the caller.
+
+For local testing, `make test` injects the deterministic test secrets automatically -- no need to source anything.
+For production runs (`make run`), the Makefile sources `secrets.sh`:
 ```bash
-# Source the key before running tests
-source ~/openai_key.sh
+cp secrets.sh.example secrets.sh
+# Fill in real secret values in secrets.sh
 ```
-
-The CI scripts and tests will use `OPENAI_API_KEY` from the environment.
 
 ## Test Strategy Overview
 
@@ -79,39 +83,42 @@ This project uses **property-based testing** with rapid + Go's native fuzzing. S
 
 ## CI Commands
 
+All CI commands go through `make`. The Makefile handles goenv, CGO flags, and deterministic test secrets automatically.
+
 ### Quick Check (~45s) - Run Before Every Commit
 ```bash
-./scripts/ci.sh quick
+make test
 ```
 - Runs all `Test*` functions (rapid property tests)
+- Excludes e2e conformance and browser tests
 - No coverage collection
 - Fails fast
 
 ### Full CI (~5 min) - Run Before PR
 ```bash
-./scripts/ci.sh full
+make test-full
 ```
-- All `Test*` functions with coverage
-- Playwright browser tests
+- All `Test*` functions with coverage (including Claude conformance tests)
 - Coverage report generation
-- **Requires**: Coverage ≥ 70% (configurable)
-- **Output**: `test-results/coverage.html`
+- **Requires**: `OPENAI_API_KEY` in environment (for conformance tests)
+- **Output**: `test-results/coverage.html`, `test-results/full-test.log`
 
 ### Fuzz Testing (30+ min) - Run Nightly or When Changing Security Code
 ```bash
-./scripts/ci.sh fuzz --timeout 30m
+make test-fuzz
 ```
+- Calls `scripts/fuzz.sh` under the hood
 - Coverage-guided fuzzing of all `Fuzz*` functions
 - Compares baseline vs fuzz coverage
 - **Fails** if new crash inputs found
 - **Output**: `test-results/fuzz-findings/` (if issues found)
 
-### Options
+### Advanced Fuzz Options
+The `scripts/fuzz.sh` script accepts options when called directly:
 ```bash
---timeout <duration>       # Fuzz duration (default: 30m)
---parallel <n>             # Test workers (default: CPU count)
---output <dir>             # Results dir (default: ./test-results)
---coverage-threshold <n>   # Min coverage % (default: 39)
+./scripts/fuzz.sh fuzz --timeout 30m
+./scripts/fuzz.sh fuzz --parallel 8
+./scripts/fuzz.sh fuzz --output ./my-results
 ```
 
 ## Git Workflow
@@ -119,7 +126,7 @@ This project uses **property-based testing** with rapid + Go's native fuzzing. S
 ### Pre-Commit Hook (Automatic)
 Git hooks run automatically:
 1. `go fmt` all changed files
-2. `./scripts/ci.sh quick`
+2. `make test`
 
 If either fails, commit is blocked.
 
@@ -367,15 +374,15 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 
 ## When to Run Each CI Level
 
-| Level | When | Duration | Purpose |
-|-------|------|----------|---------|
-| **quick** | Before every commit | ~45s | Fast feedback loop |
-| **full** | Before PR, after feature complete | ~5min | Comprehensive validation + coverage |
-| **fuzz** | Nightly, after security changes | 30+ min | Deep edge case discovery |
+| Level | Command | When | Duration | Purpose |
+|-------|---------|------|----------|---------|
+| **quick** | `make test` | Before every commit | ~45s | Fast feedback loop |
+| **full** | `make test-full` | Before PR, after feature complete | ~5min | Comprehensive validation + coverage |
+| **fuzz** | `make test-fuzz` | Nightly, after security changes | 30+ min | Deep edge case discovery |
 
 ## Coverage Targets
 
-- **Overall**: ≥70% (configurable in ci.sh)
+- **Overall**: ≥70% (configurable in Makefile)
 - **Auth/Crypto**: ≥95% (critical paths)
 - **MCP Handlers**: ≥85% (core functionality)
 - **Web UI**: ≥50% (minimal, mostly Playwright)
@@ -405,7 +412,7 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 → Add tests for uncovered lines or adjust threshold
 
 ### "Fuzz test hanging"
-→ Reduce fuzz time: `./scripts/ci.sh fuzz --timeout 5m`
+→ Reduce fuzz time: `./scripts/fuzz.sh fuzz --timeout 5m`
 → Check for infinite loops in property test
 
 ### Playwright "browser not found"
@@ -415,12 +422,18 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 
 | Task | Command |
 |------|---------|
-| Run tests | `./scripts/ci.sh quick` |
-| Check coverage | `./scripts/ci.sh full` |
-| Fuzz | `./scripts/ci.sh fuzz` |
-| Build | `go build ./cmd/server` |
-| Format | `go fmt ./...` |
+| Build | `make build` |
+| Run (real services) | `make run` |
+| Run (all mocks) | `make run-test` |
+| Run tests | `make test` |
+| Full tests + coverage | `make test-full` |
+| Fuzz | `make test-fuzz` |
+| Format | `make fmt` |
+| Lint | `make vet` |
+| Clean | `make clean` |
+| Deploy | `make deploy` |
 | MCP test | `./scripts/mcp-conformance.sh` |
+| Show targets | `make help` |
 
 ---
 

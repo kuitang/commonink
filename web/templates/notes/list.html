@@ -2,17 +2,51 @@
 {{define "content"}}
 <div class="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1 flex flex-col w-full">
+        {{/* Flash message */}}
+        {{if .FlashMessage}}
+        <div class="mb-4 p-4 rounded-lg {{if eq .FlashType "error"}}bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200{{else}}bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200{{end}}">
+            <p class="text-sm font-medium">{{.FlashMessage}}</p>
+        </div>
+        {{end}}
+
         <!-- Header -->
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 flex-shrink-0">
             <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3 sm:mb-0">My Notes</h1>
-            <a href="/notes/new"
-               class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-                </svg>
-                New Note
-            </a>
+            <div class="flex items-center gap-4">
+                {{/* Storage usage indicator */}}
+                {{if .StorageUsage}}
+                <div class="hidden sm:flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+                    </svg>
+                    <span>{{formatFloat .StorageUsage.UsedMB 1}} / {{formatFloat .StorageUsage.LimitMB 0}} MB</span>
+                    <div class="w-24 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                        <div class="h-full rounded-full {{if gt .StorageUsage.Percentage 90.0}}bg-red-500{{else if gt .StorageUsage.Percentage 70.0}}bg-yellow-500{{else}}bg-blue-500{{end}}" style="width: {{formatFloat .StorageUsage.Percentage 1}}%"></div>
+                    </div>
+                </div>
+                {{end}}
+                <a href="/notes/new"
+                   class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    New Note
+                </a>
+            </div>
         </div>
+
+        {{/* Mobile storage usage */}}
+        {{if .StorageUsage}}
+        <div class="sm:hidden flex items-center gap-2 mb-4 text-sm text-gray-600 dark:text-gray-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+            </svg>
+            <span>{{formatFloat .StorageUsage.UsedMB 1}} / {{formatFloat .StorageUsage.LimitMB 0}} MB used</span>
+            <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                <div class="h-full rounded-full {{if gt .StorageUsage.Percentage 90.0}}bg-red-500{{else if gt .StorageUsage.Percentage 70.0}}bg-yellow-500{{else}}bg-blue-500{{end}}" style="width: {{formatFloat .StorageUsage.Percentage 1}}%"></div>
+            </div>
+        </div>
+        {{end}}
 
         {{if .Notes}}
         <!-- Notes Grid -->

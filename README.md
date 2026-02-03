@@ -65,7 +65,7 @@ START_SERVER=true ./bin/server
 │   ├── e2e/            # API property tests (rapid + httptest)
 │   └── browser/        # Playwright tests
 ├── scripts/
-│   └── ci.sh           # CI runner (quick, full, fuzz)
+│   └── fuzz.sh         # Fuzz testing orchestrator (called by make test-fuzz)
 ├── spec.md             # Engineering specification
 ├── PRIVACY.md          # Privacy policy
 ├── TOS.md              # Terms of Service
@@ -78,17 +78,17 @@ See `CLAUDE.md` for detailed test instructions.
 
 ### Quick CI Test
 ```bash
-./scripts/ci.sh quick    # ~30 seconds, rapid property tests
+make test                # ~30 seconds, rapid property tests
 ```
 
 ### Full CI Test
 ```bash
-./scripts/ci.sh full     # ~5 minutes, includes Playwright + coverage
+make test-full           # ~5 minutes, includes conformance + coverage
 ```
 
 ### Fuzz Testing
 ```bash
-./scripts/ci.sh fuzz     # 30+ minutes, coverage-guided fuzzing
+make test-fuzz           # 30+ minutes, coverage-guided fuzzing
 ```
 
 ## Documentation

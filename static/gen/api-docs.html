@@ -98,53 +98,450 @@
 
 <p>common.ink provides a RESTful API for programmatic access to your notes, along with MCP (Model Context Protocol) support for AI agent integration.</p>
 
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ul>
+<li><a href="#authentication" rel="nofollow">Authentication</a>
+
+<ul>
+<li><a href="#session-cookies" rel="nofollow">Session Cookies</a></li>
+<li><a href="#api-keys" rel="nofollow">API Keys</a></li>
+<li><a href="#oauth-21" rel="nofollow">OAuth 2.1</a></li>
+</ul></li>
+<li><a href="#user-registration--login" rel="nofollow">User Registration &amp; Login</a></li>
+<li><a href="#api-keys-api" rel="nofollow">API Keys API</a></li>
+<li><a href="#notes-api" rel="nofollow">Notes API</a></li>
+<li><a href="#mcp-model-context-protocol" rel="nofollow">MCP Server</a></li>
+<li><a href="#connecting-ai-assistants" rel="nofollow">Connecting AI Assistants</a></li>
+<li><a href="#oauth-21-provider" rel="nofollow">OAuth 2.1 Provider</a></li>
+<li><a href="#rate-limits" rel="nofollow">Rate Limits</a></li>
+<li><a href="#error-responses" rel="nofollow">Error Responses</a></li>
+</ul>
+
+<hr>
+
 <h2 id="authentication">Authentication</h2>
 
-<h3 id="personal-access-tokens-pat">Personal Access Tokens (PAT)</h3>
+<p>common.ink supports three authentication methods:</p>
 
-<p>The simplest way to authenticate API requests:</p>
+<h3 id="session-cookies">Session Cookies</h3>
+
+<p>Session cookies are automatically set when you log in via the web interface. They’re valid for 30 days and use the <code>session_id</code> cookie name with <code>HttpOnly</code> and <code>SameSite=Lax</code> settings.</p>
+
+<h3 id="api-keys">API Keys</h3>
+
+<p>API Keys are the recommended way to authenticate API requests programmatically:</p>
 
 <ol>
-<li>Go to <a href="/tokens" rel="nofollow">Tokens</a> to create a new token</li>
-<li>Include the token in the <code>Authorization</code> header:</li>
+<li>Go to <a href="/api-keys" rel="nofollow">API Keys</a> to create a new key</li>
+<li>Include the key in the <code>Authorization</code> header:</li>
 </ol>
 
-<pre><code class="language-bash">curl -H &#34;Authorization: Bearer agentnotes_pat_USER_ID_TOKEN&#34; \
+<pre><code class="language-bash">curl -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
   https://common.ink/api/notes
 </code></pre>
 
+<p><strong>API Key Format</strong>: <code>agentnotes_key_{user_id}_{random_token}</code></p>
+
 <h3 id="oauth-2-1">OAuth 2.1</h3>
 
-<p>For third-party applications, use OAuth 2.1 with PKCE:</p>
+<p>For third-party applications, use OAuth 2.1 with PKCE. See the <a href="#oauth-21-provider" rel="nofollow">OAuth 2.1 Provider</a> section below.</p>
 
-<ol>
-<li>Register your client via Dynamic Client Registration (DCR)</li>
-<li>Redirect users to <code>/oauth/authorize</code></li>
-<li>Exchange the authorization code for tokens at <code>/oauth/token</code></li>
-</ol>
+<hr>
 
-<p>See the <a href="https://oauth.net/2.1/" rel="nofollow">OAuth 2.1 specification</a> for details.</p>
+<h2 id="user-registration-login">User Registration &amp; Login</h2>
 
-<h2 id="rest-api">REST API</h2>
+<h3 id="register-with-email-password">Register with Email/Password</h3>
+
+<p><strong>Endpoint</strong>: <code>POST /auth/register</code></p>
+
+<p><strong>Content-Type</strong>: <code>application/x-www-form-urlencoded</code></p>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>email</td>
+<td>string</td>
+<td>Yes</td>
+<td>Email address</td>
+</tr>
+
+<tr>
+<td>password</td>
+<td>string</td>
+<td>Yes</td>
+<td>Password (min 8 characters)</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash"># Register a new account (saves session cookie)
+curl -X POST https://common.ink/auth/register \
+  -H &#34;Content-Type: application/x-www-form-urlencoded&#34; \
+  -d &#34;email=user@example.com&amp;password=SecurePass123&#34; \
+  -c cookies.txt
+</code></pre>
+
+<p><strong>Response</strong>: 303 redirect to <code>/notes</code> with session cookie set in <code>cookies.txt</code>.</p>
+
+<hr>
+
+<h3 id="login-with-email-password">Login with Email/Password</h3>
+
+<p><strong>Endpoint</strong>: <code>POST /auth/login</code></p>
+
+<p><strong>Content-Type</strong>: <code>application/x-www-form-urlencoded</code></p>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>email</td>
+<td>string</td>
+<td>Yes</td>
+<td>Email address</td>
+</tr>
+
+<tr>
+<td>password</td>
+<td>string</td>
+<td>Yes</td>
+<td>Password</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash"># Login to existing account (saves session cookie)
+curl -X POST https://common.ink/auth/login \
+  -H &#34;Content-Type: application/x-www-form-urlencoded&#34; \
+  -d &#34;email=user@example.com&amp;password=SecurePass123&#34; \
+  -c cookies.txt
+</code></pre>
+
+<p><strong>Response</strong>: 303 redirect to <code>/notes</code> with session cookie set in <code>cookies.txt</code>.</p>
+
+<hr>
+
+<h3 id="google-oidc-sign-in">Google OIDC Sign-In</h3>
+
+<p><strong>Endpoint</strong>: <code>GET /auth/google</code></p>
+
+<pre><code class="language-bash"># Opens Google OAuth flow (use in browser)
+open &#34;https://common.ink/auth/google&#34;
+</code></pre>
+
+<p>After Google authentication, the callback at <code>/auth/google/callback</code> sets the session cookie and redirects to <code>/notes</code>.</p>
+
+<hr>
+
+<h3 id="magic-link-passwordless">Magic Link (Passwordless)</h3>
+
+<p><strong>Request Magic Link</strong>:</p>
+
+<p><strong>Endpoint</strong>: <code>POST /auth/magic</code></p>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/auth/magic \
+  -H &#34;Content-Type: application/x-www-form-urlencoded&#34; \
+  -d &#34;email=user@example.com&#34;
+</code></pre>
+
+<p><strong>Response</strong>: 303 redirect to <code>/login?magic=sent</code>. A magic link is sent to the email. Clicking it verifies the token at <code>/auth/magic/verify?token=...</code> and logs you in.</p>
+
+<hr>
+
+<h3 id="password-reset">Password Reset</h3>
+
+<p><strong>Request Reset</strong>:</p>
+
+<p><strong>Endpoint</strong>: <code>POST /auth/password-reset</code></p>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/auth/password-reset \
+  -H &#34;Content-Type: application/x-www-form-urlencoded&#34; \
+  -d &#34;email=user@example.com&#34;
+</code></pre>
+
+<p><strong>Confirm Reset</strong>:</p>
+
+<p><strong>Endpoint</strong>: <code>POST /auth/password-reset-confirm</code></p>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>token</td>
+<td>string</td>
+<td>Yes</td>
+<td>Reset token from email</td>
+</tr>
+
+<tr>
+<td>new_password</td>
+<td>string</td>
+<td>Yes</td>
+<td>New password</td>
+</tr>
+</tbody>
+</table>
+
+<hr>
+
+<h3 id="check-authentication-status">Check Authentication Status</h3>
+
+<p><strong>Endpoint</strong>: <code>GET /auth/whoami</code></p>
+
+<pre><code class="language-bash"># With session cookie
+curl https://common.ink/auth/whoami -b cookies.txt
+</code></pre>
+
+<p><strong>Note</strong>: The <code>/auth/whoami</code> endpoint only supports session cookie authentication. For programmatic auth status checks, use the Notes API (e.g., <code>GET /api/notes</code>) with your API Key or OAuth token – a <code>200</code> response confirms valid authentication.</p>
+
+<p><strong>Response</strong>:</p>
+
+<pre><code class="language-json">{
+  &#34;user_id&#34;: &#34;user-550e8400-e29b-41d4-a716-446655440000&#34;,
+  &#34;authenticated&#34;: true
+}
+</code></pre>
+
+<hr>
+
+<h3 id="logout">Logout</h3>
+
+<p><strong>Endpoint</strong>: <code>POST /auth/logout</code> or <code>GET /auth/logout</code></p>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/auth/logout \
+  -b cookies.txt -c cookies.txt
+</code></pre>
+
+<p><strong>Response</strong>: 303 redirect to <code>/</code>. The session cookie is cleared in <code>cookies.txt</code>.</p>
+
+<hr>
+
+<h2 id="api-keys-api">API Keys API</h2>
+
+<p>API Keys enable programmatic API access without session cookies. Ideal for:</p>
+
+<ul>
+<li>CLI tools and scripts</li>
+<li>CI/CD pipelines</li>
+<li>AI assistant integrations (Claude Code, ChatGPT)</li>
+<li>MCP server connections</li>
+</ul>
+
+<h3 id="create-an-api-key">Create an API Key</h3>
+
+<p>Creates a new API Key. <strong>Requires password re-authentication</strong>.</p>
+
+<p><strong>Note</strong>: You can also create API Keys through the web UI at <a href="/api-keys/new" rel="nofollow">/api-keys/new</a>, which is the recommended method.</p>
+
+<p><strong>Endpoint</strong>: <code>POST /api/keys</code></p>
+
+<p><strong>Authentication</strong>: Session cookie required</p>
+
+<p><strong>Content-Type</strong>: <code>application/json</code></p>
+
+<pre><code class="language-json">{
+  &#34;name&#34;: &#34;CLI Access Token&#34;,
+  &#34;scope&#34;: &#34;read_write&#34;,
+  &#34;expires_in&#34;: 2592000,
+  &#34;email&#34;: &#34;user@example.com&#34;,
+  &#34;password&#34;: &#34;SecurePass123&#34;
+}
+</code></pre>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>name</td>
+<td>string</td>
+<td>Yes</td>
+<td>Descriptive name for the token</td>
+</tr>
+
+<tr>
+<td>scope</td>
+<td>string</td>
+<td>No</td>
+<td>Permission scope (default: <code>read_write</code>)</td>
+</tr>
+
+<tr>
+<td>expires_in</td>
+<td>integer</td>
+<td>No</td>
+<td>Seconds until expiry (default/max: 1 year)</td>
+</tr>
+
+<tr>
+<td>email</td>
+<td>string</td>
+<td>Yes</td>
+<td>Your email for re-authentication</td>
+</tr>
+
+<tr>
+<td>password</td>
+<td>string</td>
+<td>Yes</td>
+<td>Your password for re-authentication</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash"># Create an API Key (requires session cookie from login)
+curl -X POST https://common.ink/api/keys \
+  -H &#34;Content-Type: application/json&#34; \
+  -b cookies.txt \
+  -d &#39;{
+    &#34;name&#34;: &#34;My CLI Token&#34;,
+    &#34;scope&#34;: &#34;read_write&#34;,
+    &#34;expires_in&#34;: 2592000,
+    &#34;email&#34;: &#34;user@example.com&#34;,
+    &#34;password&#34;: &#34;SecurePass123&#34;
+  }&#39;
+</code></pre>
+
+<p><strong>Response</strong> (201 Created):</p>
+
+<pre><code class="language-json">{
+  &#34;id&#34;: &#34;a1b2c3d4-e5f6-7890-abcd-ef1234567890&#34;,
+  &#34;name&#34;: &#34;My CLI Token&#34;,
+  &#34;token&#34;: &#34;agentnotes_key_user-550e8400-e29b-41d4-a716-446655440000_YWJjZGVm...&#34;,
+  &#34;scope&#34;: &#34;read_write&#34;,
+  &#34;expires_at&#34;: &#34;2026-03-03T12:00:00Z&#34;,
+  &#34;created_at&#34;: &#34;2026-02-03T12:00:00Z&#34;
+}
+</code></pre>
+
+<p><strong>Important</strong>: Save the <code>token</code> value securely - it cannot be retrieved later!</p>
+
+<hr>
+
+<h3 id="list-api-keys">List API Keys</h3>
+
+<p><strong>Endpoint</strong>: <code>GET /api/keys</code></p>
+
+<pre><code class="language-bash">curl https://common.ink/api/keys -b cookies.txt
+</code></pre>
+
+<p><strong>Response</strong>:</p>
+
+<pre><code class="language-json">{
+  &#34;tokens&#34;: [
+    {
+      &#34;id&#34;: &#34;a1b2c3d4-e5f6-7890-abcd-ef1234567890&#34;,
+      &#34;name&#34;: &#34;My CLI Token&#34;,
+      &#34;scope&#34;: &#34;read_write&#34;,
+      &#34;expires_at&#34;: &#34;2026-03-03T12:00:00Z&#34;,
+      &#34;created_at&#34;: &#34;2026-02-03T12:00:00Z&#34;,
+      &#34;last_used_at&#34;: &#34;2026-02-03T14:30:00Z&#34;
+    }
+  ]
+}
+</code></pre>
+
+<hr>
+
+<h3 id="revoke-an-api-key">Revoke an API Key</h3>
+
+<p><strong>Endpoint</strong>: <code>DELETE /api/keys/{id}</code></p>
+
+<pre><code class="language-bash">curl -X DELETE https://common.ink/api/keys/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+  -b cookies.txt
+</code></pre>
+
+<p><strong>Response</strong>: <code>204 No Content</code></p>
+
+<hr>
+
+<h2 id="notes-api">Notes API</h2>
+
+<p>All notes endpoints require authentication via session cookie, API Key, or OAuth JWT.</p>
 
 <h3 id="base-url">Base URL</h3>
 
 <pre><code>https://common.ink/api
 </code></pre>
 
-<h3 id="notes">Notes</h3>
+<h3 id="list-notes">List Notes</h3>
 
-<h4 id="list-notes">List Notes</h4>
+<p><strong>Endpoint</strong>: <code>GET /api/notes</code></p>
 
-<pre><code class="language-http">GET /api/notes?limit=50&amp;offset=0
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>limit</td>
+<td>integer</td>
+<td>50</td>
+<td>Max notes to return (max: 1000)</td>
+</tr>
+
+<tr>
+<td>offset</td>
+<td>integer</td>
+<td>0</td>
+<td>Number of notes to skip</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash"># With session cookie
+curl &#34;https://common.ink/api/notes?limit=10&amp;offset=0&#34; -b cookies.txt
+
+# With API Key
+curl &#34;https://common.ink/api/notes?limit=10&amp;offset=0&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34;
 </code></pre>
 
-<p><strong>Response:</strong></p>
+<p><strong>Response</strong>:</p>
 
 <pre><code class="language-json">{
   &#34;notes&#34;: [
     {
-      &#34;id&#34;: &#34;note_abc123&#34;,
+      &#34;id&#34;: &#34;b3f1a2c4-5d6e-7f89-0abc-def123456789&#34;,
       &#34;title&#34;: &#34;My Note&#34;,
       &#34;content&#34;: &#34;Note content here...&#34;,
       &#34;is_public&#34;: false,
@@ -152,69 +549,560 @@
       &#34;updated_at&#34;: &#34;2026-01-15T10:30:00Z&#34;
     }
   ],
-  &#34;total_count&#34;: 42
+  &#34;total_count&#34;: 42,
+  &#34;limit&#34;: 10,
+  &#34;offset&#34;: 0
 }
 </code></pre>
 
-<h4 id="create-note">Create Note</h4>
+<hr>
 
-<pre><code class="language-http">POST /api/notes
-Content-Type: application/json
+<h3 id="create-note">Create Note</h3>
 
-{
-  &#34;title&#34;: &#34;New Note&#34;,
-  &#34;content&#34;: &#34;Note content here...&#34;
-}
+<p><strong>Endpoint</strong>: <code>POST /api/notes</code></p>
+
+<p><strong>Content-Type</strong>: <code>application/json</code></p>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>title</td>
+<td>string</td>
+<td>Yes</td>
+<td>Note title</td>
+</tr>
+
+<tr>
+<td>content</td>
+<td>string</td>
+<td>No</td>
+<td>Note content (markdown supported)</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/api/notes \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{
+    &#34;title&#34;: &#34;Meeting Notes&#34;,
+    &#34;content&#34;: &#34;## Agenda\n- Item 1\n- Item 2&#34;
+  }&#39;
 </code></pre>
 
-<p><strong>Response:</strong> <code>201 Created</code></p>
+<p><strong>Response</strong> (201 Created):</p>
 
 <pre><code class="language-json">{
-  &#34;id&#34;: &#34;note_def456&#34;,
-  &#34;title&#34;: &#34;New Note&#34;,
-  &#34;content&#34;: &#34;Note content here...&#34;,
+  &#34;id&#34;: &#34;c4e2d1a3-6b7f-8901-2345-abcdef678901&#34;,
+  &#34;title&#34;: &#34;Meeting Notes&#34;,
+  &#34;content&#34;: &#34;## Agenda\n- Item 1\n- Item 2&#34;,
   &#34;is_public&#34;: false,
   &#34;created_at&#34;: &#34;2026-01-15T10:35:00Z&#34;,
   &#34;updated_at&#34;: &#34;2026-01-15T10:35:00Z&#34;
 }
 </code></pre>
 
-<h4 id="get-note">Get Note</h4>
+<hr>
 
-<pre><code class="language-http">GET /api/notes/{id}
+<h3 id="get-note">Get Note</h3>
+
+<p><strong>Endpoint</strong>: <code>GET /api/notes/{id}</code></p>
+
+<pre><code class="language-bash">curl https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34;
 </code></pre>
 
-<h4 id="update-note">Update Note</h4>
+<p><strong>Response</strong>: Same format as Create Note response.</p>
 
-<pre><code class="language-http">PUT /api/notes/{id}
-Content-Type: application/json
+<hr>
 
-{
-  &#34;title&#34;: &#34;Updated Title&#34;,
-  &#34;content&#34;: &#34;Updated content...&#34;
+<h3 id="update-note">Update Note</h3>
+
+<p><strong>Endpoint</strong>: <code>PUT /api/notes/{id}</code></p>
+
+<p><strong>Content-Type</strong>: <code>application/json</code></p>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>title</td>
+<td>string</td>
+<td>No</td>
+<td>New title</td>
+</tr>
+
+<tr>
+<td>content</td>
+<td>string</td>
+<td>No</td>
+<td>New content</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash">curl -X PUT https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{
+    &#34;title&#34;: &#34;Updated Title&#34;,
+    &#34;content&#34;: &#34;Updated content...&#34;
+  }&#39;
+</code></pre>
+
+<hr>
+
+<h3 id="delete-note">Delete Note</h3>
+
+<p><strong>Endpoint</strong>: <code>DELETE /api/notes/{id}</code></p>
+
+<pre><code class="language-bash">curl -X DELETE https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34;
+</code></pre>
+
+<p><strong>Response</strong>: <code>204 No Content</code></p>
+
+<hr>
+
+<h3 id="search-notes">Search Notes</h3>
+
+<p><strong>Endpoint</strong>: <code>POST /api/notes/search</code></p>
+
+<p><strong>Content-Type</strong>: <code>application/json</code></p>
+
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>query</td>
+<td>string</td>
+<td>Yes</td>
+<td>Search query (FTS5 syntax supported)</td>
+</tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/api/notes/search \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{&#34;query&#34;: &#34;meeting agenda&#34;}&#39;
+</code></pre>
+
+<p><strong>Response</strong>:</p>
+
+<pre><code class="language-json">{
+  &#34;results&#34;: [
+    {
+      &#34;note&#34;: {
+        &#34;id&#34;: &#34;c4e2d1a3-6b7f-8901-2345-abcdef678901&#34;,
+        &#34;title&#34;: &#34;Meeting Notes&#34;,
+        &#34;content&#34;: &#34;## Agenda\n- Goal setting&#34;,
+        &#34;is_public&#34;: false,
+        &#34;created_at&#34;: &#34;2026-01-15T10:35:00Z&#34;,
+        &#34;updated_at&#34;: &#34;2026-01-15T10:35:00Z&#34;
+      },
+      &#34;rank&#34;: -1.5
+    }
+  ],
+  &#34;query&#34;: &#34;meeting agenda&#34;,
+  &#34;total_count&#34;: 1
 }
 </code></pre>
 
-<h4 id="delete-note">Delete Note</h4>
+<p><strong>Note</strong>: Uses FTS5 full-text search. Lower (more negative) rank values indicate better matches. Supports standard SQLite FTS5 query syntax.</p>
 
-<pre><code class="language-http">DELETE /api/notes/{id}
+<hr>
+
+<h2 id="mcp-model-context-protocol">MCP (Model Context Protocol)</h2>
+
+<p>common.ink implements the MCP 2025-03-26 specification using Streamable HTTP transport.</p>
+
+<h3 id="endpoint">Endpoint</h3>
+
+<pre><code>POST /mcp
 </code></pre>
 
-<p><strong>Response:</strong> <code>204 No Content</code></p>
+<h3 id="headers">Headers</h3>
 
-<h4 id="search-notes">Search Notes</h4>
+<table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Value</th>
+<th>Required</th>
+</tr>
+</thead>
 
-<pre><code class="language-http">POST /api/notes/search
-Content-Type: application/json
+<tbody>
+<tr>
+<td>Content-Type</td>
+<td>application/json</td>
+<td>Yes</td>
+</tr>
 
-{
-  &#34;query&#34;: &#34;search terms&#34;
+<tr>
+<td>Accept</td>
+<td>application/json, text/event-stream</td>
+<td>Yes</td>
+</tr>
+
+<tr>
+<td>Authorization</td>
+<td>Bearer {token}</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="available-tools">Available Tools</h3>
+
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td><code>note_list</code></td>
+<td>List notes with pagination support</td>
+</tr>
+
+<tr>
+<td><code>note_view</code></td>
+<td>Retrieve a single note by its ID</td>
+</tr>
+
+<tr>
+<td><code>note_create</code></td>
+<td>Create a new note with a title and optional content</td>
+</tr>
+
+<tr>
+<td><code>note_update</code></td>
+<td>Update an existing note’s title and/or content</td>
+</tr>
+
+<tr>
+<td><code>note_search</code></td>
+<td>Search notes using full-text search (FTS5)</td>
+</tr>
+
+<tr>
+<td><code>note_delete</code></td>
+<td>Delete a note by its ID</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="list-available-tools">List Available Tools</h3>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/mcp \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Accept: application/json, text/event-stream&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{&#34;jsonrpc&#34;:&#34;2.0&#34;,&#34;method&#34;:&#34;tools/list&#34;,&#34;id&#34;:1}&#39;
+</code></pre>
+
+<p><strong>Response</strong>:</p>
+
+<pre><code class="language-json">{
+  &#34;jsonrpc&#34;: &#34;2.0&#34;,
+  &#34;id&#34;: 1,
+  &#34;result&#34;: {
+    &#34;tools&#34;: [
+      {
+        &#34;name&#34;: &#34;note_create&#34;,
+        &#34;description&#34;: &#34;Create a new note with a title and optional content&#34;,
+        &#34;inputSchema&#34;: {
+          &#34;type&#34;: &#34;object&#34;,
+          &#34;properties&#34;: {
+            &#34;title&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The title of the note (required)&#34;},
+            &#34;content&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The content/body of the note (optional)&#34;}
+          },
+          &#34;required&#34;: [&#34;title&#34;]
+        }
+      },
+      {
+        &#34;name&#34;: &#34;note_delete&#34;,
+        &#34;description&#34;: &#34;Delete a note by its ID&#34;,
+        &#34;inputSchema&#34;: {
+          &#34;type&#34;: &#34;object&#34;,
+          &#34;properties&#34;: {
+            &#34;id&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The unique identifier of the note to delete&#34;}
+          },
+          &#34;required&#34;: [&#34;id&#34;]
+        }
+      },
+      {
+        &#34;name&#34;: &#34;note_list&#34;,
+        &#34;description&#34;: &#34;List notes with pagination support&#34;,
+        &#34;inputSchema&#34;: {
+          &#34;type&#34;: &#34;object&#34;,
+          &#34;properties&#34;: {
+            &#34;limit&#34;: {&#34;type&#34;: &#34;integer&#34;, &#34;description&#34;: &#34;Maximum number of notes to return (default: 50, max: 1000)&#34;},
+            &#34;offset&#34;: {&#34;type&#34;: &#34;integer&#34;, &#34;description&#34;: &#34;Number of notes to skip for pagination (default: 0)&#34;}
+          }
+        }
+      },
+      {
+        &#34;name&#34;: &#34;note_search&#34;,
+        &#34;description&#34;: &#34;Search notes using full-text search (FTS5)&#34;,
+        &#34;inputSchema&#34;: {
+          &#34;type&#34;: &#34;object&#34;,
+          &#34;properties&#34;: {
+            &#34;query&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The search query to match against note titles and content&#34;}
+          },
+          &#34;required&#34;: [&#34;query&#34;]
+        }
+      },
+      {
+        &#34;name&#34;: &#34;note_update&#34;,
+        &#34;description&#34;: &#34;Update an existing note&#39;s title and/or content&#34;,
+        &#34;inputSchema&#34;: {
+          &#34;type&#34;: &#34;object&#34;,
+          &#34;properties&#34;: {
+            &#34;id&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The unique identifier of the note to update&#34;},
+            &#34;title&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The new title for the note (optional)&#34;},
+            &#34;content&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The new content for the note (optional)&#34;}
+          },
+          &#34;required&#34;: [&#34;id&#34;]
+        }
+      },
+      {
+        &#34;name&#34;: &#34;note_view&#34;,
+        &#34;description&#34;: &#34;Retrieve a single note by its ID&#34;,
+        &#34;inputSchema&#34;: {
+          &#34;type&#34;: &#34;object&#34;,
+          &#34;properties&#34;: {
+            &#34;id&#34;: {&#34;type&#34;: &#34;string&#34;, &#34;description&#34;: &#34;The unique identifier of the note to retrieve&#34;}
+          },
+          &#34;required&#34;: [&#34;id&#34;]
+        }
+      }
+    ]
+  }
 }
 </code></pre>
 
-<p>Uses FTS5 full-text search. Supports standard SQLite FTS5 query syntax.</p>
+<hr>
 
-<h3 id="rate-limits">Rate Limits</h3>
+<h3 id="create-note-via-mcp">Create Note via MCP</h3>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/mcp \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Accept: application/json, text/event-stream&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{
+    &#34;jsonrpc&#34;: &#34;2.0&#34;,
+    &#34;method&#34;: &#34;tools/call&#34;,
+    &#34;params&#34;: {
+      &#34;name&#34;: &#34;note_create&#34;,
+      &#34;arguments&#34;: {
+        &#34;title&#34;: &#34;Created via MCP&#34;,
+        &#34;content&#34;: &#34;This note was created by an AI assistant.&#34;
+      }
+    },
+    &#34;id&#34;: 2
+  }&#39;
+</code></pre>
+
+<hr>
+
+<h3 id="search-notes-via-mcp">Search Notes via MCP</h3>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/mcp \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Accept: application/json, text/event-stream&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{
+    &#34;jsonrpc&#34;: &#34;2.0&#34;,
+    &#34;method&#34;: &#34;tools/call&#34;,
+    &#34;params&#34;: {
+      &#34;name&#34;: &#34;note_search&#34;,
+      &#34;arguments&#34;: {
+        &#34;query&#34;: &#34;meeting&#34;
+      }
+    },
+    &#34;id&#34;: 3
+  }&#39;
+</code></pre>
+
+<hr>
+
+<h3 id="list-notes-via-mcp">List Notes via MCP</h3>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/mcp \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Accept: application/json, text/event-stream&#34; \
+  -H &#34;Authorization: Bearer agentnotes_key_user-xxx_token...&#34; \
+  -d &#39;{
+    &#34;jsonrpc&#34;: &#34;2.0&#34;,
+    &#34;method&#34;: &#34;tools/call&#34;,
+    &#34;params&#34;: {
+      &#34;name&#34;: &#34;note_list&#34;,
+      &#34;arguments&#34;: {
+        &#34;limit&#34;: 10,
+        &#34;offset&#34;: 0
+      }
+    },
+    &#34;id&#34;: 4
+  }&#39;
+</code></pre>
+
+<hr>
+
+<h2 id="connecting-ai-assistants">Connecting AI Assistants</h2>
+
+<h3 id="claude-code">Claude Code</h3>
+
+<p>Add to your Claude Code MCP configuration (<code>~/.claude/mcp.json</code>):</p>
+
+<pre><code class="language-json">{
+  &#34;mcpServers&#34;: {
+    &#34;common-ink&#34;: {
+      &#34;url&#34;: &#34;https://common.ink/mcp&#34;,
+      &#34;transport&#34;: &#34;streamable-http&#34;,
+      &#34;headers&#34;: {
+        &#34;Authorization&#34;: &#34;Bearer agentnotes_key_user-xxx_token...&#34;
+      }
+    }
+  }
+}
+</code></pre>
+
+<h3 id="chatgpt-custom-gpt">ChatGPT (Custom GPT)</h3>
+
+<ol>
+<li>Create an API Key at <a href="/api-keys" rel="nofollow">API Keys</a></li>
+<li>In ChatGPT’s custom GPT settings, add an action:
+
+<ul>
+<li><strong>Server URL</strong>: <code>https://common.ink</code></li>
+<li><strong>Authentication</strong>: API Key (Bearer Token)</li>
+<li><strong>API Key</strong>: Your API Key</li>
+</ul></li>
+</ol>
+
+<h3 id="other-mcp-clients">Other MCP Clients</h3>
+
+<p>Use the official MCP SDK for your language:</p>
+
+<ul>
+<li><a href="https://github.com/modelcontextprotocol/typescript-sdk" rel="nofollow">TypeScript SDK</a></li>
+<li><a href="https://github.com/modelcontextprotocol/python-sdk" rel="nofollow">Python SDK</a></li>
+<li><a href="https://github.com/modelcontextprotocol/go-sdk" rel="nofollow">Go SDK</a></li>
+</ul>
+
+<hr>
+
+<h2 id="oauth-2-1-provider">OAuth 2.1 Provider</h2>
+
+<p>common.ink implements an OAuth 2.1 provider for third-party integrations.</p>
+
+<h3 id="well-known-metadata">Well-Known Metadata</h3>
+
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Description</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td><code>GET /.well-known/oauth-authorization-server</code></td>
+<td>Authorization server metadata</td>
+</tr>
+
+<tr>
+<td><code>GET /.well-known/oauth-protected-resource</code></td>
+<td>Protected resource metadata</td>
+</tr>
+
+<tr>
+<td><code>GET /.well-known/jwks.json</code></td>
+<td>JSON Web Key Set for token verification</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="dynamic-client-registration">Dynamic Client Registration</h3>
+
+<p><strong>Endpoint</strong>: <code>POST /oauth/register</code></p>
+
+<p><strong>Note</strong>: Redirect URIs must be in the server’s allowlist. Currently supported redirect URIs:</p>
+
+<ul>
+<li><code>https://chatgpt.com/connector_platform_oauth_redirect</code> (ChatGPT)</li>
+<li><code>https://platform.openai.com/apps-manage/oauth</code> (OpenAI platform)</li>
+<li><code>https://claude.ai/api/mcp/auth_callback</code> (Claude)</li>
+<li><code>https://claude.com/api/mcp/auth_callback</code> (Claude)</li>
+</ul>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/oauth/register \
+  -H &#34;Content-Type: application/json&#34; \
+  -d &#39;{
+    &#34;client_name&#34;: &#34;My AI Agent&#34;,
+    &#34;redirect_uris&#34;: [&#34;https://claude.ai/api/mcp/auth_callback&#34;],
+    &#34;grant_types&#34;: [&#34;authorization_code&#34;, &#34;refresh_token&#34;],
+    &#34;response_types&#34;: [&#34;code&#34;],
+    &#34;token_endpoint_auth_method&#34;: &#34;none&#34;
+  }&#39;
+</code></pre>
+
+<h3 id="authorization">Authorization</h3>
+
+<pre><code>GET /oauth/authorize?
+  response_type=code&amp;
+  client_id=CLIENT_ID&amp;
+  redirect_uri=REDIRECT_URI&amp;
+  scope=notes:read%20notes:write&amp;
+  code_challenge=PKCE_CHALLENGE&amp;
+  code_challenge_method=S256&amp;
+  state=RANDOM_STATE
+</code></pre>
+
+<h3 id="token-exchange">Token Exchange</h3>
+
+<p><strong>Endpoint</strong>: <code>POST /oauth/token</code></p>
+
+<pre><code class="language-bash">curl -X POST https://common.ink/oauth/token \
+  -H &#34;Content-Type: application/x-www-form-urlencoded&#34; \
+  -d &#34;grant_type=authorization_code&amp;code=AUTH_CODE&amp;redirect_uri=REDIRECT_URI&amp;client_id=CLIENT_ID&amp;code_verifier=PKCE_VERIFIER&#34;
+</code></pre>
+
+<hr>
+
+<h2 id="rate-limits">Rate Limits</h2>
 
 <table>
 <thead>
@@ -241,180 +1129,196 @@ Content-Type: application/json
 </table>
 <p>Rate limit headers are included in all responses:</p>
 
-<ul>
-<li><code>X-RateLimit-Limit</code>: Maximum requests per window</li>
-<li><code>X-RateLimit-Remaining</code>: Remaining requests in current window</li>
-<li><code>X-RateLimit-Reset</code>: Unix timestamp when the window resets</li>
-</ul>
+<table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Description</th>
+</tr>
+</thead>
 
-<h2 id="mcp-model-context-protocol">MCP (Model Context Protocol)</h2>
+<tbody>
+<tr>
+<td><code>X-RateLimit-Limit</code></td>
+<td>Maximum requests per window</td>
+</tr>
 
-<p>common.ink implements the MCP 2025-03-26 specification using Streamable HTTP transport.</p>
+<tr>
+<td><code>X-RateLimit-Remaining</code></td>
+<td>Remaining requests in current window</td>
+</tr>
 
-<h3 id="endpoint">Endpoint</h3>
+<tr>
+<td><code>X-RateLimit-Reset</code></td>
+<td>Unix timestamp when the window resets</td>
+</tr>
+</tbody>
+</table>
 
-<pre><code>POST /mcp
-</code></pre>
-
-<h3 id="authentication-1">Authentication</h3>
-
-<p>Include your PAT or OAuth access token:</p>
-
-<pre><code class="language-http">Authorization: Bearer YOUR_TOKEN
-Accept: application/json, text/event-stream
-Content-Type: application/json
-</code></pre>
-
-<h3 id="available-tools">Available Tools</h3>
-
-<h4 id="notes-list">notes/list</h4>
-
-<p>List all notes with pagination.</p>
-
-<pre><code class="language-json">{
-  &#34;jsonrpc&#34;: &#34;2.0&#34;,
-  &#34;id&#34;: 1,
-  &#34;method&#34;: &#34;tools/call&#34;,
-  &#34;params&#34;: {
-    &#34;name&#34;: &#34;notes/list&#34;,
-    &#34;arguments&#34;: {
-      &#34;limit&#34;: 50,
-      &#34;offset&#34;: 0
-    }
-  }
-}
-</code></pre>
-
-<h4 id="notes-create">notes/create</h4>
-
-<p>Create a new note.</p>
-
-<pre><code class="language-json">{
-  &#34;jsonrpc&#34;: &#34;2.0&#34;,
-  &#34;id&#34;: 2,
-  &#34;method&#34;: &#34;tools/call&#34;,
-  &#34;params&#34;: {
-    &#34;name&#34;: &#34;notes/create&#34;,
-    &#34;arguments&#34;: {
-      &#34;title&#34;: &#34;Meeting Notes&#34;,
-      &#34;content&#34;: &#34;Discussed Q1 goals...&#34;
-    }
-  }
-}
-</code></pre>
-
-<h4 id="notes-read">notes/read</h4>
-
-<p>Read a specific note by ID.</p>
-
-<h4 id="notes-update">notes/update</h4>
-
-<p>Update an existing note.</p>
-
-<h4 id="notes-delete">notes/delete</h4>
-
-<p>Delete a note.</p>
-
-<h4 id="notes-search">notes/search</h4>
-
-<p>Full-text search across all notes.</p>
-
-<h3 id="example-session">Example Session</h3>
-
-<pre><code class="language-bash"># Initialize session
-curl -X POST https://common.ink/mcp \
-  -H &#34;Authorization: Bearer YOUR_TOKEN&#34; \
-  -H &#34;Content-Type: application/json&#34; \
-  -H &#34;Accept: application/json, text/event-stream&#34; \
-  -d &#39;{&#34;jsonrpc&#34;:&#34;2.0&#34;,&#34;method&#34;:&#34;initialize&#34;,&#34;params&#34;:{&#34;protocolVersion&#34;:&#34;2025-03-26&#34;,&#34;capabilities&#34;:{}},&#34;id&#34;:1}&#39;
-
-# List available tools
-curl -X POST https://common.ink/mcp \
-  -H &#34;Authorization: Bearer YOUR_TOKEN&#34; \
-  -H &#34;Content-Type: application/json&#34; \
-  -H &#34;Accept: application/json&#34; \
-  -d &#39;{&#34;jsonrpc&#34;:&#34;2.0&#34;,&#34;method&#34;:&#34;tools/list&#34;,&#34;id&#34;:2}&#39;
-</code></pre>
-
-<h2 id="oauth-2-1-endpoints">OAuth 2.1 Endpoints</h2>
-
-<h3 id="well-known-metadata">Well-Known Metadata</h3>
-
-<ul>
-<li><code>GET /.well-known/oauth-authorization-server</code> - Authorization server metadata</li>
-<li><code>GET /.well-known/oauth-protected-resource</code> - Protected resource metadata</li>
-<li><code>GET /.well-known/jwks.json</code> - JSON Web Key Set for token verification</li>
-</ul>
-
-<h3 id="authorization">Authorization</h3>
-
-<pre><code>GET /oauth/authorize?
-  response_type=code&amp;
-  client_id=CLIENT_ID&amp;
-  redirect_uri=REDIRECT_URI&amp;
-  scope=notes:read%20notes:write&amp;
-  code_challenge=PKCE_CHALLENGE&amp;
-  code_challenge_method=S256&amp;
-  state=RANDOM_STATE
-</code></pre>
-
-<h3 id="token-exchange">Token Exchange</h3>
-
-<pre><code class="language-http">POST /oauth/token
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=authorization_code&amp;
-code=AUTH_CODE&amp;
-redirect_uri=REDIRECT_URI&amp;
-client_id=CLIENT_ID&amp;
-code_verifier=PKCE_VERIFIER
-</code></pre>
-
-<h3 id="dynamic-client-registration">Dynamic Client Registration</h3>
-
-<pre><code class="language-http">POST /oauth/register
-Content-Type: application/json
-
-{
-  &#34;client_name&#34;: &#34;My AI Agent&#34;,
-  &#34;redirect_uris&#34;: [&#34;https://myapp.com/callback&#34;],
-  &#34;grant_types&#34;: [&#34;authorization_code&#34;, &#34;refresh_token&#34;],
-  &#34;response_types&#34;: [&#34;code&#34;],
-  &#34;token_endpoint_auth_method&#34;: &#34;none&#34;
-}
-</code></pre>
+<hr>
 
 <h2 id="error-responses">Error Responses</h2>
 
 <p>All errors return JSON:</p>
 
 <pre><code class="language-json">{
-  &#34;error&#34;: &#34;not_found&#34;,
-  &#34;error_description&#34;: &#34;Note not found&#34;
+  &#34;error&#34;: &#34;Error message description&#34;
 }
 </code></pre>
 
-<p>Common HTTP status codes:</p>
+<h3 id="http-status-codes">HTTP Status Codes</h3>
 
-<ul>
-<li><code>400 Bad Request</code> - Invalid request parameters</li>
-<li><code>401 Unauthorized</code> - Missing or invalid authentication</li>
-<li><code>403 Forbidden</code> - Insufficient permissions</li>
-<li><code>404 Not Found</code> - Resource not found</li>
-<li><code>429 Too Many Requests</code> - Rate limit exceeded</li>
-<li><code>500 Internal Server Error</code> - Server error</li>
-</ul>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Description</th>
+</tr>
+</thead>
 
-<h2 id="sdks-and-libraries">SDKs and Libraries</h2>
+<tbody>
+<tr>
+<td>200</td>
+<td>Success</td>
+</tr>
 
-<p>Currently, no official SDKs are provided. The API follows standard REST conventions and should work with any HTTP client.</p>
+<tr>
+<td>201</td>
+<td>Created</td>
+</tr>
 
-<p>For MCP integration, use the official MCP SDK for your language:</p>
+<tr>
+<td>204</td>
+<td>No Content (successful deletion)</td>
+</tr>
 
-<ul>
-<li><a href="https://github.com/modelcontextprotocol/typescript-sdk" rel="nofollow">TypeScript SDK</a></li>
-<li><a href="https://github.com/modelcontextprotocol/python-sdk" rel="nofollow">Python SDK</a></li>
-</ul>
+<tr>
+<td>400</td>
+<td>Bad Request (invalid input)</td>
+</tr>
+
+<tr>
+<td>401</td>
+<td>Unauthorized (missing or invalid authentication)</td>
+</tr>
+
+<tr>
+<td>403</td>
+<td>Forbidden (insufficient permissions)</td>
+</tr>
+
+<tr>
+<td>404</td>
+<td>Not Found</td>
+</tr>
+
+<tr>
+<td>429</td>
+<td>Too Many Requests (rate limited)</td>
+</tr>
+
+<tr>
+<td>500</td>
+<td>Internal Server Error</td>
+</tr>
+</tbody>
+</table>
+
+<h3 id="401-unauthorized-response">401 Unauthorized Response</h3>
+
+<p>When authentication fails, the response includes a <code>WWW-Authenticate</code> header:</p>
+
+<pre><code>WWW-Authenticate: Bearer resource_metadata=&#34;https://common.ink/.well-known/oauth-protected-resource&#34;, error=&#34;invalid_token&#34;, error_description=&#34;Invalid API key&#34;
+</code></pre>
+
+<hr>
+
+<h2 id="complete-workflow-example">Complete Workflow Example</h2>
+
+<pre><code class="language-bash">#!/bin/bash
+# Complete API workflow example
+
+# 1. Register (or login if account exists)
+curl -X POST https://common.ink/auth/register \
+  -H &#34;Content-Type: application/x-www-form-urlencoded&#34; \
+  -d &#34;email=demo@example.com&amp;password=DemoPass123&#34; \
+  -c cookies.txt -s &gt; /dev/null
+
+# 2. Create an API Key for API access
+API_KEY=$(curl -s -X POST https://common.ink/api/keys \
+  -H &#34;Content-Type: application/json&#34; \
+  -b cookies.txt \
+  -d &#39;{
+    &#34;name&#34;: &#34;Demo Token&#34;,
+    &#34;email&#34;: &#34;demo@example.com&#34;,
+    &#34;password&#34;: &#34;DemoPass123&#34;
+  }&#39; | jq -r &#39;.token&#39;)
+
+echo &#34;Your API Key: $API_KEY&#34;
+
+# 3. Create a note using the API Key
+echo &#34;Creating note...&#34;
+curl -X POST https://common.ink/api/notes \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Authorization: Bearer $API_KEY&#34; \
+  -d &#39;{
+    &#34;title&#34;: &#34;API Test Note&#34;,
+    &#34;content&#34;: &#34;Created via REST API!&#34;
+  }&#39;
+
+# 4. List all notes
+echo -e &#34;\n\nListing notes...&#34;
+curl https://common.ink/api/notes \
+  -H &#34;Authorization: Bearer $API_KEY&#34;
+
+# 5. Search notes
+echo -e &#34;\n\nSearching notes...&#34;
+curl -X POST https://common.ink/api/notes/search \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Authorization: Bearer $API_KEY&#34; \
+  -d &#39;{&#34;query&#34;: &#34;API&#34;}&#39;
+
+# 6. Create note via MCP
+echo -e &#34;\n\nCreating note via MCP...&#34;
+curl -X POST https://common.ink/mcp \
+  -H &#34;Content-Type: application/json&#34; \
+  -H &#34;Accept: application/json, text/event-stream&#34; \
+  -H &#34;Authorization: Bearer $API_KEY&#34; \
+  -d &#39;{
+    &#34;jsonrpc&#34;: &#34;2.0&#34;,
+    &#34;method&#34;: &#34;tools/call&#34;,
+    &#34;params&#34;: {
+      &#34;name&#34;: &#34;note_create&#34;,
+      &#34;arguments&#34;: {
+        &#34;title&#34;: &#34;MCP Test Note&#34;,
+        &#34;content&#34;: &#34;Created via MCP!&#34;
+      }
+    },
+    &#34;id&#34;: 1
+  }&#39;
+</code></pre>
+
+<hr>
+
+<h2 id="health-check">Health Check</h2>
+
+<p><strong>Endpoint</strong>: <code>GET /health</code></p>
+
+<p>No authentication required.</p>
+
+<pre><code class="language-bash">curl https://common.ink/health
+</code></pre>
+
+<p><strong>Response</strong>:</p>
+
+<pre><code class="language-json">{
+  &#34;status&#34;: &#34;healthy&#34;,
+  &#34;service&#34;: &#34;remote-notes&#34;,
+  &#34;milestone&#34;: 3
+}
+</code></pre>
+
+<hr>
 
 <h2 id="support">Support</h2>
 

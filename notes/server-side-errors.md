@@ -17,14 +17,14 @@ Expected 200, got 401: Unauthorized: no session
 - Server returns 401 with "no session" error
 
 **Root Cause:**
-The `RequireAuth` middleware only checked for PAT tokens and session cookies, not OAuth JWT tokens.
+The `RequireAuth` middleware only checked for API Key tokens and session cookies, not OAuth JWT tokens.
 
 **Fix Applied:**
 1. Added `OAuthTokenVerifier` interface to `internal/auth/middleware.go`
 2. Added `WithOAuthVerifier()` method to configure JWT verification
 3. Extended `RequireAuth` to validate OAuth JWT tokens:
    - Check Bearer token
-   - If PAT token (starts with `pat_`): validate as PAT
+   - If API Key token (starts with `agentnotes_key_`): validate as API Key
    - If OAuth JWT: verify signature/claims and extract user ID
    - Fall back to session cookie if no Bearer token
 4. Created adapter in `cmd/server/main.go` to wire OAuth provider's `VerifyAccessToken`

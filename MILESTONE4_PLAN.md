@@ -28,7 +28,7 @@
 - **Password reset email flow** (code is implemented but not manually tested end-to-end with real email)
 
 ### Additional Features Implemented (Beyond Original Plan)
-- **PAT management UI** with one-time reveal (`/settings/tokens`, `/tokens`, `/tokens/new`)
+- **API Key management UI** with one-time reveal (`/settings/api-keys`, `/api-keys`, `/api-keys/new`)
 - **URL shortener** (`/pub/{short_id}`) for public notes
 - **Markdown rendering fix** (using gomarkdown + bluemonday sanitization)
 - **Static pages**: privacy policy, terms of service, about page, API docs (`/privacy`, `/terms`, `/about`, `/docs/api`)

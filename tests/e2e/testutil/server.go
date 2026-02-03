@@ -144,7 +144,7 @@ func startServer(t testing.TB) (*ServerFixture, func()) {
 
 	// Build server with required CGO flags
 	binary := filepath.Join(dataDir, "server")
-	buildCmd := exec.Command("go", "build", "-o", binary, "./cmd/server")
+	buildCmd := exec.Command("go", "build", "-tags", "fts5", "-o", binary, "./cmd/server")
 	buildCmd.Dir = projectRoot
 	buildCmd.Env = append(os.Environ(),
 		"CGO_ENABLED=1",
@@ -161,14 +161,13 @@ func startServer(t testing.TB) (*ServerFixture, func()) {
 	// Start server as subprocess
 	logs := &LogCapture{}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, binary)
+	cmd := exec.CommandContext(ctx, binary, "--test")
 	cmd.Dir = dataDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("LISTEN_ADDR=:%d", port),
 		fmt.Sprintf("DATA_DIR=%s", dataDir),
 		fmt.Sprintf("BASE_URL=http://localhost:%d", port),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
-		"USE_MOCK_S3=true",
 	)
 
 	stdout, _ := cmd.StdoutPipe()

@@ -182,11 +182,12 @@ func (r *Renderer) parseTemplates(templatesDir string) error {
 // createFuncMap creates the template function map with all custom functions.
 func createFuncMap() template.FuncMap {
 	return template.FuncMap{
-		"formatTime": formatTime,
-		"truncate":   truncate,
-		"markdown":   renderMarkdown,
-		"add":        add,
-		"sub":        sub,
+		"formatTime":  formatTime,
+		"truncate":    truncate,
+		"markdown":    renderMarkdown,
+		"add":         add,
+		"sub":         sub,
+		"formatFloat": formatFloat,
 	}
 }
 
@@ -255,4 +256,9 @@ func add(a, b int) int {
 // sub returns the difference of two integers. Used for pagination.
 func sub(a, b int) int {
 	return a - b
+}
+
+// formatFloat formats a float64 with the given number of decimal places.
+func formatFloat(f float64, decimals int) string {
+	return fmt.Sprintf("%.*f", decimals, f)
 }

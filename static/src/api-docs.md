@@ -6,10 +6,10 @@ common.ink provides a RESTful API for programmatic access to your notes, along w
 
 - [Authentication](#authentication)
   - [Session Cookies](#session-cookies)
-  - [Personal Access Tokens (PAT)](#personal-access-tokens-pat)
+  - [API Keys](#api-keys)
   - [OAuth 2.1](#oauth-21)
 - [User Registration & Login](#user-registration--login)
-- [Personal Access Tokens API](#personal-access-tokens-api)
+- [API Keys API](#api-keys-api)
 - [Notes API](#notes-api)
 - [MCP Server](#mcp-model-context-protocol)
 - [Connecting AI Assistants](#connecting-ai-assistants)
@@ -27,19 +27,19 @@ common.ink supports three authentication methods:
 
 Session cookies are automatically set when you log in via the web interface. They're valid for 30 days and use the `session_id` cookie name with `HttpOnly` and `SameSite=Lax` settings.
 
-### Personal Access Tokens (PAT)
+### API Keys
 
-PATs are the recommended way to authenticate API requests programmatically:
+API Keys are the recommended way to authenticate API requests programmatically:
 
-1. Go to [Tokens](/tokens) to create a new token
-2. Include the token in the `Authorization` header:
+1. Go to [API Keys](/api-keys) to create a new key
+2. Include the key in the `Authorization` header:
 
 ```bash
-curl -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+curl -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   https://common.ink/api/notes
 ```
 
-**PAT Format**: `agentnotes_pat_{user_id}_{random_token}`
+**API Key Format**: `agentnotes_key_{user_id}_{random_token}`
 
 ### OAuth 2.1
 
@@ -156,7 +156,7 @@ curl -X POST https://common.ink/auth/password-reset \
 curl https://common.ink/auth/whoami -b cookies.txt
 ```
 
-**Note**: The `/auth/whoami` endpoint only supports session cookie authentication. For programmatic auth status checks, use the Notes API (e.g., `GET /api/notes`) with your PAT or OAuth token -- a `200` response confirms valid authentication.
+**Note**: The `/auth/whoami` endpoint only supports session cookie authentication. For programmatic auth status checks, use the Notes API (e.g., `GET /api/notes`) with your API Key or OAuth token -- a `200` response confirms valid authentication.
 
 **Response**:
 ```json
@@ -181,22 +181,22 @@ curl -X POST https://common.ink/auth/logout \
 
 ---
 
-## Personal Access Tokens API
+## API Keys API
 
-PATs enable programmatic API access without session cookies. Ideal for:
+API Keys enable programmatic API access without session cookies. Ideal for:
 
 - CLI tools and scripts
 - CI/CD pipelines
 - AI assistant integrations (Claude Code, ChatGPT)
 - MCP server connections
 
-### Create a PAT
+### Create an API Key
 
-Creates a new Personal Access Token. **Requires password re-authentication**.
+Creates a new API Key. **Requires password re-authentication**.
 
-**Note**: You can also create PATs through the web UI at [/tokens/new](/tokens/new), which is the recommended method.
+**Note**: You can also create API Keys through the web UI at [/api-keys/new](/api-keys/new), which is the recommended method.
 
-**Endpoint**: `POST /api/tokens`
+**Endpoint**: `POST /api/keys`
 
 **Authentication**: Session cookie required
 
@@ -221,8 +221,8 @@ Creates a new Personal Access Token. **Requires password re-authentication**.
 | password | string | Yes | Your password for re-authentication |
 
 ```bash
-# Create a PAT (requires session cookie from login)
-curl -X POST https://common.ink/api/tokens \
+# Create an API Key (requires session cookie from login)
+curl -X POST https://common.ink/api/keys \
   -H "Content-Type: application/json" \
   -b cookies.txt \
   -d '{
@@ -239,7 +239,7 @@ curl -X POST https://common.ink/api/tokens \
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "name": "My CLI Token",
-  "token": "agentnotes_pat_user-550e8400-e29b-41d4-a716-446655440000_YWJjZGVm...",
+  "token": "agentnotes_key_user-550e8400-e29b-41d4-a716-446655440000_YWJjZGVm...",
   "scope": "read_write",
   "expires_at": "2026-03-03T12:00:00Z",
   "created_at": "2026-02-03T12:00:00Z"
@@ -250,12 +250,12 @@ curl -X POST https://common.ink/api/tokens \
 
 ---
 
-### List PATs
+### List API Keys
 
-**Endpoint**: `GET /api/tokens`
+**Endpoint**: `GET /api/keys`
 
 ```bash
-curl https://common.ink/api/tokens -b cookies.txt
+curl https://common.ink/api/keys -b cookies.txt
 ```
 
 **Response**:
@@ -276,12 +276,12 @@ curl https://common.ink/api/tokens -b cookies.txt
 
 ---
 
-### Revoke a PAT
+### Revoke an API Key
 
-**Endpoint**: `DELETE /api/tokens/{id}`
+**Endpoint**: `DELETE /api/keys/{id}`
 
 ```bash
-curl -X DELETE https://common.ink/api/tokens/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+curl -X DELETE https://common.ink/api/keys/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
   -b cookies.txt
 ```
 
@@ -291,7 +291,7 @@ curl -X DELETE https://common.ink/api/tokens/a1b2c3d4-e5f6-7890-abcd-ef123456789
 
 ## Notes API
 
-All notes endpoints require authentication via session cookie, PAT, or OAuth JWT.
+All notes endpoints require authentication via session cookie, API Key, or OAuth JWT.
 
 ### Base URL
 
@@ -312,9 +312,9 @@ https://common.ink/api
 # With session cookie
 curl "https://common.ink/api/notes?limit=10&offset=0" -b cookies.txt
 
-# With PAT
+# With API Key
 curl "https://common.ink/api/notes?limit=10&offset=0" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..."
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..."
 ```
 
 **Response**:
@@ -352,7 +352,7 @@ curl "https://common.ink/api/notes?limit=10&offset=0" \
 ```bash
 curl -X POST https://common.ink/api/notes \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{
     "title": "Meeting Notes",
     "content": "## Agenda\n- Item 1\n- Item 2"
@@ -379,7 +379,7 @@ curl -X POST https://common.ink/api/notes \
 
 ```bash
 curl https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..."
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..."
 ```
 
 **Response**: Same format as Create Note response.
@@ -400,7 +400,7 @@ curl https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
 ```bash
 curl -X PUT https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{
     "title": "Updated Title",
     "content": "Updated content..."
@@ -415,7 +415,7 @@ curl -X PUT https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
 
 ```bash
 curl -X DELETE https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..."
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..."
 ```
 
 **Response**: `204 No Content`
@@ -435,7 +435,7 @@ curl -X DELETE https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901
 ```bash
 curl -X POST https://common.ink/api/notes/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{"query": "meeting agenda"}'
 ```
 
@@ -499,7 +499,7 @@ POST /mcp
 curl -X POST https://common.ink/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
@@ -592,7 +592,7 @@ curl -X POST https://common.ink/mcp \
 curl -X POST https://common.ink/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
@@ -615,7 +615,7 @@ curl -X POST https://common.ink/mcp \
 curl -X POST https://common.ink/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
@@ -637,7 +637,7 @@ curl -X POST https://common.ink/mcp \
 curl -X POST https://common.ink/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_pat_user-xxx_token..." \
+  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
@@ -667,7 +667,7 @@ Add to your Claude Code MCP configuration (`~/.claude/mcp.json`):
       "url": "https://common.ink/mcp",
       "transport": "streamable-http",
       "headers": {
-        "Authorization": "Bearer agentnotes_pat_user-xxx_token..."
+        "Authorization": "Bearer agentnotes_key_user-xxx_token..."
       }
     }
   }
@@ -676,11 +676,11 @@ Add to your Claude Code MCP configuration (`~/.claude/mcp.json`):
 
 ### ChatGPT (Custom GPT)
 
-1. Create a PAT at [Tokens](/tokens)
+1. Create an API Key at [API Keys](/api-keys)
 2. In ChatGPT's custom GPT settings, add an action:
    - **Server URL**: `https://common.ink`
    - **Authentication**: API Key (Bearer Token)
-   - **API Key**: Your PAT
+   - **API Key**: Your API Key
 
 ### Other MCP Clients
 
@@ -796,7 +796,7 @@ All errors return JSON:
 When authentication fails, the response includes a `WWW-Authenticate` header:
 
 ```
-WWW-Authenticate: Bearer resource_metadata="https://common.ink/.well-known/oauth-protected-resource", error="invalid_token", error_description="Invalid personal access token"
+WWW-Authenticate: Bearer resource_metadata="https://common.ink/.well-known/oauth-protected-resource", error="invalid_token", error_description="Invalid API key"
 ```
 
 ---
@@ -813,8 +813,8 @@ curl -X POST https://common.ink/auth/register \
   -d "email=demo@example.com&password=DemoPass123" \
   -c cookies.txt -s > /dev/null
 
-# 2. Create a PAT for API access
-PAT=$(curl -s -X POST https://common.ink/api/tokens \
+# 2. Create an API Key for API access
+API_KEY=$(curl -s -X POST https://common.ink/api/keys \
   -H "Content-Type: application/json" \
   -b cookies.txt \
   -d '{
@@ -823,13 +823,13 @@ PAT=$(curl -s -X POST https://common.ink/api/tokens \
     "password": "DemoPass123"
   }' | jq -r '.token')
 
-echo "Your PAT: $PAT"
+echo "Your API Key: $API_KEY"
 
-# 3. Create a note using the PAT
+# 3. Create a note using the API Key
 echo "Creating note..."
 curl -X POST https://common.ink/api/notes \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $PAT" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{
     "title": "API Test Note",
     "content": "Created via REST API!"
@@ -838,13 +838,13 @@ curl -X POST https://common.ink/api/notes \
 # 4. List all notes
 echo -e "\n\nListing notes..."
 curl https://common.ink/api/notes \
-  -H "Authorization: Bearer $PAT"
+  -H "Authorization: Bearer $API_KEY"
 
 # 5. Search notes
 echo -e "\n\nSearching notes..."
 curl -X POST https://common.ink/api/notes/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $PAT" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{"query": "API"}'
 
 # 6. Create note via MCP
@@ -852,7 +852,7 @@ echo -e "\n\nCreating note via MCP..."
 curl -X POST https://common.ink/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer $PAT" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",

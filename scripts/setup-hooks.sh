@@ -54,9 +54,9 @@ if [[ -n "$STAGED_GO_FILES" ]]; then
     echo "Go files formatted"
 fi
 
-# Run quick CI tests
+# Run quick CI tests via make (inherits goenv, CGO, deterministic secrets)
 echo "Running quick CI tests..."
-if ! ./scripts/ci.sh quick; then
+if ! make test; then
     echo "Quick CI tests failed!"
     echo "Fix the issues or use 'git commit --no-verify' to bypass (not recommended)"
     exit 1

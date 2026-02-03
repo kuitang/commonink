@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/kuitang/agent-notes/internal/notes"
@@ -105,6 +106,9 @@ func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, er
 		Content: content,
 	})
 	if err != nil {
+		if errors.Is(err, notes.ErrStorageLimitExceeded) {
+			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
+		}
 		return newToolResultError(fmt.Sprintf("failed to create note: %v", err)), nil
 	}
 
@@ -134,6 +138,9 @@ func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, er
 
 	note, err := h.notesSvc.Update(id, params)
 	if err != nil {
+		if errors.Is(err, notes.ErrStorageLimitExceeded) {
+			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
+		}
 		return newToolResultError(fmt.Sprintf("failed to update note: %v", err)), nil
 	}
 

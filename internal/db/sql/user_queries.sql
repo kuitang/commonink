@@ -96,65 +96,37 @@ SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?);
 -- Note: FTS5 queries are handled separately in Go code due to sqlc limitations with virtual tables
 -- The fts_notes table is a virtual table that sqlc cannot fully parse
 
--- API keys operations
+-- API Key operations
 
 -- name: CreateAPIKey :exec
-INSERT INTO api_keys (key_id, key_hash, scope, created_at)
-VALUES (?, ?, ?, ?);
-
--- name: GetAPIKey :one
-SELECT key_id, key_hash, scope, created_at, last_used
-FROM api_keys
-WHERE key_id = ?;
+INSERT INTO api_keys (id, name, token_hash, scope, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: GetAPIKeyByHash :one
-SELECT key_id, key_hash, scope, created_at, last_used
+SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
 FROM api_keys
-WHERE key_hash = ?;
+WHERE token_hash = ?;
+
+-- name: GetAPIKeyByID :one
+SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
+FROM api_keys
+WHERE id = ?;
 
 -- name: ListAPIKeys :many
-SELECT key_id, key_hash, scope, created_at, last_used
+SELECT id, name, scope, expires_at, created_at, last_used_at
 FROM api_keys
 ORDER BY created_at DESC;
 
 -- name: UpdateAPIKeyLastUsed :exec
-UPDATE api_keys SET last_used = ? WHERE key_id = ?;
-
--- name: UpdateAPIKeyScope :exec
-UPDATE api_keys SET scope = ? WHERE key_id = ?;
+UPDATE api_keys SET last_used_at = ? WHERE id = ?;
 
 -- name: DeleteAPIKey :exec
-DELETE FROM api_keys WHERE key_id = ?;
+DELETE FROM api_keys WHERE id = ?;
 
 -- name: CountAPIKeys :one
 SELECT COUNT(*) FROM api_keys;
 
--- Personal Access Token operations
+-- Storage size tracking
 
--- name: CreatePAT :exec
-INSERT INTO personal_access_tokens (id, name, token_hash, scope, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?);
-
--- name: GetPATByHash :one
-SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
-FROM personal_access_tokens
-WHERE token_hash = ?;
-
--- name: GetPATByID :one
-SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
-FROM personal_access_tokens
-WHERE id = ?;
-
--- name: ListPATs :many
-SELECT id, name, scope, expires_at, created_at, last_used_at
-FROM personal_access_tokens
-ORDER BY created_at DESC;
-
--- name: UpdatePATLastUsed :exec
-UPDATE personal_access_tokens SET last_used_at = ? WHERE id = ?;
-
--- name: DeletePAT :exec
-DELETE FROM personal_access_tokens WHERE id = ?;
-
--- name: CountPATs :one
-SELECT COUNT(*) FROM personal_access_tokens;
+-- name: GetTotalNotesSize :one
+SELECT COALESCE(SUM(length(title) + length(content)), 0) AS total_size FROM notes;

@@ -148,14 +148,13 @@ func startServer(t *testing.T) (*serverFixture, func()) {
 	// Start server
 	logs := &logCapture{}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, binary)
+	cmd := exec.CommandContext(ctx, binary, "--test")
 	cmd.Dir = dataDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("LISTEN_ADDR=:%d", port),
 		fmt.Sprintf("DATA_DIR=%s", dataDir),
 		fmt.Sprintf("BASE_URL=http://localhost:%d", port),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
-		"USE_MOCK_S3=true",
 	)
 
 	stdout, _ := cmd.StdoutPipe()

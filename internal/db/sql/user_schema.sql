@@ -52,18 +52,8 @@ CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
     WHERE rowid = new.rowid;
 END;
 
--- API keys table: programmatic access keys (legacy, kept for backwards compatibility)
+-- API keys table: long-lived keys for programmatic API access
 CREATE TABLE IF NOT EXISTS api_keys (
-    key_id TEXT PRIMARY KEY,
-    key_hash TEXT NOT NULL,
-    scope TEXT DEFAULT 'read_write',
-    created_at INTEGER NOT NULL,
-    last_used INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_api_keys_last_used ON api_keys(last_used);
-
--- Personal Access Tokens table: long-lived tokens for programmatic API access
-CREATE TABLE IF NOT EXISTS personal_access_tokens (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
@@ -72,5 +62,5 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
     created_at INTEGER NOT NULL,
     last_used_at INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_pat_token_hash ON personal_access_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_pat_expires_at ON personal_access_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_api_keys_token_hash ON api_keys(token_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);

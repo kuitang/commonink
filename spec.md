@@ -195,12 +195,12 @@ Per-user via stdlib `golang.org/x/time/rate`:
 │ │   ├── consent.html   - OAuth consent screen             │
 │ │   ├── consent_granted.html - Consent granted            │
 │ │   └── consent_denied.html  - Consent denied             │
-│ ├── tokens/                                               │
-│ │   ├── list.html      - PAT management page              │
-│ │   ├── new.html       - Create new PAT form              │
-│ │   └── created.html   - Token created (one-time reveal)  │
+│ ├── api-keys/                                             │
+│ │   ├── list.html      - API Key management page          │
+│ │   ├── new.html       - Create new API Key form          │
+│ │   └── created.html   - Key created (one-time reveal)    │
 │ ├── settings/                                             │
-│ │   └── tokens.html    - PAT settings page                │
+│ │   └── api-keys.html  - API Key settings page            │
 │ └── static/                                               │
 │     └── page.html      - Static page wrapper              │
 │                                                            │
@@ -239,13 +239,13 @@ POST /notes/{id}/delete          - Delete note (protected)
 POST /notes/{id}/publish         - Toggle public visibility (protected)
 GET  /public/{user_id}/{note_id} - Public note view (no auth)
 GET  /pub/{short_id}             - Short URL redirect (no auth)
-GET  /settings/tokens            - PAT management page (protected)
-POST /settings/tokens            - Create PAT via web form (protected)
-POST /settings/tokens/{id}/revoke - Revoke PAT via web form (protected)
-GET  /tokens                     - PAT management (alias, protected)
-GET  /tokens/new                 - New token form (protected)
-POST /tokens                     - Create PAT (alias, protected)
-POST /tokens/{id}/revoke         - Revoke PAT (alias, protected)
+GET  /settings/api-keys            - API Key management page (protected)
+POST /settings/api-keys            - Create API Key via web form (protected)
+POST /settings/api-keys/{id}/revoke - Revoke API Key via web form (protected)
+GET  /api-keys                     - API Key management (alias, protected)
+GET  /api-keys/new                 - New API Key form (protected)
+POST /api-keys                     - Create API Key (alias, protected)
+POST /api-keys/{id}/revoke         - Revoke API Key (alias, protected)
 ```
 
 ### Auth API (no session required for most)
@@ -318,11 +318,11 @@ DELETE /api/notes/{id}       - Delete note
 POST   /api/notes/search     - Search notes (FTS5)
 ```
 
-### Personal Access Tokens (PAT)
+### API Keys
 ```
-POST /api/tokens            - Create PAT (requires session auth)
-GET  /api/tokens            - List user's PATs (session auth required)
-DELETE /api/tokens/{id}     - Revoke a PAT (session auth required)
+POST /api/keys              - Create API Key (requires session auth)
+GET  /api/keys              - List user's API Keys (session auth required)
+DELETE /api/keys/{id}       - Revoke an API Key (session auth required)
 ```
 
 ### Payments (NOT YET IMPLEMENTED)
@@ -446,7 +446,7 @@ CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
     WHERE rowid = new.rowid;
 END;
 
-CREATE TABLE personal_access_tokens (
+CREATE TABLE api_keys (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
@@ -467,14 +467,14 @@ CREATE TABLE personal_access_tokens (
 - **is_public**: Boolean flag for public sharing
 - **FTS5 triggers**: Auto-sync with full-text search index
 
-### Personal Access Tokens Schema
+### API Keys Schema
 
-Users can create PATs for programmatic access (alternative to OAuth):
-- **id**: Unique identifier (shown to user as `token_id`)
-- **name**: User-provided description for the token
-- **token_hash**: Argon2id hash of the actual token
+Users can create API Keys for programmatic access (alternative to OAuth):
+- **id**: Unique identifier (shown to user as `key_id`)
+- **name**: User-provided description for the key
+- **token_hash**: SHA-256 hash of the actual token
 - **scope**: `read` or `read_write`
-- **expires_at**: Token expiration (1 year from creation)
+- **expires_at**: Key expiration (1 year from creation)
 - **last_used_at**: Track usage for cleanup and audit
 
 ---
@@ -741,30 +741,30 @@ SQLite DB (encrypted at rest)
 
 ---
 
-## Personal Access Token (PAT) Specification
+## API Key Specification
 
-PATs allow users to authenticate programmatically without going through the OAuth flow. Useful for CLI tools, scripts, and local MCP clients.
+API Keys allow users to authenticate programmatically without going through the OAuth flow. Useful for CLI tools, scripts, and local MCP clients.
 
-### Create PAT
+### Create API Key
 
-**Endpoint**: `POST /api/tokens`
+**Endpoint**: `POST /api/keys`
 
-**Request** (no session required - uses email/password):
+**Request** (session required - uses email/password for re-authentication):
 ```json
 {
   "email": "user@example.com",
   "password": "user_password",
-  "name": "My CLI Token",
+  "name": "My CLI Key",
   "scope": "read_write"
 }
 ```
 
-**Response** (token shown ONCE, never stored in plaintext):
+**Response** (key shown ONCE, never stored in plaintext):
 ```json
 {
-  "token": "pat_xxx...xxx",
-  "token_id": "tok_abc123",
-  "name": "My CLI Token",
+  "id": "key_abc123",
+  "token": "agentnotes_key_user-xxx_xxx...xxx",
+  "name": "My CLI Key",
   "scope": "read_write",
   "expires_at": "2027-02-02T10:00:00Z",
   "created_at": "2026-02-02T10:00:00Z"
@@ -775,19 +775,19 @@ PATs allow users to authenticate programmatically without going through the OAut
 - `read` - Read-only access to notes
 - `read_write` - Full access to notes (default)
 
-### List PATs
+### List API Keys
 
-**Endpoint**: `GET /api/tokens`
+**Endpoint**: `GET /api/keys`
 
 **Auth**: Session cookie required
 
-**Response** (actual token values are NEVER returned - only metadata for management):
+**Response** (actual key values are NEVER returned - only metadata for management):
 ```json
 {
   "tokens": [
     {
-      "token_id": "tok_abc123",
-      "name": "My CLI Token",
+      "id": "key_abc123",
+      "name": "My CLI Key",
       "scope": "read_write",
       "created_at": "2026-02-02T10:00:00Z",
       "last_used_at": "2026-02-02T15:30:00Z"
@@ -796,65 +796,65 @@ PATs allow users to authenticate programmatically without going through the OAut
 }
 ```
 
-### Revoke PAT
+### Revoke API Key
 
-**Endpoint**: `DELETE /api/tokens/{token_id}`
+**Endpoint**: `DELETE /api/keys/{id}`
 
 **Auth**: Session cookie required
 
 **Response**: `204 No Content`
 
-### Using PATs
+### Using API Keys
 
-PATs can be used as Bearer tokens for MCP and API requests:
+API Keys can be used as Bearer tokens for MCP and API requests:
 
 ```bash
 curl -X POST https://your-domain.com/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_PAT_TOKEN" \
+  -H "Authorization: Bearer $YOUR_API_KEY" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
 **Acceptance Criteria:**
-- PAT created only with valid email/password
-- Token shown once on creation, never retrievable again
-- Tokens hashed (Argon2id) before storage
-- PATs expire after 1 year
-- PAT authentication works for MCP and API endpoints
+- API Key created only with valid email/password
+- Key shown once on creation, never retrievable again
+- Keys hashed (SHA-256) before storage
+- API Keys expire after 1 year
+- API Key authentication works for MCP and API endpoints
 - `last_used_at` updated on each use
-- Revoking PAT immediately invalidates it
+- Revoking API Key immediately invalidates it
 
-### PAT Management UI
+### API Key Management UI
 
-**Route**: `GET /settings/tokens`
+**Route**: `GET /settings/api-keys`
 
 **Auth**: Session cookie required
 
 **UI Flow**:
 
-1. **Token List View** (default)
-   - Table showing all user's PATs: name, scope, created_at, last_used_at
-   - "Revoke" button per token (confirmation dialog)
-   - "Create New Token" button
+1. **Key List View** (default)
+   - Table showing all user's API Keys: name, scope, created_at, last_used_at
+   - "Revoke" button per key (confirmation dialog)
+   - "Create New API Key" button
 
-2. **Create Token Form**
+2. **Create API Key Form**
    - Name field (required, for user's reference)
    - Scope dropdown: "Read & Write" (default), "Read Only"
-   - Password field (re-authenticate to create token)
-   - "Generate Token" button
+   - Password field (re-authenticate to create key)
+   - "Create API Key" button
 
-3. **Token Created Modal** (shown once after creation)
-   - Display token value with copy button
-   - Warning: "This token will only be shown once. Copy it now."
-   - "Done" button (dismisses modal, token never shown again)
+3. **Key Created View** (shown once after creation)
+   - Display key value with copy button
+   - Warning: "This API key will only be shown once. Copy it now."
+   - "Done" button (navigates back, key never shown again)
 
 4. **Revoke Confirmation Dialog**
-   - "Are you sure? This will immediately invalidate the token."
+   - "Are you sure? This will immediately invalidate the API key."
    - "Cancel" / "Revoke" buttons
 
-**Template**: `web/templates/settings_tokens.html`
+**Template**: `web/templates/settings/api-keys.html`
 
-**Implementation**: UI calls same backend API endpoints (`POST/GET/DELETE /api/tokens`)
+**Implementation**: UI calls same backend API endpoints (`POST/GET/DELETE /api/keys`)
 
 ---
 
@@ -1114,10 +1114,10 @@ All architectural decisions finalized for MVP:
 | **Organization** | Flat list with tags (no folders) |
 | **Deletion** | Hard delete (no versioning) |
 | **Auth methods** | Magic Login + Email/Password + Google OIDC |
-| **PAT (API tokens)** | Supported - email/password → 1-year token (stored hashed in user DB) |
+| **API Keys** | Supported - email/password → 1-year key (stored hashed in user DB) |
 | **OAuth tokens** | Shared `sessions.db` |
 | **Search** | FTS5 default weighting, native operators |
-| **Web UI** | Full CRUD + OAuth consent + PAT management + static pages (privacy, terms, about, API docs) |
+| **Web UI** | Full CRUD + OAuth consent + API Key management + static pages (privacy, terms, about, API docs) |
 | **Public notes** | `/public/{user_id}/{note_id}` URLs + `/pub/{short_id}` short URLs |
 | **Rate limits** | Per-user (10/s free, 1000/s paid) |
 | **Fuzzing** | 30 min nightly |

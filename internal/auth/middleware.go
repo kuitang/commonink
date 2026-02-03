@@ -57,7 +57,7 @@ func (m *Middleware) WithOAuthVerifier(verifier OAuthTokenVerifier, resourceMeta
 }
 
 // RequireAuth is middleware that requires valid authentication.
-// Supports session cookies, Personal Access Tokens (PAT), and OAuth JWT tokens.
+// Supports session cookies, API Keys, and OAuth JWT tokens.
 // Returns 401 Unauthorized if no valid authentication is present.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,16 +65,16 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 		var userDB *db.UserDB
 		var err error
 
-		// Check for Bearer token first (PAT or OAuth JWT)
+		// Check for Bearer token first (API Key or OAuth JWT)
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 
-			// Check if it's a PAT
-			if IsPATToken(token) {
-				userID, userDB, err = m.authenticateWithPAT(r.Context(), token)
+			// Check if it's an API Key
+			if IsAPIKeyToken(token) {
+				userID, userDB, err = m.authenticateWithAPIKey(r.Context(), token)
 				if err != nil {
-					m.writeUnauthorized(w, "invalid_token", "Invalid personal access token")
+					m.writeUnauthorized(w, "invalid_token", "Invalid API key")
 					return
 				}
 			} else if m.oauthVerifier != nil {
@@ -215,12 +215,12 @@ func (m *Middleware) RequireAuthWithRedirect(next http.Handler) http.Handler {
 	})
 }
 
-// authenticateWithPAT validates a PAT and returns the user ID and their database.
-func (m *Middleware) authenticateWithPAT(ctx context.Context, token string) (string, *db.UserDB, error) {
-	// Parse the PAT to extract user ID and token part
-	userID, tokenPart, ok := ParsePATToken(token)
+// authenticateWithAPIKey validates an API Key and returns the user ID and their database.
+func (m *Middleware) authenticateWithAPIKey(ctx context.Context, token string) (string, *db.UserDB, error) {
+	// Parse the API Key to extract user ID and token part
+	userID, tokenPart, ok := ParseAPIKeyToken(token)
 	if !ok {
-		return "", nil, ErrPATNotFound
+		return "", nil, ErrAPIKeyNotFound
 	}
 
 	// Get or create user DEK and open database
@@ -235,8 +235,8 @@ func (m *Middleware) authenticateWithPAT(ctx context.Context, token string) (str
 		return "", nil, err
 	}
 
-	// Validate the PAT against the user's database
-	_, err = ValidatePATWithDB(ctx, userDB, tokenPart)
+	// Validate the API Key against the user's database
+	_, err = ValidateAPIKeyWithDB(ctx, userDB, tokenPart)
 	if err != nil {
 		return "", nil, err
 	}

@@ -1,4 +1,4 @@
-// Package web provides PAT (Personal Access Token) management handlers.
+// Package web provides API Key management handlers.
 package web
 
 import (
@@ -17,46 +17,46 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
-// TokenSettingsData contains data for the token settings page.
-type TokenSettingsData struct {
+// APIKeySettingsData contains data for the API key settings page.
+type APIKeySettingsData struct {
 	PageData
-	Tokens   []auth.PAT
+	Tokens   []auth.APIKey
 	NewToken string // Only set when a token was just created
 	BaseURL  string
 }
 
-// TokenNewData contains data for the new token creation page.
-type TokenNewData struct {
+// APIKeyNewData contains data for the new API key creation page.
+type APIKeyNewData struct {
 	PageData
 	BaseURL string
 }
 
-// TokenCreatedData contains data for the token created confirmation page.
-type TokenCreatedData struct {
+// APIKeyCreatedData contains data for the API key created confirmation page.
+type APIKeyCreatedData struct {
 	PageData
 	Token     string
 	TokenName string
 	BaseURL   string
 }
 
-// HandleTokenSettings handles GET /settings/tokens and GET /tokens - shows token management page.
-func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request) {
+// HandleAPIKeySettings handles GET /settings/api-keys and GET /api-keys - shows API key management page.
+func (h *WebHandler) HandleAPIKeySettings(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 
-	// List existing tokens
-	rows, err := userDB.Queries().ListPATs(r.Context())
+	// List existing API keys
+	rows, err := userDB.Queries().ListAPIKeys(r.Context())
 	if err != nil {
-		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to load tokens")
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to load API keys")
 		return
 	}
 
-	tokens := make([]auth.PAT, 0, len(rows))
+	keys := make([]auth.APIKey, 0, len(rows))
 	for _, row := range rows {
-		pat := auth.PAT{
+		key := auth.APIKey{
 			ID:        row.ID,
 			Name:      row.Name,
 			Scope:     row.Scope.String,
@@ -65,17 +65,17 @@ func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request)
 		}
 		if row.LastUsedAt.Valid {
 			t := time.Unix(row.LastUsedAt.Int64, 0)
-			pat.LastUsedAt = &t
+			key.LastUsedAt = &t
 		}
-		tokens = append(tokens, pat)
+		keys = append(keys, key)
 	}
 
-	data := TokenSettingsData{
+	data := APIKeySettingsData{
 		PageData: PageData{
-			Title: "Personal Access Tokens",
+			Title: "API Keys",
 			User:  &auth.User{ID: auth.GetUserID(r.Context())},
 		},
-		Tokens:  tokens,
+		Tokens:  keys,
 		BaseURL: h.baseURL,
 	}
 
@@ -84,10 +84,10 @@ func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request)
 		data.Error = errMsg
 	}
 
-	// Use the new tokens/list.html template for /tokens route, settings/tokens.html for /settings/tokens
-	templateName := "tokens/list.html"
-	if r.URL.Path == "/settings/tokens" {
-		templateName = "settings/tokens.html"
+	// Use the new api-keys/list.html template for /api-keys route, settings/api-keys.html for /settings/api-keys
+	templateName := "api-keys/list.html"
+	if r.URL.Path == "/settings/api-keys" {
+		templateName = "settings/api-keys.html"
 	}
 
 	if err := h.renderer.Render(w, templateName, data); err != nil {
@@ -95,17 +95,17 @@ func (h *WebHandler) HandleTokenSettings(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// HandleNewTokenPage handles GET /tokens/new - shows the new token creation form.
-func (h *WebHandler) HandleNewTokenPage(w http.ResponseWriter, r *http.Request) {
+// HandleNewAPIKeyPage handles GET /api-keys/new - shows the new API key creation form.
+func (h *WebHandler) HandleNewAPIKeyPage(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 
-	data := TokenNewData{
+	data := APIKeyNewData{
 		PageData: PageData{
-			Title: "Create New Token",
+			Title: "Create New API Key",
 			User:  &auth.User{ID: auth.GetUserID(r.Context())},
 		},
 		BaseURL: h.baseURL,
@@ -116,13 +116,13 @@ func (h *WebHandler) HandleNewTokenPage(w http.ResponseWriter, r *http.Request) 
 		data.Error = errMsg
 	}
 
-	if err := h.renderer.Render(w, "tokens/new.html", data); err != nil {
+	if err := h.renderer.Render(w, "api-keys/new.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
 
-// HandleCreateToken handles POST /settings/tokens - creates a new PAT.
-func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
+// HandleCreateAPIKey handles POST /settings/api-keys - creates a new API Key.
+func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
 		http.Redirect(w, r, "/login", http.StatusFound)
@@ -136,7 +136,7 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/tokens/new?error=Invalid+form+data", http.StatusFound)
+		http.Redirect(w, r, "/api-keys/new?error=Invalid+form+data", http.StatusFound)
 		return
 	}
 
@@ -148,31 +148,31 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	// Validate required fields
 	if name == "" {
-		http.Redirect(w, r, "/tokens/new?error=Token+name+is+required", http.StatusFound)
+		http.Redirect(w, r, "/api-keys/new?error=API+key+name+is+required", http.StatusFound)
 		return
 	}
 
 	if email == "" || password == "" {
-		http.Redirect(w, r, "/tokens/new?error=Email+and+password+required+for+authentication", http.StatusFound)
+		http.Redirect(w, r, "/api-keys/new?error=Email+and+password+required+for+authentication", http.StatusFound)
 		return
 	}
 
 	// Verify credentials
 	account, err := userDB.Queries().GetAccount(r.Context(), userID)
 	if err != nil {
-		http.Redirect(w, r, "/tokens/new?error=Failed+to+verify+credentials", http.StatusFound)
+		http.Redirect(w, r, "/api-keys/new?error=Failed+to+verify+credentials", http.StatusFound)
 		return
 	}
 
 	if account.Email != email {
-		http.Redirect(w, r, "/tokens/new?error=Invalid+credentials", http.StatusFound)
+		http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
 		return
 	}
 
 	// Verify password if hash exists
 	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
 		if !auth.VerifyPassword(password, account.PasswordHash.String) {
-			http.Redirect(w, r, "/tokens/new?error=Invalid+credentials", http.StatusFound)
+			http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
 			return
 		}
 	}
@@ -190,17 +190,17 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		scope = "read_write"
 	}
 
-	// Create the PAT
-	token, _, err := createPATForUser(r.Context(), userDB, userID, name, scope, expiresIn)
+	// Create the API Key
+	token, _, err := createAPIKeyForUser(r.Context(), userDB, userID, name, scope, expiresIn)
 	if err != nil {
-		http.Redirect(w, r, "/tokens/new?error=Failed+to+create+token", http.StatusFound)
+		http.Redirect(w, r, "/api-keys/new?error=Failed+to+create+API+key", http.StatusFound)
 		return
 	}
 
-	// Render the token created page (shows token only once)
-	data := TokenCreatedData{
+	// Render the API key created page (shows token only once)
+	data := APIKeyCreatedData{
 		PageData: PageData{
-			Title: "Token Created",
+			Title: "API Key Created",
 			User:  &auth.User{ID: userID},
 		},
 		Token:     token,
@@ -208,15 +208,15 @@ func (h *WebHandler) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		BaseURL:   h.baseURL,
 	}
 
-	if err := h.renderer.Render(w, "tokens/created.html", data); err != nil {
+	if err := h.renderer.Render(w, "api-keys/created.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
 
-// createPATForUser creates a PAT and returns the full token string.
-func createPATForUser(ctx context.Context, userDB *db.UserDB, userID, name, scope string, expiresIn int64) (string, string, error) {
+// createAPIKeyForUser creates an API Key and returns the full token string.
+func createAPIKeyForUser(ctx context.Context, userDB *db.UserDB, userID, name, scope string, expiresIn int64) (string, string, error) {
 	// Generate secure token
-	tokenBytes := make([]byte, auth.PATTokenBytes)
+	tokenBytes := make([]byte, auth.APIKeyTokenBytes)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return "", "", err
 	}
@@ -226,13 +226,13 @@ func createPATForUser(ctx context.Context, userDB *db.UserDB, userID, name, scop
 	hash := sha256.Sum256([]byte(tokenPart))
 	tokenHash := base64.URLEncoding.EncodeToString(hash[:])
 
-	// Create PAT record
+	// Create API Key record
 	now := time.Now()
-	patID := uuid.New().String()
+	keyID := uuid.New().String()
 	expiresAt := now.Add(time.Duration(expiresIn) * time.Second)
 
-	err := userDB.Queries().CreatePAT(ctx, userdb.CreatePATParams{
-		ID:        patID,
+	err := userDB.Queries().CreateAPIKey(ctx, userdb.CreateAPIKeyParams{
+		ID:        keyID,
 		Name:      name,
 		TokenHash: tokenHash,
 		Scope:     sql.NullString{String: scope, Valid: true},
@@ -243,37 +243,37 @@ func createPATForUser(ctx context.Context, userDB *db.UserDB, userID, name, scop
 		return "", "", err
 	}
 
-	// Return full token: agentnotes_pat_{user_id}_{random_token}
-	fullToken := auth.PATPrefix + userID + "_" + tokenPart
-	return fullToken, patID, nil
+	// Return full token: agentnotes_key_{user_id}_{random_token}
+	fullToken := auth.APIKeyPrefix + userID + "_" + tokenPart
+	return fullToken, keyID, nil
 }
 
-// HandleRevokeToken handles POST /settings/tokens/{id}/revoke and POST /tokens/{id}/revoke - revokes a PAT.
-func (h *WebHandler) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
+// HandleRevokeAPIKey handles POST /settings/api-keys/{id}/revoke and POST /api-keys/{id}/revoke - revokes an API Key.
+func (h *WebHandler) HandleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 
-	patID := r.PathValue("id")
-	if patID == "" {
-		http.Redirect(w, r, "/tokens?error=Token+ID+required", http.StatusFound)
+	keyID := r.PathValue("id")
+	if keyID == "" {
+		http.Redirect(w, r, "/api-keys?error=API+key+ID+required", http.StatusFound)
 		return
 	}
 
-	// Verify the PAT exists
-	_, err := userDB.Queries().GetPATByID(r.Context(), patID)
+	// Verify the API Key exists
+	_, err := userDB.Queries().GetAPIKeyByID(r.Context(), keyID)
 	if err != nil {
-		http.Redirect(w, r, "/tokens?error=Token+not+found", http.StatusFound)
+		http.Redirect(w, r, "/api-keys?error=API+key+not+found", http.StatusFound)
 		return
 	}
 
-	// Delete the PAT
-	if err := userDB.Queries().DeletePAT(r.Context(), patID); err != nil {
-		http.Redirect(w, r, "/tokens?error=Failed+to+revoke+token", http.StatusFound)
+	// Delete the API Key
+	if err := userDB.Queries().DeleteAPIKey(r.Context(), keyID); err != nil {
+		http.Redirect(w, r, "/api-keys?error=Failed+to+revoke+API+key", http.StatusFound)
 		return
 	}
 
-	http.Redirect(w, r, "/tokens", http.StatusFound)
+	http.Redirect(w, r, "/api-keys", http.StatusFound)
 }

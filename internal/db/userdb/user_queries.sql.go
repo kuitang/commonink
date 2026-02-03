@@ -32,17 +32,6 @@ func (q *Queries) CountNotes(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const countPATs = `-- name: CountPATs :one
-SELECT COUNT(*) FROM personal_access_tokens
-`
-
-func (q *Queries) CountPATs(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countPATs)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countPublicNotes = `-- name: CountPublicNotes :one
 SELECT COUNT(*) FROM notes WHERE is_public = 1
 `
@@ -57,26 +46,30 @@ func (q *Queries) CountPublicNotes(ctx context.Context) (int64, error) {
 const createAPIKey = `-- name: CreateAPIKey :exec
 
 
-INSERT INTO api_keys (key_id, key_hash, scope, created_at)
-VALUES (?, ?, ?, ?)
+INSERT INTO api_keys (id, name, token_hash, scope, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type CreateAPIKeyParams struct {
-	KeyID     string         `json:"key_id"`
-	KeyHash   string         `json:"key_hash"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	TokenHash string         `json:"token_hash"`
 	Scope     sql.NullString `json:"scope"`
+	ExpiresAt int64          `json:"expires_at"`
 	CreatedAt int64          `json:"created_at"`
 }
 
 // FTS5 search operations
 // Note: FTS5 queries are handled separately in Go code due to sqlc limitations with virtual tables
 // The fts_notes table is a virtual table that sqlc cannot fully parse
-// API keys operations
+// API Key operations
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) error {
 	_, err := q.db.ExecContext(ctx, createAPIKey,
-		arg.KeyID,
-		arg.KeyHash,
+		arg.ID,
+		arg.Name,
+		arg.TokenHash,
 		arg.Scope,
+		arg.ExpiresAt,
 		arg.CreatedAt,
 	)
 	return err
@@ -146,40 +139,12 @@ func (q *Queries) CreateNote(ctx context.Context, arg CreateNoteParams) error {
 	return err
 }
 
-const createPAT = `-- name: CreatePAT :exec
-
-INSERT INTO personal_access_tokens (id, name, token_hash, scope, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?)
-`
-
-type CreatePATParams struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	TokenHash string         `json:"token_hash"`
-	Scope     sql.NullString `json:"scope"`
-	ExpiresAt int64          `json:"expires_at"`
-	CreatedAt int64          `json:"created_at"`
-}
-
-// Personal Access Token operations
-func (q *Queries) CreatePAT(ctx context.Context, arg CreatePATParams) error {
-	_, err := q.db.ExecContext(ctx, createPAT,
-		arg.ID,
-		arg.Name,
-		arg.TokenHash,
-		arg.Scope,
-		arg.ExpiresAt,
-		arg.CreatedAt,
-	)
-	return err
-}
-
 const deleteAPIKey = `-- name: DeleteAPIKey :exec
-DELETE FROM api_keys WHERE key_id = ?
+DELETE FROM api_keys WHERE id = ?
 `
 
-func (q *Queries) DeleteAPIKey(ctx context.Context, keyID string) error {
-	_, err := q.db.ExecContext(ctx, deleteAPIKey, keyID)
+func (q *Queries) DeleteAPIKey(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteAPIKey, id)
 	return err
 }
 
@@ -201,49 +166,44 @@ func (q *Queries) DeleteNote(ctx context.Context, id string) error {
 	return err
 }
 
-const deletePAT = `-- name: DeletePAT :exec
-DELETE FROM personal_access_tokens WHERE id = ?
-`
-
-func (q *Queries) DeletePAT(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deletePAT, id)
-	return err
-}
-
-const getAPIKey = `-- name: GetAPIKey :one
-SELECT key_id, key_hash, scope, created_at, last_used
+const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
+SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
 FROM api_keys
-WHERE key_id = ?
+WHERE token_hash = ?
 `
 
-func (q *Queries) GetAPIKey(ctx context.Context, keyID string) (ApiKey, error) {
-	row := q.db.QueryRowContext(ctx, getAPIKey, keyID)
+func (q *Queries) GetAPIKeyByHash(ctx context.Context, tokenHash string) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, getAPIKeyByHash, tokenHash)
 	var i ApiKey
 	err := row.Scan(
-		&i.KeyID,
-		&i.KeyHash,
+		&i.ID,
+		&i.Name,
+		&i.TokenHash,
 		&i.Scope,
+		&i.ExpiresAt,
 		&i.CreatedAt,
-		&i.LastUsed,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
 
-const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT key_id, key_hash, scope, created_at, last_used
+const getAPIKeyByID = `-- name: GetAPIKeyByID :one
+SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
 FROM api_keys
-WHERE key_hash = ?
+WHERE id = ?
 `
 
-func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error) {
-	row := q.db.QueryRowContext(ctx, getAPIKeyByHash, keyHash)
+func (q *Queries) GetAPIKeyByID(ctx context.Context, id string) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, getAPIKeyByID, id)
 	var i ApiKey
 	err := row.Scan(
-		&i.KeyID,
-		&i.KeyHash,
+		&i.ID,
+		&i.Name,
+		&i.TokenHash,
 		&i.Scope,
+		&i.ExpiresAt,
 		&i.CreatedAt,
-		&i.LastUsed,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
@@ -337,69 +297,37 @@ func (q *Queries) GetNote(ctx context.Context, id string) (Note, error) {
 	return i, err
 }
 
-const getPATByHash = `-- name: GetPATByHash :one
-SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
-FROM personal_access_tokens
-WHERE token_hash = ?
-`
-
-func (q *Queries) GetPATByHash(ctx context.Context, tokenHash string) (PersonalAccessToken, error) {
-	row := q.db.QueryRowContext(ctx, getPATByHash, tokenHash)
-	var i PersonalAccessToken
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.TokenHash,
-		&i.Scope,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-		&i.LastUsedAt,
-	)
-	return i, err
-}
-
-const getPATByID = `-- name: GetPATByID :one
-SELECT id, name, token_hash, scope, expires_at, created_at, last_used_at
-FROM personal_access_tokens
-WHERE id = ?
-`
-
-func (q *Queries) GetPATByID(ctx context.Context, id string) (PersonalAccessToken, error) {
-	row := q.db.QueryRowContext(ctx, getPATByID, id)
-	var i PersonalAccessToken
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.TokenHash,
-		&i.Scope,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-		&i.LastUsedAt,
-	)
-	return i, err
-}
-
 const listAPIKeys = `-- name: ListAPIKeys :many
-SELECT key_id, key_hash, scope, created_at, last_used
+SELECT id, name, scope, expires_at, created_at, last_used_at
 FROM api_keys
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListAPIKeys(ctx context.Context) ([]ApiKey, error) {
+type ListAPIKeysRow struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Scope      sql.NullString `json:"scope"`
+	ExpiresAt  int64          `json:"expires_at"`
+	CreatedAt  int64          `json:"created_at"`
+	LastUsedAt sql.NullInt64  `json:"last_used_at"`
+}
+
+func (q *Queries) ListAPIKeys(ctx context.Context) ([]ListAPIKeysRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAPIKeys)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ApiKey{}
+	items := []ListAPIKeysRow{}
 	for rows.Next() {
-		var i ApiKey
+		var i ListAPIKeysRow
 		if err := rows.Scan(
-			&i.KeyID,
-			&i.KeyHash,
+			&i.ID,
+			&i.Name,
 			&i.Scope,
+			&i.ExpiresAt,
 			&i.CreatedAt,
-			&i.LastUsed,
+			&i.LastUsedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -442,51 +370,6 @@ func (q *Queries) ListNotes(ctx context.Context, arg ListNotesParams) ([]Note, e
 			&i.IsPublic,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPATs = `-- name: ListPATs :many
-SELECT id, name, scope, expires_at, created_at, last_used_at
-FROM personal_access_tokens
-ORDER BY created_at DESC
-`
-
-type ListPATsRow struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Scope      sql.NullString `json:"scope"`
-	ExpiresAt  int64          `json:"expires_at"`
-	CreatedAt  int64          `json:"created_at"`
-	LastUsedAt sql.NullInt64  `json:"last_used_at"`
-}
-
-func (q *Queries) ListPATs(ctx context.Context) ([]ListPATsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPATs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListPATsRow{}
-	for rows.Next() {
-		var i ListPATsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Scope,
-			&i.ExpiresAt,
-			&i.CreatedAt,
-			&i.LastUsedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -556,30 +439,16 @@ func (q *Queries) NoteExists(ctx context.Context, id string) (int64, error) {
 }
 
 const updateAPIKeyLastUsed = `-- name: UpdateAPIKeyLastUsed :exec
-UPDATE api_keys SET last_used = ? WHERE key_id = ?
+UPDATE api_keys SET last_used_at = ? WHERE id = ?
 `
 
 type UpdateAPIKeyLastUsedParams struct {
-	LastUsed sql.NullInt64 `json:"last_used"`
-	KeyID    string        `json:"key_id"`
+	LastUsedAt sql.NullInt64 `json:"last_used_at"`
+	ID         string        `json:"id"`
 }
 
 func (q *Queries) UpdateAPIKeyLastUsed(ctx context.Context, arg UpdateAPIKeyLastUsedParams) error {
-	_, err := q.db.ExecContext(ctx, updateAPIKeyLastUsed, arg.LastUsed, arg.KeyID)
-	return err
-}
-
-const updateAPIKeyScope = `-- name: UpdateAPIKeyScope :exec
-UPDATE api_keys SET scope = ? WHERE key_id = ?
-`
-
-type UpdateAPIKeyScopeParams struct {
-	Scope sql.NullString `json:"scope"`
-	KeyID string         `json:"key_id"`
-}
-
-func (q *Queries) UpdateAPIKeyScope(ctx context.Context, arg UpdateAPIKeyScopeParams) error {
-	_, err := q.db.ExecContext(ctx, updateAPIKeyScope, arg.Scope, arg.KeyID)
+	_, err := q.db.ExecContext(ctx, updateAPIKeyLastUsed, arg.LastUsedAt, arg.ID)
 	return err
 }
 
@@ -735,19 +604,5 @@ type UpdateNoteTitleParams struct {
 
 func (q *Queries) UpdateNoteTitle(ctx context.Context, arg UpdateNoteTitleParams) error {
 	_, err := q.db.ExecContext(ctx, updateNoteTitle, arg.Title, arg.UpdatedAt, arg.ID)
-	return err
-}
-
-const updatePATLastUsed = `-- name: UpdatePATLastUsed :exec
-UPDATE personal_access_tokens SET last_used_at = ? WHERE id = ?
-`
-
-type UpdatePATLastUsedParams struct {
-	LastUsedAt sql.NullInt64 `json:"last_used_at"`
-	ID         string        `json:"id"`
-}
-
-func (q *Queries) UpdatePATLastUsed(ctx context.Context, arg UpdatePATLastUsedParams) error {
-	_, err := q.db.ExecContext(ctx, updatePATLastUsed, arg.LastUsedAt, arg.ID)
 	return err
 }

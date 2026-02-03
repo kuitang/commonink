@@ -1,14 +1,14 @@
 // Remote Notes MicroSaaS - Main Server Entry Point
-// Milestone 3.5: OAuth 2.1 Provider for ChatGPT and Claude Code
+// Milestone 4+: OAuth 2.1 Provider, Google OIDC, Resend Email, Tigris S3
 
 package main
 
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +27,7 @@ import (
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/config"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
@@ -40,9 +41,6 @@ import (
 )
 
 const (
-	// DefaultAddr is the default listen address
-	DefaultAddr = ":8080"
-
 	// ShutdownTimeout is the graceful shutdown timeout
 	ShutdownTimeout = 30 * time.Second
 
@@ -75,26 +73,21 @@ func (v *OAuthProviderVerifier) VerifyAccessToken(token string) (*auth.OAuthToke
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("Remote Notes MicroSaaS - Starting server (Milestone 3)...")
 
-	// Get listen address from environment or use default
-	addr := os.Getenv("LISTEN_ADDR")
-	if addr == "" {
-		addr = DefaultAddr
+	// Step 1: Parse CLI flags
+	noEmail, noS3, noOIDC, addr := config.ParseFlags()
+
+	// Step 2: Load and validate configuration
+	cfg, err := config.LoadConfig(noEmail, noS3, noOIDC, addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Load master key from environment (REQUIRED for envelope encryption)
-	masterKeyHex := os.Getenv("MASTER_KEY")
-	if masterKeyHex == "" {
-		// For development/testing, generate a random key
-		log.Println("WARNING: MASTER_KEY not set, using random key (NOT FOR PRODUCTION)")
-		randomKey, err := crypto.GenerateDEK()
-		if err != nil {
-			log.Fatalf("Failed to generate random master key: %v", err)
-		}
-		masterKeyHex = hex.EncodeToString(randomKey)
-	}
-	masterKey, err := hex.DecodeString(masterKeyHex)
+	// Step 3: Print startup summary
+	cfg.PrintStartupSummary()
+
+	masterKey, err := hex.DecodeString(cfg.MasterKey)
 	if err != nil || len(masterKey) != 32 {
 		log.Fatalf("Invalid MASTER_KEY: must be 64 hex characters (32 bytes)")
 	}
@@ -113,61 +106,43 @@ func main() {
 	log.Println("Key manager initialized")
 
 	// Initialize rate limiter
-	rateLimiter := ratelimit.NewRateLimiter(ratelimit.DefaultConfig)
-	log.Println("Rate limiter initialized with default config")
+	rateLimiter := ratelimit.NewRateLimiter(cfg.RateLimitConfig)
+	log.Println("Rate limiter initialized")
 
 	// Initialize S3 client
-	s3Client, s3Cleanup := initS3Client()
+	s3Client, s3Cleanup := initS3Client(cfg)
 	if s3Cleanup != nil {
 		defer s3Cleanup()
 	}
 	log.Println("S3 client initialized")
 
 	// Initialize template renderer
-	templatesDir := os.Getenv("TEMPLATES_DIR")
-	if templatesDir == "" {
-		templatesDir = "./web/templates"
-	}
-	renderer, err := web.NewRenderer(templatesDir)
+	renderer, err := web.NewRenderer(cfg.TemplatesDir)
 	if err != nil {
 		log.Fatalf("Failed to initialize template renderer: %v", err)
 	}
-	log.Printf("Template renderer initialized with templates from %s", templatesDir)
+	log.Printf("Template renderer initialized with templates from %s", cfg.TemplatesDir)
 
-	baseURL := os.Getenv("BASE_URL")
-	if baseURL == "" {
-		baseURL = "http://localhost" + addr
-	}
-
-	// Initialize services - use real or mock based on environment
+	// Initialize services - use real or mock based on CLI flags
 	var emailService email.EmailService
-	useMockEmail := os.Getenv("USE_MOCK_EMAIL")
-	if useMockEmail == "" || useMockEmail == "true" {
+	if cfg.NoEmail {
 		emailService = email.NewMockEmailService()
-		log.Println("Using mock email service")
+		log.Println("Using mock email service (--no-email)")
 	} else {
-		resendAPIKey := os.Getenv("RESEND_API_KEY")
-		resendFromEmail := os.Getenv("RESEND_FROM_EMAIL")
-		if resendFromEmail == "" {
-			resendFromEmail = "onboarding@resend.dev"
-		}
-		emailService = email.NewResendEmailService(resendAPIKey, resendFromEmail)
-		log.Println("Using real Resend email service")
+		emailService = email.NewResendEmailService(cfg.ResendAPIKey, cfg.ResendFromEmail)
+		log.Printf("Using real Resend email service (from: %s)", cfg.ResendFromEmail)
 	}
 
 	var oidcClient auth.OIDCClient
-	useMockOIDC := os.Getenv("USE_MOCK_OIDC")
-	if useMockOIDC == "" || useMockOIDC == "true" {
+	if cfg.NoOIDC {
 		oidcClient = auth.NewMockOIDCClient()
-		log.Println("Using mock OIDC client")
+		log.Println("Using mock OIDC client (--no-oidc)")
 	} else {
-		googleClientID := os.Getenv("GOOGLE_CLIENT_ID")
-		googleClientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-		googleRedirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
+		googleRedirectURL := cfg.GoogleRedirectURL
 		if googleRedirectURL == "" {
-			googleRedirectURL = baseURL + "/auth/google/callback"
+			googleRedirectURL = cfg.BaseURL + "/auth/google/callback"
 		}
-		realOIDC, err := auth.NewGoogleOIDCClient(googleClientID, googleClientSecret, googleRedirectURL)
+		realOIDC, err := auth.NewGoogleOIDCClient(cfg.GoogleClientID, cfg.GoogleClientSecret, googleRedirectURL)
 		if err != nil {
 			log.Fatalf("Failed to initialize Google OIDC client: %v", err)
 		}
@@ -176,27 +151,28 @@ func main() {
 	}
 
 	// Disable secure cookies for local development (HTTP)
-	if strings.HasPrefix(baseURL, "http://localhost") || strings.HasPrefix(baseURL, "http://127.0.0.1") {
+	if !cfg.RequireSecureCookies() {
 		auth.SetSecureCookies(false)
 		log.Println("Secure cookies disabled for local development (HTTP)")
 	}
 
 	publicNotesURL := os.Getenv("PUBLIC_NOTES_URL")
 	if publicNotesURL == "" {
-		publicNotesURL = baseURL + "/public"
+		publicNotesURL = cfg.BaseURL + "/public"
 	}
+	_ = publicNotesURL // used by future features
 
-	userService := auth.NewUserService(sessionsDB, emailService, baseURL)
+	userService := auth.NewUserService(sessionsDB, emailService, cfg.BaseURL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
-	// Initialize OAuth 2.1 provider (Milestone 3.5)
-	oauthHMACSecret := loadOAuthHMACSecret()
-	oauthSigningKey := loadOAuthSigningKey()
+	// Initialize OAuth 2.1 provider
+	oauthHMACSecret := loadOAuthHMACSecret(cfg)
+	oauthSigningKey := loadOAuthSigningKey(cfg)
 	oauthProvider, err := oauth.NewProvider(oauth.Config{
 		DB:         sessionsDB.DB(),
-		Issuer:     baseURL,
-		Resource:   baseURL,
+		Issuer:     cfg.BaseURL,
+		Resource:   cfg.BaseURL,
 		HMACSecret: oauthHMACSecret,
 		SigningKey: oauthSigningKey,
 	})
@@ -213,12 +189,12 @@ func main() {
 	log.Println("Short URL service initialized")
 
 	// Initialize public notes service with short URL support
-	publicNotes := notes.NewPublicNoteService(s3Client).WithShortURLService(shortURLSvc, baseURL)
+	publicNotes := notes.NewPublicNoteService(s3Client).WithShortURLService(shortURLSvc, cfg.BaseURL)
 
 	// Initialize auth middleware and handlers
 	// Create an OAuth token verifier adapter that wraps the OAuth provider
 	oauthTokenVerifier := &OAuthProviderVerifier{provider: oauthProvider}
-	resourceMetadataURL := baseURL + "/.well-known/oauth-protected-resource"
+	resourceMetadataURL := cfg.BaseURL + "/.well-known/oauth-protected-resource"
 
 	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
 	authMiddleware.WithOAuthVerifier(oauthTokenVerifier, resourceMetadataURL)
@@ -235,7 +211,7 @@ func main() {
 		consentService,
 		s3Client,
 		shortURLSvc,
-		baseURL,
+		cfg.BaseURL,
 	)
 
 	// Create HTTP mux
@@ -245,11 +221,10 @@ func main() {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy","service":"remote-notes","milestone":3}`))
+		w.Write([]byte(`{"status":"healthy","service":"commonink","milestone":4}`))
 	})
 
-	// Register OAuth 2.1 provider routes (Milestone 3.5)
-	// Well-known metadata endpoints (no auth required)
+	// Register OAuth 2.1 provider routes
 	oauthProvider.RegisterMetadataRoutes(mux)
 	log.Println("OAuth metadata routes registered at /.well-known/*")
 
@@ -275,6 +250,11 @@ func main() {
 	staticHandler.RegisterRoutes(mux)
 	log.Println("Static page routes registered at /privacy, /terms, /about, /docs/api")
 
+	// Serve favicon.ico from static directory
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./static/favicon.ico")
+	})
+
 	// Register auth API routes (no auth required for these)
 	authHandler.RegisterRoutes(mux)
 	log.Println("Auth API routes registered at /auth/*")
@@ -285,7 +265,6 @@ func main() {
 	}
 	getIsPaid := func(r *http.Request) bool {
 		// TODO: Check subscription status from user record
-		// For now, all users are free tier
 		return false
 	}
 	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
@@ -300,14 +279,15 @@ func main() {
 	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.UpdateNote))))
 	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.DeleteNote))))
 	mux.Handle("POST /api/notes/search", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.SearchNotes))))
+	mux.Handle("GET /api/storage", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.GetStorageUsage))))
 	log.Println("Protected notes API routes registered at /api/notes with rate limiting")
 
-	// Register PAT (Personal Access Token) API routes
-	patHandler := auth.NewPATHandler(userService)
-	mux.Handle("POST /api/tokens", authMiddleware.RequireAuth(http.HandlerFunc(patHandler.CreatePAT)))
-	mux.Handle("GET /api/tokens", authMiddleware.RequireAuth(http.HandlerFunc(patHandler.ListPATs)))
-	mux.Handle("DELETE /api/tokens/{id}", authMiddleware.RequireAuth(http.HandlerFunc(patHandler.RevokePAT)))
-	log.Println("PAT API routes registered at /api/tokens")
+	// Register API Key routes
+	apiKeyHandler := auth.NewAPIKeyHandler(userService)
+	mux.Handle("POST /api/keys", authMiddleware.RequireAuth(http.HandlerFunc(apiKeyHandler.CreateAPIKey)))
+	mux.Handle("GET /api/keys", authMiddleware.RequireAuth(http.HandlerFunc(apiKeyHandler.ListAPIKeys)))
+	mux.Handle("DELETE /api/keys/{id}", authMiddleware.RequireAuth(http.HandlerFunc(apiKeyHandler.RevokeAPIKey)))
+	log.Println("API Key routes registered at /api/keys")
 
 	// Create and mount MCP server (requires auth + rate limiting)
 	mcpHandler := &AuthenticatedMCPHandler{}
@@ -316,7 +296,7 @@ func main() {
 
 	// Create HTTP server
 	server := &http.Server{
-		Addr:         addr,
+		Addr:         cfg.ListenAddr,
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -328,9 +308,9 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Server listening on %s", addr)
+		log.Printf("Server listening on %s", cfg.ListenAddr)
 		log.Println("Endpoints:")
-		log.Println("  OAuth 2.1 Provider (Milestone 3.5):")
+		log.Println("  OAuth 2.1 Provider:")
 		log.Println("    GET  /.well-known/oauth-protected-resource  - Protected resource metadata")
 		log.Println("    GET  /.well-known/oauth-authorization-server - Auth server metadata")
 		log.Println("    GET  /.well-known/jwks.json                  - JWKS for token verification")
@@ -373,10 +353,10 @@ func main() {
 		log.Println("    PUT  /api/notes/{id}             - Update note (protected)")
 		log.Println("    DELETE /api/notes/{id}           - Delete note (protected)")
 		log.Println("    POST /api/notes/search           - Search notes (protected)")
-		log.Println("  PAT API (Personal Access Tokens):")
-		log.Println("    GET  /api/tokens                 - List tokens (protected)")
-		log.Println("    POST /api/tokens                 - Create token (protected)")
-		log.Println("    DELETE /api/tokens/{id}          - Revoke token (protected)")
+		log.Println("  API Keys:")
+		log.Println("    GET  /api/keys                   - List API keys (protected)")
+		log.Println("    POST /api/keys                   - Create API key (protected)")
+		log.Println("    DELETE /api/keys/{id}            - Revoke API key (protected)")
 		log.Println("  MCP (rate limited):")
 		log.Println("    POST /mcp                        - MCP endpoint (protected)")
 		log.Println("  Health:")
@@ -423,26 +403,21 @@ func main() {
 	log.Println("Server shutdown complete")
 }
 
-// initS3Client initializes the S3 client based on environment variables.
-// If USE_MOCK_S3=true (default), creates an in-memory mock S3 server.
+// initS3Client initializes the S3 client based on configuration.
+// If --no-s3 flag is set, creates an in-memory mock S3 server.
 // Otherwise, creates a real S3 client with Tigris configuration.
-func initS3Client() (*s3client.Client, func()) {
-	useMockS3 := os.Getenv("USE_MOCK_S3")
-	if useMockS3 == "" {
-		useMockS3 = "true" // Default to mock for development
-	}
-
-	if useMockS3 == "true" {
-		log.Println("Using mock S3 (gofakes3) for development")
-		return createMockS3Client()
+func initS3Client(cfg *config.Config) (*s3client.Client, func()) {
+	if cfg.NoS3 {
+		log.Println("Using mock S3 (gofakes3) (--no-s3)")
+		return createMockS3Client(cfg)
 	}
 
 	log.Println("Using real S3 client (Tigris)")
-	return createRealS3Client(), nil
+	return createRealS3Client(cfg), nil
 }
 
 // createMockS3Client creates an in-memory S3 client using gofakes3.
-func createMockS3Client() (*s3client.Client, func()) {
+func createMockS3Client(cfg *config.Config) (*s3client.Client, func()) {
 	// Create in-memory S3 backend
 	backend := s3mem.New()
 	faker := gofakes3.New(backend)
@@ -467,8 +442,7 @@ func createMockS3Client() (*s3client.Client, func()) {
 		o.UsePathStyle = true // Required for gofakes3
 	})
 
-	// Create the bucket
-	bucketName := os.Getenv("S3_BUCKET")
+	bucketName := cfg.S3Bucket
 	if bucketName == "" {
 		bucketName = DefaultBucketName
 	}
@@ -491,24 +465,24 @@ func createMockS3Client() (*s3client.Client, func()) {
 }
 
 // createRealS3Client creates a real S3 client for production use with Tigris.
-func createRealS3Client() *s3client.Client {
+func createRealS3Client(cfg *config.Config) *s3client.Client {
 	ctx := context.Background()
 
-	cfg := s3client.Config{
-		Endpoint:        os.Getenv("S3_ENDPOINT"),          // e.g., "https://fly.storage.tigris.dev"
-		Region:          os.Getenv("S3_REGION"),            // e.g., "auto"
-		AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),     // Tigris access key
-		SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"), // Tigris secret key
-		BucketName:      os.Getenv("S3_BUCKET"),            // e.g., "remote-notes"
-		PublicURL:       os.Getenv("S3_PUBLIC_URL"),        // e.g., "https://remote-notes.fly.storage.tigris.dev"
-		UsePathStyle:    false,                             // Tigris uses virtual-hosted style
+	s3Cfg := s3client.Config{
+		Endpoint:        cfg.S3Endpoint,
+		Region:          cfg.S3Region,
+		AccessKeyID:     cfg.S3AccessKeyID,
+		SecretAccessKey: cfg.S3SecretAccessKey,
+		BucketName:      cfg.S3Bucket,
+		PublicURL:       cfg.S3PublicURL,
+		UsePathStyle:    false, // Tigris uses virtual-hosted style
 	}
 
-	if cfg.BucketName == "" {
-		cfg.BucketName = DefaultBucketName
+	if s3Cfg.BucketName == "" {
+		s3Cfg.BucketName = DefaultBucketName
 	}
 
-	client, err := s3client.New(ctx, cfg)
+	client, err := s3client.New(ctx, s3Cfg)
 	if err != nil {
 		log.Fatalf("Failed to create S3 client: %v", err)
 	}
@@ -608,6 +582,10 @@ func (h *AuthenticatedNotesHandler) CreateNote(w http.ResponseWriter, r *http.Re
 
 	note, err := svc.Create(params)
 	if err != nil {
+		if errors.Is(err, notes.ErrStorageLimitExceeded) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Failed to create note: "+err.Error())
 		return
 	}
@@ -637,6 +615,10 @@ func (h *AuthenticatedNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Re
 
 	note, err := svc.Update(id, params)
 	if err != nil {
+		if errors.Is(err, notes.ErrStorageLimitExceeded) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, "Note not found")
 			return
@@ -708,6 +690,23 @@ func (h *AuthenticatedNotesHandler) SearchNotes(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, results)
 }
 
+// GetStorageUsage handles GET /api/storage - returns current storage usage
+func (h *AuthenticatedNotesHandler) GetStorageUsage(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	usage, err := svc.GetStorageUsage()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to get storage usage: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, usage)
+}
+
 // AuthenticatedMCPHandler wraps MCP with auth context
 type AuthenticatedMCPHandler struct{}
 
@@ -743,47 +742,20 @@ func writeError(w http.ResponseWriter, status int, message string) {
 // OAuth Configuration Helpers
 // =============================================================================
 
-// loadOAuthHMACSecret loads or generates the HMAC secret for OAuth tokens.
-// In production, this should be loaded from a secure secret store.
-func loadOAuthHMACSecret() []byte {
-	secretHex := os.Getenv("OAUTH_HMAC_SECRET")
-	if secretHex != "" {
-		secret, err := hex.DecodeString(secretHex)
-		if err == nil && len(secret) >= 32 {
-			log.Println("OAuth HMAC secret loaded from environment")
-			return secret
-		}
-		log.Println("WARNING: Invalid OAUTH_HMAC_SECRET, generating random secret")
-	}
-
-	// Generate random secret for development
-	log.Println("WARNING: OAUTH_HMAC_SECRET not set, using random secret (NOT FOR PRODUCTION)")
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		log.Fatalf("Failed to generate OAuth HMAC secret: %v", err)
+// loadOAuthHMACSecret decodes the HMAC secret from config. Fatal on invalid format.
+func loadOAuthHMACSecret(cfg *config.Config) []byte {
+	secret, err := hex.DecodeString(cfg.OAuthHMACSecret)
+	if err != nil || len(secret) < 32 {
+		log.Fatalf("OAUTH_HMAC_SECRET must be valid hex, at least 64 characters (32 bytes)")
 	}
 	return secret
 }
 
-// loadOAuthSigningKey loads or generates the Ed25519 signing key for OAuth JWTs.
-// In production, this should be loaded from a secure key store.
-func loadOAuthSigningKey() ed25519.PrivateKey {
-	keyHex := os.Getenv("OAUTH_SIGNING_KEY")
-	if keyHex != "" {
-		keyBytes, err := hex.DecodeString(keyHex)
-		if err == nil && len(keyBytes) == ed25519.SeedSize {
-			privateKey := ed25519.NewKeyFromSeed(keyBytes)
-			log.Println("OAuth signing key loaded from environment")
-			return privateKey
-		}
-		log.Println("WARNING: Invalid OAUTH_SIGNING_KEY, generating random key")
+// loadOAuthSigningKey decodes the Ed25519 signing key from config. Fatal on invalid format.
+func loadOAuthSigningKey(cfg *config.Config) ed25519.PrivateKey {
+	keyBytes, err := hex.DecodeString(cfg.OAuthSigningKey)
+	if err != nil || len(keyBytes) != ed25519.SeedSize {
+		log.Fatalf("OAUTH_SIGNING_KEY must be valid hex, exactly 64 characters (32 bytes ed25519 seed)")
 	}
-
-	// Generate random key for development
-	log.Println("WARNING: OAUTH_SIGNING_KEY not set, using random key (NOT FOR PRODUCTION)")
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		log.Fatalf("Failed to generate OAuth signing key: %v", err)
-	}
-	return privateKey
+	return ed25519.NewKeyFromSeed(keyBytes)
 }

@@ -52,7 +52,7 @@ func NewServer(notesSvc *notes.Service) *Server {
 			JSONResponse: true,
 
 			// Stateless: true because each request is authenticated independently
-			// via OAuth/PAT tokens. The server is created per-user per-request,
+			// via OAuth/API Key tokens. The server is created per-user per-request,
 			// so session state doesn't need to persist across requests.
 			// With stateless mode, initialize/initialized handshake is skipped.
 			Stateless: true,

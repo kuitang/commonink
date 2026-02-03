@@ -15,7 +15,7 @@ This document defines a testing strategy centered on **property-based testing** 
 | **Property > Example** | Properties express invariants that must hold for all inputs; examples only prove specific cases work |
 | **End-to-End > Unit** | Testing the actual API surface catches integration bugs that unit tests miss |
 | **Fuzzing as CI Extension** | Coverage-guided fuzzing finds edge cases that pure random generation cannot |
-| **Single Source of Truth** | One script runs CI locally and remotely—no "works on my machine" |
+| **Single Source of Truth** | `make` targets run CI locally and remotely—no "works on my machine" |
 
 ### 1.2 When NOT to Write Traditional Unit Tests
 
@@ -233,17 +233,19 @@ Implement custom generators that produce adversarial inputs:
 
 ## 6. CI Harness Design
 
-### 6.1 Single Entry Point
+### 6.1 Entry Points
 
-All CI runs through ONE script: `./scripts/ci.sh`
+All CI runs through `make` targets. The Makefile handles goenv, CGO flags, and deterministic test secrets (MASTER_KEY, OAUTH_HMAC_SECRET, OAUTH_SIGNING_KEY) automatically via `export`.
 
 ```
-Usage: ./scripts/ci.sh <level> [options]
+make test          - rapid only, no coverage, ~30 seconds
+make test-full     - rapid + conformance + coverage report, ~5 minutes
+make test-fuzz     - quick + coverage-guided fuzzing, ~30+ minutes (calls scripts/fuzz.sh)
+```
 
-Levels:
-  quick   - rapid only, no coverage, ~30 seconds
-  full    - rapid + Playwright + coverage report, ~5 minutes  
-  fuzz    - quick + coverage-guided fuzzing, ~30+ minutes
+For advanced fuzz options, call `scripts/fuzz.sh` directly:
+```
+Usage: ./scripts/fuzz.sh fuzz [options]
 
 Options:
   --timeout <duration>   Fuzz timeout (default: 30m)
@@ -253,51 +255,50 @@ Options:
 
 ### 6.2 CI Levels Specification
 
-#### Level: `quick`
+#### Level: `quick` (`make test`)
 
-**Purpose**: Fast feedback during development and PR checks
+**Purpose**: Fast feedback during development and pre-commit hook
 
 **What runs**:
 - All `Test*` functions (rapid property tests)
+- Excludes e2e conformance (Claude/OpenAI) and browser tests
 - No `Fuzz*` functions
-- No Playwright
 - No coverage collection
 
 **Expected duration**: ~30 seconds
 
 **Exit criteria**: Any test failure = CI failure
 
-#### Level: `full`
+#### Level: `full` (`make test-full`)
 
 **Purpose**: Comprehensive validation before merge
 
 **What runs**:
-- All `Test*` functions with coverage instrumentation
-- Playwright browser tests
+- All `Test*` functions with coverage instrumentation (including Claude conformance)
 - Coverage report generation
+- **Requires**: `OPENAI_API_KEY` in environment
 
 **Expected duration**: ~5 minutes
 
 **Outputs**:
 - `test-results/coverage.out` — Raw coverage profile
 - `test-results/coverage.html` — HTML coverage report
-- `test-results/coverage-gaps.txt` — List of uncovered lines
-- `test-results/playwright/` — Playwright traces and screenshots
+- `test-results/full-test.log` — Full test log
 
 **Coverage requirements**:
-- Minimum total coverage: configurable (recommend 70%+)
+- Minimum total coverage: configurable in Makefile (recommend 70%+)
 - CI fails if coverage drops below threshold
 
-#### Level: `fuzz`
+#### Level: `fuzz` (`make test-fuzz`)
 
 **Purpose**: Deep exploration for edge cases and security issues
 
 **What runs**:
 - All `Fuzz*` functions with coverage-guided fuzzing
-- All `Test*` functions (as baseline)
+- All `Test*` functions (as baseline via `make test`)
 - Coverage comparison: unit vs fuzz
 
-**Expected duration**: 30+ minutes (configurable via `--timeout`)
+**Expected duration**: 30+ minutes (configurable via `--timeout` on `scripts/fuzz.sh`)
 
 **Outputs**:
 - `test-results/fuzz-coverage.out` — Fuzz coverage profile
@@ -357,7 +358,7 @@ jobs:
         with:
           go-version: '1.22'
       - name: Quick Tests
-        run: ./scripts/ci.sh quick
+        run: make test
         
   full:
     runs-on: ubuntu-latest
@@ -370,7 +371,7 @@ jobs:
       - name: Install Playwright
         run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps
       - name: Full Tests
-        run: ./scripts/ci.sh full
+        run: make test-full
       - name: Upload Coverage
         uses: actions/upload-artifact@v4
         with:
@@ -418,7 +419,7 @@ jobs:
             fuzz-corpus-
             
       - name: Fuzz Tests
-        run: ./scripts/ci.sh fuzz --timeout 30m
+        run: make test-fuzz
         
       # Commit new corpus entries back to repo
       - name: Commit Corpus Updates
@@ -519,7 +520,7 @@ If you want to test multiple input variations in Playwright, use **table-driven 
 
 ### Phase 1: Foundation
 - [ ] Set up rapid as test dependency
-- [ ] Create `./scripts/ci.sh` with three levels
+- [x] Create Makefile targets (`make test`, `make test-full`, `make test-fuzz`) and `scripts/fuzz.sh`
 - [ ] Implement coverage gap detection tool
 - [ ] Configure GitHub Actions workflows
 

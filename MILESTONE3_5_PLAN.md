@@ -109,8 +109,8 @@ The `tests/e2e/openai/conformance_test.go` and `tests/e2e/claude/conformance_tes
 **Note**: The original simple test environments are still available for basic CRUD testing without OAuth overhead. The new OAuth tests provide parity between OpenAI and Claude testing.
 
 **Test coverage improvement**: The tests now verify the complete production flow including OAuth token validation.
-- Generate PAT for that user
-- Use PAT as Bearer token in function calls
+- Generate API Key for that user
+- Use API Key as Bearer token in function calls
 
 **Option B: Full OAuth flow in test setup**
 - Perform DCR → Authorization → Token Exchange
@@ -212,7 +212,7 @@ ngrok http 8080
 
 ### OpenAI Conformance Tests (REQUIRES UPDATE)
 
-- [ ] Add OAuth flow or PAT authentication to `tests/e2e/openai/conformance_test.go`
+- [ ] Add OAuth flow or API Key authentication to `tests/e2e/openai/conformance_test.go`
 - [ ] Remove hardcoded `TestUserID`
 - [ ] Test full: OpenAI API → OAuth → MCP → Note CRUD
 

@@ -253,18 +253,17 @@ authMiddleware := auth.NewMiddleware(sessionSvc, userSvc, apiKeySvc, oauthProvid
 
 **fly.toml**:
 ```toml
-app = "agent-notes"
-primary_region = "iad"
+app = "commonink"
+primary_region = "ewr"
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
   DATABASE_PATH = "/data"
-  OAUTH_ISSUER = "https://notes.yourdomain.com"
 
 [mounts]
-  source = "agent_notes_data"
+  source = "commonink_data"
   destination = "/data"
 
 [[services]]
@@ -308,10 +307,10 @@ CMD ["/server"]
 **Deploy Commands**:
 ```bash
 # Create app
-fly apps create agent-notes
+fly apps create commonink
 
 # Create volume for SQLite
-fly volumes create agent_notes_data --region iad --size 10
+fly volumes create commonink_data --region ewr --size 10
 
 # Create Tigris storage
 fly storage create
@@ -322,17 +321,18 @@ fly secrets set \
   GOOGLE_CLIENT_ID="xxx" \
   GOOGLE_CLIENT_SECRET="xxx" \
   RESEND_API_KEY="re_xxx" \
-  LEMON_API_KEY="xxx" \
-  LEMON_WEBHOOK_SECRET="xxx" \
-  AWS_ACCESS_KEY_ID="tid_xxx" \
-  AWS_SECRET_ACCESS_KEY="tsec_xxx"
+  RESEND_FROM_EMAIL="noreply@common.ink" \
+  S3_ENDPOINT="https://fly.storage.tigris.dev" \
+  S3_ACCESS_KEY_ID="tid_xxx" \
+  S3_SECRET_ACCESS_KEY="tsec_xxx" \
+  BASE_URL="https://common.ink"
 
 # Deploy
 fly deploy
 
 # Add custom domain
-fly certs add notes.yourdomain.com
-# Update DNS: CNAME notes.yourdomain.com → agent-notes.fly.dev
+fly certs add common.ink
+# Update DNS: CNAME common.ink → commonink.fly.dev
 ```
 
 #### 8. Domain + DNS Setup
@@ -340,7 +340,7 @@ fly certs add notes.yourdomain.com
 **Required DNS Records**:
 ```
 # Main app
-notes.yourdomain.com    CNAME   agent-notes.fly.dev
+common.ink              CNAME   commonink.fly.dev
 
 # Email verification (for Resend)
 resend._domainkey       CNAME   (from Resend dashboard)
@@ -349,10 +349,9 @@ _dmarc                  TXT     "v=DMARC1; p=none"
 
 **Update Configs for Production**:
 ```bash
-OAUTH_ISSUER=https://notes.yourdomain.com
-GOOGLE_REDIRECT_URL=https://notes.yourdomain.com/auth/google/callback
-RESEND_FROM_EMAIL=noreply@yourdomain.com
-PUBLIC_NOTES_URL=https://notes.yourdomain.com/public
+BASE_URL=https://common.ink
+GOOGLE_REDIRECT_URL=https://common.ink/auth/google/callback
+RESEND_FROM_EMAIL=noreply@common.ink
 ```
 
 ---
@@ -369,37 +368,51 @@ PUBLIC_NOTES_URL=https://notes.yourdomain.com/public
 
 ---
 
-## Environment Variables (Production)
+## Configuration
+
+### CLI Flags (for dev/test only)
+
+```bash
+--no-email    Use mock email service (logs to console)
+--no-s3       Use mock S3 storage (in-memory)
+--no-oidc     Use mock Google OIDC provider
+--test        Shorthand for --no-email --no-s3 --no-oidc
+--addr :8080  Listen address (overrides LISTEN_ADDR env var)
+```
+
+In production, no flags are passed. All services require real credentials.
+
+### Environment Variables (Production)
 
 ```bash
 # ===== Core =====
-MASTER_KEY=<64-char-hex-string>
+MASTER_KEY=<64-char-hex-string>          # Required. 32 bytes, hex-encoded.
 DATABASE_PATH=/data
-OAUTH_ISSUER=https://notes.yourdomain.com
+BASE_URL=https://common.ink
 
-# ===== Auth (Real) =====
-USE_MOCK_OIDC=false
-USE_MOCK_EMAIL=false
+# ===== Auth =====
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-xxx
-GOOGLE_REDIRECT_URL=https://notes.yourdomain.com/auth/google/callback
+GOOGLE_REDIRECT_URL=https://common.ink/auth/google/callback  # Optional, defaults to BASE_URL/auth/google/callback
 RESEND_API_KEY=re_xxx
-RESEND_FROM_EMAIL=noreply@yourdomain.com
+RESEND_FROM_EMAIL=noreply@common.ink
 
-# ===== Payments =====
-USE_MOCK_PAYMENT=false
+# ===== OAuth 2.1 Provider =====
+OAUTH_HMAC_SECRET=<64-hex-chars>         # Optional, auto-generated if missing (warn)
+OAUTH_SIGNING_KEY=<64-hex-chars>         # Optional, auto-generated if missing (warn)
+
+# ===== Storage (S3/Tigris) =====
+S3_ENDPOINT=https://fly.storage.tigris.dev
+S3_ACCESS_KEY_ID=tid_xxx
+S3_SECRET_ACCESS_KEY=tsec_xxx
+S3_BUCKET=commonink-public               # Optional, defaults to "remote-notes"
+S3_PUBLIC_URL=https://commonink-public.fly.storage.tigris.dev  # Optional
+
+# ===== Payments (TODO) =====
 LEMON_API_KEY=xxx
 LEMON_WEBHOOK_SECRET=xxx
 LEMON_STORE_ID=xxx
 LEMON_PRODUCT_ID=xxx
-
-# ===== Storage =====
-USE_MOCK_STORAGE=false
-AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev
-AWS_ACCESS_KEY_ID=tid_xxx
-AWS_SECRET_ACCESS_KEY=tsec_xxx
-BUCKET_NAME=agent-notes-public
-PUBLIC_NOTES_URL=https://notes.yourdomain.com/public
 
 # ===== Rate Limits =====
 RATE_LIMIT_FREE_RPS=10

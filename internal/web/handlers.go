@@ -2,6 +2,8 @@
 package web
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -82,16 +84,16 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	// NOTE: POST /oauth/consent is handled by oauth.Handler.RegisterRoutes() - not here
 	mux.Handle("GET /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleConsentPage)))
 
-	// Settings - Token management (auth required - redirect to login for web pages)
-	mux.Handle("GET /settings/tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTokenSettings)))
-	mux.Handle("POST /settings/tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateToken)))
-	mux.Handle("POST /settings/tokens/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeToken)))
+	// Settings - API Key management (auth required - redirect to login for web pages)
+	mux.Handle("GET /settings/api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleAPIKeySettings)))
+	mux.Handle("POST /settings/api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
+	mux.Handle("POST /settings/api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
 
-	// Token management - short URLs (aliases for /settings/tokens)
-	mux.Handle("GET /tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTokenSettings)))
-	mux.Handle("GET /tokens/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewTokenPage)))
-	mux.Handle("POST /tokens", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateToken)))
-	mux.Handle("POST /tokens/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeToken)))
+	// API Key management - short URLs (aliases for /settings/api-keys)
+	mux.Handle("GET /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleAPIKeySettings)))
+	mux.Handle("GET /api-keys/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewAPIKeyPage)))
+	mux.Handle("POST /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
+	mux.Handle("POST /api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
 }
 
 // PageData contains common data passed to all templates.
@@ -106,11 +108,12 @@ type PageData struct {
 // NotesListData contains data for the notes list page.
 type NotesListData struct {
 	PageData
-	Notes      []notes.Note
-	Page       int
-	TotalPages int
-	HasPrev    bool
-	HasNext    bool
+	Notes        []notes.Note
+	Page         int
+	TotalPages   int
+	HasPrev      bool
+	HasNext      bool
+	StorageUsage *notes.StorageUsageInfo
 }
 
 // NoteViewData contains data for the note view page.
@@ -547,16 +550,31 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 		totalPages = 1
 	}
 
+	// Get storage usage info
+	var storageUsage *notes.StorageUsageInfo
+	usage, err := notesService.GetStorageUsage()
+	if err == nil {
+		storageUsage = &usage
+	}
+
+	pageData := PageData{
+		Title: "My Notes",
+		User:  &auth.User{ID: auth.GetUserID(r.Context())},
+	}
+	// Check for flash error message from query params
+	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+		pageData.FlashMessage = errMsg
+		pageData.FlashType = "error"
+	}
+
 	data := NotesListData{
-		PageData: PageData{
-			Title: "My Notes",
-			User:  &auth.User{ID: auth.GetUserID(r.Context())},
-		},
-		Notes:      result.Notes,
-		Page:       page,
-		TotalPages: totalPages,
-		HasPrev:    page > 1,
-		HasNext:    page < totalPages,
+		PageData:     pageData,
+		Notes:        result.Notes,
+		Page:         page,
+		TotalPages:   totalPages,
+		HasPrev:      page > 1,
+		HasNext:      page < totalPages,
+		StorageUsage: storageUsage,
 	}
 
 	if err := h.renderer.Render(w, "notes/list.html", data); err != nil {
@@ -601,6 +619,10 @@ func (h *WebHandler) HandleCreateNote(w http.ResponseWriter, r *http.Request) {
 		Content: content,
 	})
 	if err != nil {
+		if errors.Is(err, notes.ErrStorageLimitExceeded) {
+			http.Redirect(w, r, "/notes?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB.", float64(notes.StorageLimitBytes)/(1024*1024)), http.StatusFound)
+			return
+		}
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to create note")
 		return
 	}
@@ -715,6 +737,10 @@ func (h *WebHandler) HandleUpdateNote(w http.ResponseWriter, r *http.Request) {
 		Content: &content,
 	})
 	if err != nil {
+		if errors.Is(err, notes.ErrStorageLimitExceeded) {
+			http.Redirect(w, r, "/notes/"+noteID+"/edit?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB.", float64(notes.StorageLimitBytes)/(1024*1024)), http.StatusFound)
+			return
+		}
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to update note")
 		return
 	}

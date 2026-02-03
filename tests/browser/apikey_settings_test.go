@@ -1,7 +1,7 @@
 // Package browser contains Playwright E2E tests for browser-based UI flows.
 // These are deterministic scenario tests (NOT property-based) as per CLAUDE.md.
 //
-// This file tests Personal Access Token (PAT) management via the web UI at /settings/tokens.
+// This file tests API Key management via the web UI at /settings/api-keys.
 //
 // Prerequisites:
 // - Install Playwright browsers: go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
@@ -40,12 +40,12 @@ import (
 )
 
 const (
-	patTestBucketName = "pat-test-bucket"
-	patTestMasterKey  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes, low entropy for gitleaks
+	apiKeyTestBucketName = "apikey-test-bucket"
+	apiKeyTestMasterKey  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes, low entropy for gitleaks
 )
 
-// patTestEnv holds all the components needed for PAT settings browser testing.
-type patTestEnv struct {
+// apiKeyTestEnv holds all the components needed for API Key settings browser testing.
+type apiKeyTestEnv struct {
 	server         *httptest.Server
 	baseURL        string
 	sessionsDB     *db.SessionsDB
@@ -60,8 +60,8 @@ type patTestEnv struct {
 	rateLimiter    *ratelimit.RateLimiter
 }
 
-// setupPATTestEnv creates a complete test environment for PAT settings tests.
-func setupPATTestEnv(t *testing.T) *patTestEnv {
+// setupAPIKeyTestEnv creates a complete test environment for API Key settings tests.
+func setupAPIKeyTestEnv(t *testing.T) *apiKeyTestEnv {
 	t.Helper()
 
 	// Reset database singleton and set fresh data directory
@@ -75,7 +75,7 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 	}
 
 	// Initialize key manager
-	masterKey, err := hex.DecodeString(patTestMasterKey)
+	masterKey, err := hex.DecodeString(apiKeyTestMasterKey)
 	if err != nil {
 		t.Fatalf("Failed to decode master key: %v", err)
 	}
@@ -88,10 +88,10 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 	consentService := auth.NewConsentService(sessionsDB)
 
 	// Initialize mock S3
-	s3Client, s3Server := setupPATTestS3(t)
+	s3Client, s3Server := setupAPIKeyTestS3(t)
 
 	// Initialize template renderer
-	templatesDir := findPATTestTemplatesDir()
+	templatesDir := findAPIKeyTestTemplatesDir()
 	renderer, err := web.NewRenderer(templatesDir)
 	if err != nil {
 		t.Fatalf("Failed to create renderer: %v", err)
@@ -121,7 +121,7 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 		w.Write([]byte(`{"status":"healthy"}`))
 	})
 
-	// API endpoint for testing PAT authentication
+	// API endpoint for testing API Key authentication
 	// This endpoint requires authentication and returns 200 if auth succeeds
 	mux.Handle("GET /api/notes", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -138,7 +138,7 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 		sessionService,
 		consentService,
 		s3Client,
-		nil, // shortURLSvc not needed for PAT settings tests
+		nil, // shortURLSvc not needed for API Key settings tests
 		"http://localhost:8080",
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)
@@ -184,7 +184,7 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 
 	page.SetDefaultTimeout(10000) // 10 second timeout
 
-	env := &patTestEnv{
+	env := &apiKeyTestEnv{
 		server:         server,
 		baseURL:        server.URL,
 		sessionsDB:     sessionsDB,
@@ -215,8 +215,8 @@ func setupPATTestEnv(t *testing.T) *patTestEnv {
 	return env
 }
 
-// setupPATTestS3 creates a mock S3 server for testing.
-func setupPATTestS3(t *testing.T) (*s3client.Client, *httptest.Server) {
+// setupAPIKeyTestS3 creates a mock S3 server for testing.
+func setupAPIKeyTestS3(t *testing.T) (*s3client.Client, *httptest.Server) {
 	t.Helper()
 
 	backend := s3mem.New()
@@ -240,18 +240,18 @@ func setupPATTestS3(t *testing.T) (*s3client.Client, *httptest.Server) {
 	})
 
 	_, err = s3SDK.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(patTestBucketName),
+		Bucket: aws.String(apiKeyTestBucketName),
 	})
 	if err != nil {
 		t.Fatalf("Failed to create mock S3 bucket: %v", err)
 	}
 
-	client := s3client.NewFromS3Client(s3SDK, patTestBucketName, ts.URL+"/"+patTestBucketName)
+	client := s3client.NewFromS3Client(s3SDK, apiKeyTestBucketName, ts.URL+"/"+apiKeyTestBucketName)
 	return client, ts
 }
 
-// findPATTestTemplatesDir locates the templates directory.
-func findPATTestTemplatesDir() string {
+// findAPIKeyTestTemplatesDir locates the templates directory.
+func findAPIKeyTestTemplatesDir() string {
 	candidates := []string{
 		"../../web/templates",
 		"../../../web/templates",
@@ -268,8 +268,8 @@ func findPATTestTemplatesDir() string {
 	return "/home/kuitang/git/agent-notes/web/templates"
 }
 
-// loginPATTestUser creates a test user with a password and logs them in.
-func (env *patTestEnv) loginPATTestUser(t *testing.T, testEmail, password string) string {
+// loginAPIKeyTestUser creates a test user with a password and logs them in.
+func (env *apiKeyTestEnv) loginAPIKeyTestUser(t *testing.T, testEmail, password string) string {
 	t.Helper()
 
 	ctx := context.Background()
@@ -280,7 +280,7 @@ func (env *patTestEnv) loginPATTestUser(t *testing.T, testEmail, password string
 		t.Fatalf("Failed to create test user: %v", err)
 	}
 
-	// Set password for the user (required for PAT creation re-auth)
+	// Set password for the user (required for API Key creation re-auth)
 	passwordHash, err := auth.HashPassword(password)
 	if err != nil {
 		t.Fatalf("Failed to hash password: %v", err)
@@ -297,7 +297,7 @@ func (env *patTestEnv) loginPATTestUser(t *testing.T, testEmail, password string
 		t.Fatalf("Failed to open user DB: %v", err)
 	}
 
-	// Create the account record (required for PAT re-auth to work)
+	// Create the account record (required for API Key re-auth to work)
 	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
 		UserID:             user.ID,
 		Email:              testEmail,
@@ -338,8 +338,8 @@ func (env *patTestEnv) loginPATTestUser(t *testing.T, testEmail, password string
 	return user.ID
 }
 
-// navigatePAT navigates to a path on the test server.
-func (env *patTestEnv) navigatePAT(t *testing.T, path string) {
+// navigateAPIKey navigates to a path on the test server.
+func (env *apiKeyTestEnv) navigateAPIKey(t *testing.T, path string) {
 	t.Helper()
 
 	url := env.baseURL + path
@@ -352,9 +352,9 @@ func (env *patTestEnv) navigatePAT(t *testing.T, path string) {
 	}
 }
 
-// waitForPATSelector waits for an element to appear.
+// waitForAPIKeySelector waits for an element to appear.
 // For selectors with multiple options (comma-separated), returns the first matching element.
-func (env *patTestEnv) waitForPATSelector(t *testing.T, selector string) playwright.Locator {
+func (env *apiKeyTestEnv) waitForAPIKeySelector(t *testing.T, selector string) playwright.Locator {
 	t.Helper()
 
 	locator := env.page.Locator(selector)
@@ -370,8 +370,8 @@ func (env *patTestEnv) waitForPATSelector(t *testing.T, selector string) playwri
 	return first
 }
 
-// generatePATTestEmail generates a unique email for test isolation.
-func generatePATTestEmail(prefix string) string {
+// generateAPIKeyTestEmail generates a unique email for test isolation.
+func generateAPIKeyTestEmail(prefix string) string {
 	return fmt.Sprintf("%s-%d@example.com", prefix, time.Now().UnixNano())
 }
 
@@ -379,18 +379,18 @@ func generatePATTestEmail(prefix string) string {
 // Test: Page Load
 // =============================================================================
 
-func TestBrowser_TokenSettings_PageLoad(t *testing.T) {
+func TestBrowser_APIKeySettings_PageLoad(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-pageload")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-pageload")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
+	// Navigate to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
 
 	// Wait for page to load
 	err := env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -400,25 +400,25 @@ func TestBrowser_TokenSettings_PageLoad(t *testing.T) {
 		t.Fatalf("Page did not load: %v", err)
 	}
 
-	// Verify page title shows "Personal Access Tokens"
-	heading := env.waitForPATSelector(t, "h1")
+	// Verify page title shows "API Keys"
+	heading := env.waitForAPIKeySelector(t, "h1")
 	headingText, err := heading.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get heading text: %v", err)
 	}
 
-	if !strings.Contains(headingText, "Personal Access Tokens") {
-		t.Errorf("Expected heading to contain 'Personal Access Tokens', got: %s", headingText)
+	if !strings.Contains(headingText, "API Keys") {
+		t.Errorf("Expected heading to contain 'API Keys', got: %s", headingText)
 	}
 
-	// Verify "Create Token" button is visible
-	createButton := env.page.Locator("button[type='submit']:has-text('Create Token')")
+	// Verify "Create API Key" button is visible
+	createButton := env.page.Locator("button[type='submit']:has-text('Create API Key')")
 	isVisible, err := createButton.IsVisible()
 	if err != nil {
 		t.Fatalf("Failed to check create button visibility: %v", err)
 	}
 	if !isVisible {
-		t.Error("Create Token button should be visible")
+		t.Error("Create API Key button should be visible")
 	}
 
 	// Verify form fields are present
@@ -428,7 +428,7 @@ func TestBrowser_TokenSettings_PageLoad(t *testing.T) {
 		t.Fatalf("Failed to check name input visibility: %v", err)
 	}
 	if !nameVisible {
-		t.Error("Token name input should be visible")
+		t.Error("API key name input should be visible")
 	}
 
 	scopeSelect := env.page.Locator("select#scope")
@@ -442,34 +442,34 @@ func TestBrowser_TokenSettings_PageLoad(t *testing.T) {
 }
 
 // =============================================================================
-// Test: Create Token
+// Test: Create API Key
 // =============================================================================
 
-func TestBrowser_TokenSettings_CreateToken(t *testing.T) {
+func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-create")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-create")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
+	// Navigate to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
 
 	// Wait for page to load
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Fill in token name
-	nameInput := env.waitForPATSelector(t, "input#name")
-	err := nameInput.Fill("Test API Token")
+	// Fill in API key name
+	nameInput := env.waitForAPIKeySelector(t, "input#name")
+	err := nameInput.Fill("Test API Key")
 	if err != nil {
-		t.Fatalf("Failed to fill token name: %v", err)
+		t.Fatalf("Failed to fill API key name: %v", err)
 	}
 
 	// Select scope: "Read and Write"
-	scopeSelect := env.waitForPATSelector(t, "select#scope")
+	scopeSelect := env.waitForAPIKeySelector(t, "select#scope")
 	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
@@ -478,27 +478,27 @@ func TestBrowser_TokenSettings_CreateToken(t *testing.T) {
 	}
 
 	// Fill in email for re-authentication
-	emailInput := env.waitForPATSelector(t, "input#email")
+	emailInput := env.waitForAPIKeySelector(t, "input#email")
 	err = emailInput.Fill(testEmail)
 	if err != nil {
 		t.Fatalf("Failed to fill email: %v", err)
 	}
 
 	// Fill in password for re-authentication
-	passwordInput := env.waitForPATSelector(t, "input#password")
+	passwordInput := env.waitForAPIKeySelector(t, "input#password")
 	err = passwordInput.Fill(testPassword)
 	if err != nil {
 		t.Fatalf("Failed to fill password: %v", err)
 	}
 
 	// Submit form
-	submitButton := env.page.Locator("button[type='submit']:has-text('Create Token')")
+	submitButton := env.page.Locator("button[type='submit']:has-text('Create API Key')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
 	}
 
-	// Wait for page to reload with new token
+	// Wait for page to reload with new API key
 	err = env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
@@ -506,24 +506,24 @@ func TestBrowser_TokenSettings_CreateToken(t *testing.T) {
 		t.Fatalf("Page did not reload: %v", err)
 	}
 
-	// Verify token value is displayed (only shown once)
+	// Verify API key value is displayed (only shown once)
 	tokenElement := env.page.Locator("code#new-token, code#token-value")
 	err = tokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(5000),
 	})
 	if err != nil {
-		t.Fatalf("Token value element not found: %v", err)
+		t.Fatalf("API key value element not found: %v", err)
 	}
 
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get token value: %v", err)
+		t.Fatalf("Failed to get API key value: %v", err)
 	}
 
-	// Verify token starts with "agentnotes_pat_"
-	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
-		t.Errorf("Token should start with 'agentnotes_pat_', got: %s", tokenValue)
+	// Verify API key starts with "agentnotes_key_"
+	if !strings.HasPrefix(tokenValue, "agentnotes_key_") {
+		t.Errorf("API key should start with 'agentnotes_key_', got: %s", tokenValue)
 	}
 
 	// Verify copy button is present
@@ -537,7 +537,7 @@ func TestBrowser_TokenSettings_CreateToken(t *testing.T) {
 	}
 
 	// Verify success message is displayed
-	successMessage := env.page.Locator("text=Token Created Successfully")
+	successMessage := env.page.Locator("text=API Key Created Successfully")
 	successVisible, err := successMessage.IsVisible()
 	if err != nil {
 		t.Fatalf("Failed to check success message visibility: %v", err)
@@ -548,25 +548,25 @@ func TestBrowser_TokenSettings_CreateToken(t *testing.T) {
 }
 
 // =============================================================================
-// Test: List Tokens
+// Test: List API Keys
 // =============================================================================
 
-func TestBrowser_TokenSettings_ListTokens(t *testing.T) {
+func TestBrowser_APIKeySettings_ListKeys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-list")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-list")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Create multiple tokens via the UI
-	tokenNames := []string{"Token One", "Token Two", "Token Three"}
+	// Create multiple API keys via the UI
+	tokenNames := []string{"Key One", "Key Two", "Key Three"}
 
 	for _, tokenName := range tokenNames {
-		env.navigatePAT(t, "/settings/tokens")
-		env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+		env.navigateAPIKey(t, "/settings/api-keys")
+		env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 		// Fill form
 		env.page.Locator("input#name").Fill(tokenName)
@@ -577,7 +577,7 @@ func TestBrowser_TokenSettings_ListTokens(t *testing.T) {
 		env.page.Locator("input#password").Fill(testPassword)
 
 		// Submit
-		env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+		env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 		// Wait for redirect
 		env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -586,22 +586,22 @@ func TestBrowser_TokenSettings_ListTokens(t *testing.T) {
 	}
 
 	// Navigate to settings page to view list
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Verify all created tokens appear in list
+	// Verify all created API keys appear in list
 	for _, tokenName := range tokenNames {
 		tokenRow := env.page.Locator(fmt.Sprintf("text=%s", tokenName))
 		count, err := tokenRow.Count()
 		if err != nil {
-			t.Fatalf("Failed to count token rows for %s: %v", tokenName, err)
+			t.Fatalf("Failed to count API key rows for %s: %v", tokenName, err)
 		}
 		if count == 0 {
-			t.Errorf("Token '%s' should appear in the list", tokenName)
+			t.Errorf("API key '%s' should appear in the list", tokenName)
 		}
 	}
 
-	// Verify tokens table shows columns: Name, Scope, Created, Last Used, Expires
+	// Verify API keys table shows columns: Name, Scope, Created, Last Used, Expires
 	tableHeaders := env.page.Locator("th")
 	headersCount, err := tableHeaders.Count()
 	if err != nil {
@@ -611,39 +611,39 @@ func TestBrowser_TokenSettings_ListTokens(t *testing.T) {
 		t.Errorf("Expected at least 4 table headers (Name, Scope, Created, etc.), got: %d", headersCount)
 	}
 
-	// Verify token values are NOT shown (security)
-	// The actual token hash should not be visible in the list
-	tokenHashLocator := env.page.Locator("text=agentnotes_pat_")
+	// Verify API key values are NOT shown (security)
+	// The actual key value should not be visible in the list
+	tokenHashLocator := env.page.Locator("text=agentnotes_key_")
 	hashCount, err := tokenHashLocator.Count()
 	if err != nil {
-		t.Fatalf("Failed to check for token hashes: %v", err)
+		t.Fatalf("Failed to check for API key values: %v", err)
 	}
-	// There should only be the token shown in the "new token" success message (if still visible)
-	// but NOT in the token list rows
+	// There should only be the key shown in the "new key" success message (if still visible)
+	// but NOT in the API key list rows
 	if hashCount > 1 {
-		t.Log("Note: Token values should only be visible once at creation time")
+		t.Log("Note: API key values should only be visible once at creation time")
 	}
 }
 
 // =============================================================================
-// Test: Revoke Token
+// Test: Revoke API Key
 // =============================================================================
 
-func TestBrowser_TokenSettings_RevokeToken(t *testing.T) {
+func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-revoke")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-revoke")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	tokenName := "Token to Revoke"
+	tokenName := "Key to Revoke"
 
-	// Create a token first
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Create an API key first
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 	env.page.Locator("input#name").Fill(tokenName)
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
@@ -651,21 +651,21 @@ func TestBrowser_TokenSettings_RevokeToken(t *testing.T) {
 	})
 	env.page.Locator("input#email").Fill(testEmail)
 	env.page.Locator("input#password").Fill(testPassword)
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Navigate back to tokens page (in case we're showing the new token modal)
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate back to API keys page (in case we're showing the new key display)
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Verify the token exists in the list
+	// Verify the API key exists in the list
 	tokenRow := env.page.Locator(fmt.Sprintf("text=%s", tokenName))
 	count, err := tokenRow.Count()
 	if err != nil || count == 0 {
-		t.Fatal("Token should exist before revoking")
+		t.Fatal("API key should exist before revoking")
 	}
 
 	// Set up dialog handler for confirmation
@@ -673,8 +673,8 @@ func TestBrowser_TokenSettings_RevokeToken(t *testing.T) {
 		dialog.Accept()
 	})
 
-	// Click "Revoke" button for the token
-	// Find the row containing the token name and click its Revoke button
+	// Click "Revoke" button for the API key
+	// Find the row containing the key name and click its Revoke button
 	revokeButton := env.page.Locator(fmt.Sprintf("tr:has-text('%s') button:has-text('Revoke')", tokenName))
 	err = revokeButton.Click()
 	if err != nil {
@@ -689,57 +689,57 @@ func TestBrowser_TokenSettings_RevokeToken(t *testing.T) {
 		t.Fatalf("Page did not reload after revoke: %v", err)
 	}
 
-	// Verify token is removed from list
+	// Verify API key is removed from list
 	tokenRowAfter := env.page.Locator(fmt.Sprintf("td:has-text('%s')", tokenName))
 	countAfter, err := tokenRowAfter.Count()
 	if err != nil {
-		t.Fatalf("Failed to count token rows after revoke: %v", err)
+		t.Fatalf("Failed to count API key rows after revoke: %v", err)
 	}
 	if countAfter > 0 {
-		t.Error("Revoked token should not appear in the list")
+		t.Error("Revoked API key should not appear in the list")
 	}
 }
 
 // =============================================================================
-// Test: Copy Token
+// Test: Copy API Key
 // =============================================================================
 
-func TestBrowser_TokenSettings_CopyToken(t *testing.T) {
+func TestBrowser_APIKeySettings_CopyKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-copy")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-copy")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Create a token
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Create an API key
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	env.page.Locator("input#name").Fill("Token for Copy Test")
+	env.page.Locator("input#name").Fill("Key for Copy Test")
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
 	env.page.Locator("input#email").Fill(testEmail)
 	env.page.Locator("input#password").Fill(testPassword)
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Get the token value before clicking copy
-	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	// Get the API key value before clicking copy
+	tokenElement := env.waitForAPIKeySelector(t, "code#new-token, code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get token value: %v", err)
+		t.Fatalf("Failed to get API key value: %v", err)
 	}
 
-	// Verify token has expected format
-	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
-		t.Errorf("Token should have proper prefix, got: %s", tokenValue)
+	// Verify API key has expected format
+	if !strings.HasPrefix(tokenValue, "agentnotes_key_") {
+		t.Errorf("API key should have proper prefix, got: %s", tokenValue)
 	}
 
 	// Click the copy button
@@ -764,40 +764,40 @@ func TestBrowser_TokenSettings_CopyToken(t *testing.T) {
 
 	// Note: Actual clipboard verification is not possible in headless mode
 	// The test verifies the copy button exists and can be clicked
-	// In real usage, the browser's clipboard API would copy the token
-	t.Logf("Token value that would be copied: %s", tokenValue)
+	// In real usage, the browser's clipboard API would copy the API key
+	t.Logf("API key value that would be copied: %s", tokenValue)
 }
 
 // =============================================================================
-// Test: Empty State (No Tokens)
+// Test: Empty State (No API Keys)
 // =============================================================================
 
-func TestBrowser_TokenSettings_EmptyState(t *testing.T) {
+func TestBrowser_APIKeySettings_EmptyState(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-empty")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-empty")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to tokens page without creating any tokens
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to API keys page without creating any keys
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Verify "No tokens" message is displayed
-	noTokensMessage := env.page.Locator("h3:has-text('No tokens')")
-	count, err := noTokensMessage.Count()
+	// Verify "No API keys" message is displayed
+	noKeysMessage := env.page.Locator("h3:has-text('No API keys')")
+	count, err := noKeysMessage.Count()
 	if err != nil {
-		t.Fatalf("Failed to check for no tokens message: %v", err)
+		t.Fatalf("Failed to check for empty state message: %v", err)
 	}
 	if count == 0 {
-		t.Error("Expected 'No tokens' message for new user without tokens")
+		t.Error("Expected 'No API keys' message for new user without API keys")
 	}
 
 	// Verify help text is displayed
-	helpText := env.page.Locator("text=Create a token to get started")
+	helpText := env.page.Locator("text=Create an API key to get started")
 	helpVisible, err := helpText.IsVisible()
 	if err != nil {
 		t.Fatalf("Failed to check help text visibility: %v", err)
@@ -811,22 +811,22 @@ func TestBrowser_TokenSettings_EmptyState(t *testing.T) {
 // Test: Invalid Credentials (Re-authentication Fails)
 // =============================================================================
 
-func TestBrowser_TokenSettings_InvalidCredentials(t *testing.T) {
+func TestBrowser_APIKeySettings_InvalidCredentials(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-invalid-creds")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-invalid-creds")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to tokens page
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to API keys page
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 	// Fill form with wrong password
-	env.page.Locator("input#name").Fill("Test Token")
+	env.page.Locator("input#name").Fill("Test API Key")
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
@@ -834,7 +834,7 @@ func TestBrowser_TokenSettings_InvalidCredentials(t *testing.T) {
 	env.page.Locator("input#password").Fill("WrongPassword123!")
 
 	// Submit form
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	// Wait for page to reload
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -860,25 +860,25 @@ func TestBrowser_TokenSettings_InvalidCredentials(t *testing.T) {
 }
 
 // =============================================================================
-// Test: Token Expiration Options
+// Test: API Key Expiration Options
 // =============================================================================
 
-func TestBrowser_TokenSettings_ExpirationOptions(t *testing.T) {
+func TestBrowser_APIKeySettings_ExpirationOptions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-expiry")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-expiry")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to tokens page
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to API keys page
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 	// Check expiration select options
-	expiresSelect := env.waitForPATSelector(t, "select#expires_in")
+	expiresSelect := env.waitForAPIKeySelector(t, "select#expires_in")
 
 	// Get all options
 	options := expiresSelect.Locator("option")
@@ -904,48 +904,48 @@ func TestBrowser_TokenSettings_ExpirationOptions(t *testing.T) {
 }
 
 // =============================================================================
-// Test: Read-Only Scope
+// Test: Read-Only Scope API Key
 // =============================================================================
 
-func TestBrowser_TokenSettings_ReadOnlyScope(t *testing.T) {
+func TestBrowser_APIKeySettings_ReadOnlyScope(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-readonly")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-readonly")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to tokens page
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to API keys page
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Create a read-only token
-	env.page.Locator("input#name").Fill("Read Only Token")
+	// Create a read-only API key
+	env.page.Locator("input#name").Fill("Read Only Key")
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read"),
 	})
 	env.page.Locator("input#email").Fill(testEmail)
 	env.page.Locator("input#password").Fill(testPassword)
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Navigate back to see the token in the list
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate back to see the API key in the list
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Verify the token shows "read" scope
+	// Verify the API key shows "read" scope
 	readScope := env.page.Locator("span:has-text('read')")
 	count, err := readScope.Count()
 	if err != nil {
 		t.Fatalf("Failed to check read scope: %v", err)
 	}
 	if count == 0 {
-		t.Error("Token with read scope should show 'read' in the list")
+		t.Error("API key with read scope should show 'read' in the list")
 	}
 }
 
@@ -953,15 +953,15 @@ func TestBrowser_TokenSettings_ReadOnlyScope(t *testing.T) {
 // Test: Unauthenticated Access Redirects to Login
 // =============================================================================
 
-func TestBrowser_TokenSettings_RequiresAuth(t *testing.T) {
+func TestBrowser_APIKeySettings_RequiresAuth(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
+	env := setupAPIKeyTestEnv(t)
 
 	// Do NOT login - try to access settings page directly
-	env.navigatePAT(t, "/settings/tokens")
+	env.navigateAPIKey(t, "/settings/api-keys")
 
 	// Wait for page to load
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -989,22 +989,22 @@ func TestBrowser_TokenSettings_RequiresAuth(t *testing.T) {
 // Test: Usage Instructions Visible
 // =============================================================================
 
-func TestBrowser_TokenSettings_UsageInstructions(t *testing.T) {
+func TestBrowser_APIKeySettings_UsageInstructions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-usage")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-usage")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to tokens page
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to API keys page
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 	// Verify usage instructions section exists
-	usageHeading := env.page.Locator("h3:has-text('How to use your token')")
+	usageHeading := env.page.Locator("h3:has-text('How to use your API key')")
 	isVisible, err := usageHeading.IsVisible()
 	if err != nil {
 		t.Fatalf("Failed to check usage heading visibility: %v", err)
@@ -1025,61 +1025,61 @@ func TestBrowser_TokenSettings_UsageInstructions(t *testing.T) {
 }
 
 // =============================================================================
-// Test: Token Shown Only Once (Refresh should mask it)
+// Test: API Key Shown Only Once (Refresh should mask it)
 // =============================================================================
 
-func TestBrowser_TokenSettings_TokenShownOnceOnly(t *testing.T) {
+func TestBrowser_APIKeySettings_KeyShownOnceOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-shown-once")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-shown-once")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Create a token
-	env.page.Locator("input#name").Fill("Token for Once Test")
+	// Create an API key
+	env.page.Locator("input#name").Fill("Key for Once Test")
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
 	env.page.Locator("input#email").Fill(testEmail)
 	env.page.Locator("input#password").Fill(testPassword)
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Verify token value is displayed (only shown once)
-	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	// Verify API key value is displayed (only shown once)
+	tokenElement := env.waitForAPIKeySelector(t, "code#new-token, code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get token value: %v", err)
+		t.Fatalf("Failed to get API key value: %v", err)
 	}
 
-	// Verify token starts with expected prefix
-	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
-		t.Errorf("Token should start with 'agentnotes_pat_', got: %s", tokenValue)
+	// Verify API key starts with expected prefix
+	if !strings.HasPrefix(tokenValue, "agentnotes_key_") {
+		t.Errorf("API key should start with 'agentnotes_key_', got: %s", tokenValue)
 	}
 
-	// Save the token value for later verification
+	// Save the API key value for later verification
 	savedToken := tokenValue
 
-	// Navigate away and back to /settings/tokens
-	env.navigatePAT(t, "/notes")
+	// Navigate away and back to /settings/api-keys
+	env.navigateAPIKey(t, "/notes")
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Verify the full token value is NOT visible anymore
+	// Verify the full API key value is NOT visible anymore
 	// The new-token element should not exist after navigating away
 	newTokenElement := env.page.Locator("code#new-token, code#token-value")
 	newTokenCount, err := newTokenElement.Count()
@@ -1091,30 +1091,30 @@ func TestBrowser_TokenSettings_TokenShownOnceOnly(t *testing.T) {
 		newTokenVisible, _ := newTokenElement.IsVisible()
 		if newTokenVisible {
 			displayedToken, _ := newTokenElement.TextContent()
-			// Token should not be the same as what was originally displayed
+			// API key should not be the same as what was originally displayed
 			if displayedToken == savedToken {
-				t.Error("Token should NOT be visible after navigating away and back")
+				t.Error("API key should NOT be visible after navigating away and back")
 			}
 		}
 	}
 
-	// Verify the token row exists in the list but value is masked
-	tokenRow := env.page.Locator("text=Token for Once Test")
+	// Verify the API key row exists in the list but value is masked
+	tokenRow := env.page.Locator("text=Key for Once Test")
 	count, err := tokenRow.Count()
 	if err != nil {
-		t.Fatalf("Failed to count token rows: %v", err)
+		t.Fatalf("Failed to count API key rows: %v", err)
 	}
 	if count == 0 {
-		t.Error("Token should still appear in the list by name")
+		t.Error("API key should still appear in the list by name")
 	}
 
-	// The full token value should not appear anywhere on the page
+	// The full API key value should not appear anywhere on the page
 	pageContent, err := env.page.Content()
 	if err != nil {
 		t.Fatalf("Failed to get page content: %v", err)
 	}
 
-	// The saved token should not appear in the page content anymore
+	// The saved API key should not appear in the page content anymore
 	// (unless it's in a "new-token" element which we already checked)
 	if strings.Contains(pageContent, savedToken) {
 		// Check if it's ONLY in a new-token element that shouldn't be visible
@@ -1128,55 +1128,55 @@ func TestBrowser_TokenSettings_TokenShownOnceOnly(t *testing.T) {
 			}
 		}
 		if visibleCount > 0 {
-			t.Error("Full token value should not be visible after refresh")
+			t.Error("Full API key value should not be visible after refresh")
 		}
 	}
 }
 
 // =============================================================================
-// Test: Use Created Token for API Call
+// Test: Use Created API Key for API Call
 // =============================================================================
 
-func TestBrowser_TokenSettings_UseTokenForAPICall(t *testing.T) {
+func TestBrowser_APIKeySettings_UseKeyForAPICall(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-api-call")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-api-call")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Create a token
-	env.page.Locator("input#name").Fill("Token for API Test")
+	// Create an API key
+	env.page.Locator("input#name").Fill("Key for API Test")
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
 	env.page.Locator("input#email").Fill(testEmail)
 	env.page.Locator("input#password").Fill(testPassword)
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Get the token value
-	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	// Get the API key value
+	tokenElement := env.waitForAPIKeySelector(t, "code#new-token, code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get token value: %v", err)
+		t.Fatalf("Failed to get API key value: %v", err)
 	}
 
-	// Verify token has expected format
-	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
-		t.Fatalf("Token should have proper prefix, got: %s", tokenValue)
+	// Verify API key has expected format
+	if !strings.HasPrefix(tokenValue, "agentnotes_key_") {
+		t.Fatalf("API key should have proper prefix, got: %s", tokenValue)
 	}
 
-	// Use the token for an API call (GET /api/notes)
+	// Use the API key for an API call (GET /api/notes)
 	// We need to make a direct HTTP request to the test server
 	req, err := http.NewRequest("GET", env.baseURL+"/api/notes", nil)
 	if err != nil {
@@ -1191,43 +1191,43 @@ func TestBrowser_TokenSettings_UseTokenForAPICall(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// The API should accept the token
+	// The API should accept the API key
 	// Note: The actual response depends on whether /api/notes is registered
 	// but we should at least not get a 401 Unauthorized
 	if resp.StatusCode == http.StatusUnauthorized {
-		t.Errorf("API call with valid PAT should not return 401, got status: %d", resp.StatusCode)
+		t.Errorf("API call with valid API key should not return 401, got status: %d", resp.StatusCode)
 	}
 
-	t.Logf("API call with PAT returned status: %d", resp.StatusCode)
+	t.Logf("API call with API key returned status: %d", resp.StatusCode)
 }
 
 // =============================================================================
-// Test: Revoked Token Fails API Call
+// Test: Revoked API Key Fails API Call
 // =============================================================================
 
-func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
+func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-revoke-api")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-revoke-api")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Create a token
-	tokenName := "Token to Revoke for API"
-	nameInput := env.waitForPATSelector(t, "input#name")
+	// Create an API key
+	tokenName := "Key to Revoke for API"
+	nameInput := env.waitForAPIKeySelector(t, "input#name")
 	err := nameInput.Fill(tokenName)
 	if err != nil {
-		t.Fatalf("Failed to fill token name: %v", err)
+		t.Fatalf("Failed to fill API key name: %v", err)
 	}
 
-	scopeSelect := env.waitForPATSelector(t, "select#scope")
+	scopeSelect := env.waitForAPIKeySelector(t, "select#scope")
 	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
@@ -1235,25 +1235,25 @@ func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
 		t.Fatalf("Failed to select scope: %v", err)
 	}
 
-	emailInput := env.waitForPATSelector(t, "input#email")
+	emailInput := env.waitForAPIKeySelector(t, "input#email")
 	err = emailInput.Fill(testEmail)
 	if err != nil {
 		t.Fatalf("Failed to fill email: %v", err)
 	}
 
-	passwordInput := env.waitForPATSelector(t, "input#password")
+	passwordInput := env.waitForAPIKeySelector(t, "input#password")
 	err = passwordInput.Fill(testPassword)
 	if err != nil {
 		t.Fatalf("Failed to fill password: %v", err)
 	}
 
-	submitButton := env.page.Locator("button[type='submit']:has-text('Create Token')")
+	submitButton := env.page.Locator("button[type='submit']:has-text('Create API Key')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit: %v", err)
 	}
 
-	// Wait for page to reload with new token
+	// Wait for page to reload with new API key
 	err = env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
@@ -1261,8 +1261,8 @@ func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
 		t.Fatalf("Page did not reload: %v", err)
 	}
 
-	// Wait for token element to appear with extended timeout
-	// The token might be in code#new-token (settings/tokens.html) or code#token-value (tokens/created.html)
+	// Wait for API key element to appear with extended timeout
+	// The key might be in code#new-token (settings/api-keys.html) or code#token-value (api-keys/created.html)
 	tokenElement := env.page.Locator("code#new-token, code#token-value")
 	err = tokenElement.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
@@ -1272,15 +1272,15 @@ func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
 		// Debug: log page content
 		pageContent, _ := env.page.Content()
 		t.Logf("Page content (first 500 chars): %s", pageContent[:min(500, len(pageContent))])
-		t.Fatalf("Token value element not found: %v", err)
+		t.Fatalf("API key value element not found: %v", err)
 	}
 
 	tokenValue, err := tokenElement.First().TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get token value: %v", err)
+		t.Fatalf("Failed to get API key value: %v", err)
 	}
 
-	// Verify the token works before revocation
+	// Verify the API key works before revocation
 	req1, err := http.NewRequest("GET", env.baseURL+"/api/notes", nil)
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
@@ -1295,20 +1295,20 @@ func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
 	resp1.Body.Close()
 
 	if resp1.StatusCode == http.StatusUnauthorized {
-		t.Errorf("Token should work before revocation, got status: %d", resp1.StatusCode)
+		t.Errorf("API key should work before revocation, got status: %d", resp1.StatusCode)
 	}
 	t.Logf("Before revocation, API returned status: %d", resp1.StatusCode)
 
-	// Navigate to tokens page to revoke
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to API keys page to revoke
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 	// Set up dialog handler for confirmation
 	env.page.OnDialog(func(dialog playwright.Dialog) {
 		dialog.Accept()
 	})
 
-	// Click "Revoke" button for the token
+	// Click "Revoke" button for the API key
 	revokeButton := env.page.Locator(fmt.Sprintf("tr:has-text('%s') button:has-text('Revoke')", tokenName))
 	err = revokeButton.Click()
 	if err != nil {
@@ -1320,7 +1320,7 @@ func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Verify token no longer works via API
+	// Verify API key no longer works via API
 	req2, err := http.NewRequest("GET", env.baseURL+"/api/notes", nil)
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
@@ -1333,66 +1333,66 @@ func TestBrowser_TokenSettings_RevokedTokenFailsAPI(t *testing.T) {
 	}
 	defer resp2.Body.Close()
 
-	// The API should reject the revoked token with 401 Unauthorized
+	// The API should reject the revoked API key with 401 Unauthorized
 	if resp2.StatusCode != http.StatusUnauthorized {
-		t.Errorf("API call with revoked PAT should return 401, got status: %d", resp2.StatusCode)
+		t.Errorf("API call with revoked API key should return 401, got status: %d", resp2.StatusCode)
 	}
 
 	t.Logf("After revocation, API returned status: %d (expected 401)", resp2.StatusCode)
 }
 
 // =============================================================================
-// Test: Navigate Away and Back - Token Masked
+// Test: Navigate Away and Back - API Key Masked
 // =============================================================================
 
-func TestBrowser_TokenSettings_NavigateAwayMasksToken(t *testing.T) {
+func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
 
-	env := setupPATTestEnv(t)
-	testEmail := generatePATTestEmail("pat-navigate-mask")
+	env := setupAPIKeyTestEnv(t)
+	testEmail := generateAPIKeyTestEmail("apikey-navigate-mask")
 	testPassword := "SecurePass123!"
-	env.loginPATTestUser(t, testEmail, testPassword)
+	env.loginAPIKeyTestUser(t, testEmail, testPassword)
 
-	// Navigate to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
-	// Create a token
-	tokenName := "Token for Navigate Test"
+	// Create an API key
+	tokenName := "Key for Navigate Test"
 	env.page.Locator("input#name").Fill(tokenName)
 	env.page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
 		Values: playwright.StringSlice("read_write"),
 	})
 	env.page.Locator("input#email").Fill(testEmail)
 	env.page.Locator("input#password").Fill(testPassword)
-	env.page.Locator("button[type='submit']:has-text('Create Token')").Click()
+	env.page.Locator("button[type='submit']:has-text('Create API Key')").Click()
 
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Verify token is displayed
-	tokenElement := env.waitForPATSelector(t, "code#new-token, code#token-value")
+	// Verify API key is displayed
+	tokenElement := env.waitForAPIKeySelector(t, "code#new-token, code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get token value: %v", err)
+		t.Fatalf("Failed to get API key value: %v", err)
 	}
 
-	if !strings.HasPrefix(tokenValue, "agentnotes_pat_") {
-		t.Errorf("Token should be visible immediately after creation")
+	if !strings.HasPrefix(tokenValue, "agentnotes_key_") {
+		t.Errorf("API key should be visible immediately after creation")
 	}
 
 	// Navigate away to /notes
-	env.navigatePAT(t, "/notes")
+	env.navigateAPIKey(t, "/notes")
 	env.page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	// Navigate back to /settings/tokens
-	env.navigatePAT(t, "/settings/tokens")
-	env.waitForPATSelector(t, "h1:has-text('Personal Access Tokens')")
+	// Navigate back to /settings/api-keys
+	env.navigateAPIKey(t, "/settings/api-keys")
+	env.waitForAPIKeySelector(t, "h1:has-text('API Keys')")
 
 	// The new-token element should not be visible
 	newTokenElement := env.page.Locator("code#new-token, code#token-value")
@@ -1401,31 +1401,31 @@ func TestBrowser_TokenSettings_NavigateAwayMasksToken(t *testing.T) {
 		Timeout: playwright.Float(2000),
 	})
 
-	// We EXPECT this to timeout/fail because the token should NOT be visible
+	// We EXPECT this to timeout/fail because the API key should NOT be visible
 	if err == nil {
-		// The element is visible - check if it contains the actual token
+		// The element is visible - check if it contains the actual API key
 		displayedToken, _ := newTokenElement.TextContent()
 		if displayedToken == tokenValue {
-			t.Error("Full token value should NOT be visible after navigating away and back")
+			t.Error("Full API key value should NOT be visible after navigating away and back")
 		}
 	}
 
-	// Verify the token is listed but not in raw form
+	// Verify the API key is listed but not in raw form
 	tokenRow := env.page.Locator(fmt.Sprintf("text=%s", tokenName))
 	count, err := tokenRow.Count()
 	if err != nil {
-		t.Fatalf("Failed to count token rows: %v", err)
+		t.Fatalf("Failed to count API key rows: %v", err)
 	}
 	if count == 0 {
-		t.Error("Token should still appear in the list by name")
+		t.Error("API key should still appear in the list by name")
 	}
 
-	// Token list should show masked values (not full token)
-	// Look for "agentnotes_pat_" prefix in the table - there should be none
-	// because the list shows token names, not raw values
+	// API key list should show masked values (not full key)
+	// Look for "agentnotes_key_" prefix in the table - there should be none
+	// because the list shows key names, not raw values
 	listContent := env.page.Locator("table")
 	tableContent, _ := listContent.TextContent()
 	if strings.Contains(tableContent, tokenValue) {
-		t.Error("Token list should not contain the full raw token value")
+		t.Error("API key list should not contain the full raw key value")
 	}
 }
