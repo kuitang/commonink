@@ -127,9 +127,6 @@
 
             <!-- Section 2: Magic Link -->
             <div class="space-y-3 sm:space-y-4">
-                <h3 class="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wide">
-                    Passwordless sign-in
-                </h3>
                 <form id="magic-link-form" action="/auth/magic" method="POST" class="space-y-3 sm:space-y-4">
                     {{if .ReturnTo}}<input type="hidden" name="return_to" value="{{.ReturnTo}}">{{end}}
                     <div>

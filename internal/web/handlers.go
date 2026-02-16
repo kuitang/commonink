@@ -616,7 +616,7 @@ func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/notes/"+noteID, http.StatusFound)
 }
 
-// HandleShortURLRedirect handles GET /pub/{short_id} - redirects to full public note URL.
+// HandleShortURLRedirect handles GET /pub/{short_id} - renders public note inline (no redirect).
 func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Request) {
 	shortID := r.PathValue("short_id")
 	if shortID == "" {
@@ -635,11 +635,20 @@ func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Redirect to the full public note path
-	http.Redirect(w, r, fullPath, http.StatusMovedPermanently)
+	// Parse user_id and note_id from fullPath ("/public/{user_id}/{note_id}")
+	parts := strings.Split(strings.TrimPrefix(fullPath, "/"), "/")
+	if len(parts) != 3 || parts[0] != "public" {
+		http.NotFound(w, r)
+		return
+	}
+	userID := parts[1]
+	noteID := parts[2]
+
+	// Render the public note inline at /pub/{short_id}
+	h.renderPublicNote(w, r, userID, noteID, h.baseURL+"/pub/"+shortID)
 }
 
-// HandlePublicNote handles GET /public/{user_id}/{note_id} - shows a public note.
+// HandlePublicNote handles GET /public/{user_id}/{note_id} - redirects to short URL if available.
 func (h *WebHandler) HandlePublicNote(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("user_id")
 	noteID := r.PathValue("note_id")
@@ -649,8 +658,22 @@ func (h *WebHandler) HandlePublicNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For stub implementation, render a placeholder public note
-	// In production, this would fetch the note from the public storage
+	// If a short URL exists, 301 redirect to /pub/{short_id} so the user sees the short URL
+	fullPath := "/public/" + userID + "/" + noteID
+	if h.shortURLSvc != nil {
+		shortURLObj, err := h.shortURLSvc.GetByFullPath(r.Context(), fullPath)
+		if err == nil && shortURLObj != nil {
+			http.Redirect(w, r, "/pub/"+shortURLObj.ShortID, http.StatusMovedPermanently)
+			return
+		}
+	}
+
+	// Fallback: render inline if no short URL exists
+	h.renderPublicNote(w, r, userID, noteID, h.baseURL+fullPath)
+}
+
+// renderPublicNote renders a public note page with the minimal-chrome template.
+func (h *WebHandler) renderPublicNote(w http.ResponseWriter, r *http.Request, userID, noteID, shareURL string) {
 	data := PublicNoteViewData{
 		PageData: PageData{
 			Title: "Public Note",
@@ -666,10 +689,10 @@ func (h *WebHandler) HandlePublicNote(w http.ResponseWriter, r *http.Request) {
 			Author:   "Anonymous",
 			AuthorID: userID,
 		},
-		ShareURL: h.baseURL + "/public/" + userID + "/" + noteID,
+		ShareURL: shareURL,
 	}
 
-	if err := h.renderer.Render(w, "notes/public_view.html", data); err != nil {
+	if err := h.renderer.RenderPublic(w, "notes/public_view.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }

@@ -539,9 +539,6 @@ func TestWebHandler_ShortURLRedirectWithService_Properties(t *testing.T) {
 
 	rapid.Check(t, func(rt *rapid.T) {
 		client := ts.Client()
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
 
 		// Create a short URL mapping in the database
 		fullPath := "/public/user123/note456"
@@ -551,21 +548,27 @@ func TestWebHandler_ShortURLRedirectWithService_Properties(t *testing.T) {
 			rt.Fatalf("Failed to create short URL: %v", err)
 		}
 
-		// Property: GET /pub/{short_id} redirects to the full path
+		// Property: GET /pub/{short_id} renders inline (200 with HTML, not 301)
 		resp, err := client.Get(ts.URL + "/pub/" + surl.ShortID)
 		if err != nil {
 			rt.Fatalf("Request failed: %v", err)
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusMovedPermanently {
+		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			rt.Fatalf("Expected 301 redirect, got %d: %s", resp.StatusCode, string(body))
+			rt.Fatalf("Expected 200 (inline render), got %d: %s", resp.StatusCode, string(body))
 		}
 
-		location := resp.Header.Get("Location")
-		if location != fullPath {
-			rt.Fatalf("Expected redirect to %s, got %s", fullPath, location)
+		body, _ := io.ReadAll(resp.Body)
+		html := string(body)
+
+		// Property: Rendered page contains "Public Note" and "common.ink"
+		if !strings.Contains(html, "Public Note") {
+			rt.Fatal("Short URL page should contain 'Public Note'")
+		}
+		if !strings.Contains(html, "common.ink") {
+			rt.Fatal("Short URL page should contain 'common.ink' wordmark")
 		}
 	})
 }

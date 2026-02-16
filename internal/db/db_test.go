@@ -926,3 +926,139 @@ func FuzzUserDB_FTS5_ArbitraryQueryCount_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testUserDB_FTS5_ArbitraryQueryCount_Properties))
 }
+
+// =============================================================================
+// Property: DataDirectory wiring places DB files in the configured directory
+// Bug regression: DATABASE_PATH env var was read into cfg.DatabasePath but
+// was never assigned to db.DataDirectory, so DBs were always created in "./data".
+// =============================================================================
+
+func testDataDirectory_Wiring_Properties(t *rapid.T) {
+	// Reset all singleton state to ensure clean isolation
+	ResetForTesting()
+
+	// Use a unique temp directory to simulate DATABASE_PATH env var being set.
+	// We cannot use t.TempDir() on rapid.T, so create our own temp dir.
+	tmpBase := filepath.Join(os.TempDir(), "db-wiring-test")
+	os.RemoveAll(tmpBase)
+	if err := os.MkdirAll(tmpBase, 0755); err != nil {
+		t.Fatalf("Failed to create temp base: %v", err)
+	}
+
+	// Generate a random subdirectory name to simulate different DATABASE_PATH values
+	subdir := rapid.StringMatching("[a-z]{3,10}").Draw(t, "subdir")
+	customPath := filepath.Join(tmpBase, subdir)
+
+	// Create a separate "wrong" directory to verify files are NOT created there.
+	// We use a dedicated temp directory instead of DefaultDataDirectory to avoid
+	// interference from stale files left by other test runs or server executions.
+	wrongPath := filepath.Join(tmpBase, "wrong-dir")
+	if err := os.MkdirAll(wrongPath, 0755); err != nil {
+		t.Fatalf("Failed to create wrong path: %v", err)
+	}
+
+	// Set DataDirectory to the custom path (simulates db.DataDirectory = cfg.DatabasePath in main.go)
+	DataDirectory = customPath
+
+	// --- Property 1: OpenSessionsDB creates sessions.db in the custom DataDirectory ---
+	sessDB, err := OpenSessionsDB()
+	if err != nil {
+		t.Fatalf("OpenSessionsDB failed with custom DataDirectory %q: %v", customPath, err)
+	}
+	if sessDB == nil {
+		t.Fatal("OpenSessionsDB returned nil")
+	}
+
+	expectedSessionsPath := filepath.Join(customPath, SessionsDBName)
+	if _, err := os.Stat(expectedSessionsPath); os.IsNotExist(err) {
+		t.Fatalf("sessions.db not created at expected path %q", expectedSessionsPath)
+	}
+
+	// Property: sessions.db must NOT exist in the wrong directory
+	wrongSessionsPath := filepath.Join(wrongPath, SessionsDBName)
+	if _, err := os.Stat(wrongSessionsPath); err == nil {
+		t.Fatalf("sessions.db was created at wrong path %q instead of custom path %q", wrongSessionsPath, customPath)
+	}
+
+	// Property: Sessions DB is functional at the custom path
+	ctx := context.Background()
+	sessCount, err := sessDB.Queries().CountSessions(ctx)
+	if err != nil {
+		t.Fatalf("Sessions DB at custom path is not functional: %v", err)
+	}
+	if sessCount != 0 {
+		t.Fatalf("Expected 0 sessions in fresh DB, got %d", sessCount)
+	}
+
+	// --- Property 2: OpenUserDB creates user .db files in the custom DataDirectory ---
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := OpenUserDB(userID)
+	if err != nil {
+		t.Fatalf("OpenUserDB failed with custom DataDirectory %q: %v", customPath, err)
+	}
+	if userDB == nil {
+		t.Fatal("OpenUserDB returned nil")
+	}
+
+	expectedUserDBPath := filepath.Join(customPath, userID+".db")
+	if _, err := os.Stat(expectedUserDBPath); os.IsNotExist(err) {
+		t.Fatalf("user DB not created at expected path %q", expectedUserDBPath)
+	}
+
+	// Property: user .db must NOT exist in the wrong directory
+	wrongUserDBPath := filepath.Join(wrongPath, userID+".db")
+	if _, err := os.Stat(wrongUserDBPath); err == nil {
+		t.Fatalf("user DB was created at wrong path %q instead of custom path %q", wrongUserDBPath, customPath)
+	}
+
+	// Property: User DB is functional at the custom path
+	noteCount, err := userDB.Queries().CountNotes(ctx)
+	if err != nil {
+		t.Fatalf("User DB at custom path is not functional: %v", err)
+	}
+	if noteCount != 0 {
+		t.Fatalf("Expected 0 notes in fresh DB, got %d", noteCount)
+	}
+
+	// --- Property 3: After ResetForTesting + re-set DataDirectory, DBs reopen at the same custom path ---
+	ResetForTesting()
+	DataDirectory = customPath
+
+	sessDB2, err := OpenSessionsDB()
+	if err != nil {
+		t.Fatalf("OpenSessionsDB failed after reset: %v", err)
+	}
+	sessCount2, err := sessDB2.Queries().CountSessions(ctx)
+	if err != nil {
+		t.Fatalf("Sessions DB not functional after reset: %v", err)
+	}
+	if sessCount2 != 0 {
+		t.Fatalf("Expected 0 sessions after reset, got %d", sessCount2)
+	}
+
+	userDB2, err := OpenUserDB(userID)
+	if err != nil {
+		t.Fatalf("OpenUserDB failed after reset: %v", err)
+	}
+	noteCount2, err := userDB2.Queries().CountNotes(ctx)
+	if err != nil {
+		t.Fatalf("User DB not functional after reset: %v", err)
+	}
+	if noteCount2 != 0 {
+		t.Fatalf("Expected 0 notes after reset, got %d", noteCount2)
+	}
+
+	// Cleanup: reset state and restore default DataDirectory
+	ResetForTesting()
+	DataDirectory = DefaultDataDirectory
+	os.RemoveAll(tmpBase)
+}
+
+func TestDataDirectory_Wiring_Properties(t *testing.T) {
+	rapid.Check(t, testDataDirectory_Wiring_Properties)
+}
+
+func FuzzDataDirectory_Wiring_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testDataDirectory_Wiring_Properties))
+}

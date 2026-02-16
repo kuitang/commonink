@@ -362,32 +362,37 @@ func TestShortURLWeb_FullFlow_Properties(t *testing.T) {
 		// Step 4: Access via short URL - GET /pub/{short_id}
 		shortResp, err := client.Get(ts.URL + "/pub/" + shortURLObj.ShortID)
 		if err != nil {
-			rt.Fatalf("Short URL redirect request failed: %v", err)
+			rt.Fatalf("Short URL request failed: %v", err)
 		}
+		shortBody, _ := io.ReadAll(shortResp.Body)
 		shortResp.Body.Close()
 
-		// Property 3: Short URL should redirect with 301
-		if shortResp.StatusCode != http.StatusMovedPermanently {
-			rt.Fatalf("Short URL should return 301, got %d", shortResp.StatusCode)
+		// Property 3: Short URL renders inline (200 with HTML)
+		if shortResp.StatusCode != http.StatusOK {
+			rt.Fatalf("Short URL should return 200 (inline render), got %d: %s", shortResp.StatusCode, string(shortBody))
 		}
 
-		// Property 4: Redirect location points to public note
-		redirectLocation := shortResp.Header.Get("Location")
-		if redirectLocation != fullPath {
-			rt.Fatalf("Redirect should go to %s, got %s", fullPath, redirectLocation)
+		// Property 4: Rendered page contains note content
+		if !strings.Contains(string(shortBody), "Public Note") {
+			rt.Fatal("Short URL page should contain note content")
 		}
 
-		// Step 5: Access the public note page - GET /public/{user_id}/{note_id}
+		// Step 5: Access the long URL - GET /public/{user_id}/{note_id}
 		publicResp, err := client.Get(ts.URL + fullPath)
 		if err != nil {
 			rt.Fatalf("Public note request failed: %v", err)
 		}
 		defer publicResp.Body.Close()
 
-		// Property 5: Public note page returns 200
-		if publicResp.StatusCode != http.StatusOK {
+		// Property 5: Long URL redirects to short URL (301)
+		if publicResp.StatusCode != http.StatusMovedPermanently {
 			body, _ := io.ReadAll(publicResp.Body)
-			rt.Fatalf("Public note should return 200, got %d: %s", publicResp.StatusCode, string(body))
+			rt.Fatalf("Long URL should redirect (301) to short URL, got %d: %s", publicResp.StatusCode, string(body))
+		}
+		redirectLocation := publicResp.Header.Get("Location")
+		expectedRedirect := "/pub/" + shortURLObj.ShortID
+		if redirectLocation != expectedRedirect {
+			rt.Fatalf("Long URL should redirect to %s, got %s", expectedRedirect, redirectLocation)
 		}
 
 		// Step 6: Unpublish via toggling again
@@ -451,8 +456,8 @@ func TestShortURLWeb_MultipleCycles_Properties(t *testing.T) {
 			}
 			shortResp.Body.Close()
 
-			if shortResp.StatusCode != http.StatusMovedPermanently {
-				rt.Fatalf("Cycle %d: short URL should return 301, got %d", cycle, shortResp.StatusCode)
+			if shortResp.StatusCode != http.StatusOK {
+				rt.Fatalf("Cycle %d: short URL should return 200 (inline render), got %d", cycle, shortResp.StatusCode)
 			}
 
 			// Unpublish
@@ -560,7 +565,7 @@ func TestShortURLWeb_PublicNoteAccessAnonymous_Properties(t *testing.T) {
 			rt.Fatalf("Short URL should exist: %v", err)
 		}
 
-		// Property 1: Anonymous user (no cookies) can access short URL
+		// Property 1: Anonymous user (no cookies) can access short URL (renders inline)
 		anonClient := &http.Client{
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -571,28 +576,28 @@ func TestShortURLWeb_PublicNoteAccessAnonymous_Properties(t *testing.T) {
 		if err != nil {
 			rt.Fatalf("Anonymous short URL request failed: %v", err)
 		}
-		anonResp.Body.Close()
+		defer anonResp.Body.Close()
 
-		if anonResp.StatusCode != http.StatusMovedPermanently {
-			rt.Fatalf("Anonymous short URL should return 301, got %d", anonResp.StatusCode)
+		if anonResp.StatusCode != http.StatusOK {
+			rt.Fatalf("Anonymous short URL should return 200 (inline render), got %d", anonResp.StatusCode)
 		}
 
-		// Property 2: Anonymous user can view the public note page
+		// Property 2: Short URL page contains HTML content
+		body, _ := io.ReadAll(anonResp.Body)
+		html := string(body)
+		if !strings.Contains(html, "<html") && !strings.Contains(html, "<HTML") {
+			rt.Fatal("Short URL page should return HTML content")
+		}
+
+		// Property 3: Long URL redirects to short URL
 		publicResp, err := anonClient.Get(ts.URL + fullPath)
 		if err != nil {
 			rt.Fatalf("Anonymous public note request failed: %v", err)
 		}
-		defer publicResp.Body.Close()
+		publicResp.Body.Close()
 
-		if publicResp.StatusCode != http.StatusOK {
-			rt.Fatalf("Anonymous public note should return 200, got %d", publicResp.StatusCode)
-		}
-
-		// Property 3: Public note page contains HTML
-		body, _ := io.ReadAll(publicResp.Body)
-		html := string(body)
-		if !strings.Contains(html, "<html") && !strings.Contains(html, "<HTML") {
-			rt.Fatal("Public note page should return HTML content")
+		if publicResp.StatusCode != http.StatusMovedPermanently {
+			rt.Fatalf("Long URL should redirect (301) to short URL, got %d", publicResp.StatusCode)
 		}
 	})
 }
@@ -775,22 +780,21 @@ func TestShortURLWeb_MultipleNotesIndependent_Properties(t *testing.T) {
 			seen[n.shortID] = true
 		}
 
-		// Property 2: Each short URL resolves to its own note
+		// Property 2: Each short URL renders inline (200)
 		for _, n := range publishedNotes {
 			resp, err := client.Get(ts.URL + "/pub/" + n.shortID)
 			if err != nil {
 				rt.Fatalf("Short URL %s request failed: %v", n.shortID, err)
 			}
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
-			if resp.StatusCode != http.StatusMovedPermanently {
-				rt.Fatalf("Short URL %s should return 301, got %d", n.shortID, resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				rt.Fatalf("Short URL %s should return 200 (inline render), got %d", n.shortID, resp.StatusCode)
 			}
 
-			expectedPath := fmt.Sprintf("/public/%s/%s", userID, n.id)
-			location := resp.Header.Get("Location")
-			if location != expectedPath {
-				rt.Fatalf("Short URL %s should redirect to %s, got %s", n.shortID, expectedPath, location)
+			if !strings.Contains(string(body), "Public Note") {
+				rt.Fatalf("Short URL %s page should contain note content", n.shortID)
 			}
 		}
 
@@ -807,11 +811,11 @@ func TestShortURLWeb_MultipleNotesIndependent_Properties(t *testing.T) {
 				rt.Fatalf("Unpublished note's short URL should return 404, got %d", resp0.StatusCode)
 			}
 
-			// Second note's short URL should still work
+			// Second note's short URL should still work (200 inline render)
 			resp1, _ := client.Get(ts.URL + "/pub/" + publishedNotes[1].shortID)
 			resp1.Body.Close()
-			if resp1.StatusCode != http.StatusMovedPermanently {
-				rt.Fatalf("Other note's short URL should still return 301, got %d", resp1.StatusCode)
+			if resp1.StatusCode != http.StatusOK {
+				rt.Fatalf("Other note's short URL should still return 200, got %d", resp1.StatusCode)
 			}
 		}
 	})

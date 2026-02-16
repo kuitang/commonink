@@ -152,7 +152,7 @@ func startServer(t *testing.T) (*serverFixture, func()) {
 	cmd.Dir = dataDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("LISTEN_ADDR=:%d", port),
-		fmt.Sprintf("DATA_DIR=%s", dataDir),
+		fmt.Sprintf("DATABASE_PATH=%s", dataDir),
 		fmt.Sprintf("BASE_URL=http://localhost:%d", port),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
 	)

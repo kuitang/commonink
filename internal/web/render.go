@@ -85,6 +85,26 @@ func (r *Renderer) RenderError(w http.ResponseWriter, code int, message string) 
 	http.Error(w, fmt.Sprintf("Error %d: %s", code, message), code)
 }
 
+// RenderPublic executes the named template with the given data using the minimal
+// public base template (base_public.html) instead of the full app chrome.
+func (r *Renderer) RenderPublic(w http.ResponseWriter, templateName string, data interface{}) error {
+	publicKey := "public:" + templateName
+	r.mu.RLock()
+	tmpl, ok := r.templates[publicKey]
+	r.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("public template %q not found", templateName)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.ExecuteTemplate(w, "base_public", data); err != nil {
+		return fmt.Errorf("failed to execute public template %q: %w", templateName, err)
+	}
+
+	return nil
+}
+
 // parseTemplates parses the base template and all page templates.
 func (r *Renderer) parseTemplates(templatesDir string) error {
 	// Use os.Root to safely scope file access to the templates directory
@@ -106,20 +126,32 @@ func (r *Renderer) parseTemplates(templatesDir string) error {
 		return fmt.Errorf("failed to read base template: %w", err)
 	}
 
+	// Parse base_public.html for minimal-chrome public pages
+	basePublicFile, err := root.Open("base_public.html")
+	if err != nil {
+		return fmt.Errorf("failed to open base_public template: %w", err)
+	}
+	basePublicContent, err := io.ReadAll(basePublicFile)
+	basePublicFile.Close()
+	if err != nil {
+		return fmt.Errorf("failed to read base_public template: %w", err)
+	}
+
 	// Walk through subdirectories to find page templates
 	absTemplatesDir, err := filepath.Abs(templatesDir)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path of templates dir: %w", err)
 	}
 	basePath := filepath.Join(absTemplatesDir, "base.html")
+	basePublicPath := filepath.Join(absTemplatesDir, "base_public.html")
 
 	err = filepath.WalkDir(absTemplatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip directories and the base template itself
-		if d.IsDir() || path == basePath {
+		// Skip directories and the base templates
+		if d.IsDir() || path == basePath || path == basePublicPath {
 			return nil
 		}
 
@@ -145,7 +177,7 @@ func (r *Renderer) parseTemplates(templatesDir string) error {
 			return fmt.Errorf("failed to read template %s: %w", relPath, err)
 		}
 
-		// Create a new template with the function map
+		// Create a new template with the function map (standard base)
 		tmpl := template.New("base").Funcs(r.funcMap)
 
 		// Parse the base template first
@@ -160,9 +192,21 @@ func (r *Renderer) parseTemplates(templatesDir string) error {
 			return fmt.Errorf("failed to parse template %s: %w", relPath, err)
 		}
 
-		// Store the combined template
+		// Also create a public variant with base_public.html
+		publicTmpl := template.New("base_public").Funcs(r.funcMap)
+		publicTmpl, err = publicTmpl.Parse(string(basePublicContent))
+		if err != nil {
+			return fmt.Errorf("failed to parse base_public template for %s: %w", relPath, err)
+		}
+		publicTmpl, err = publicTmpl.Parse(string(pageContent))
+		if err != nil {
+			return fmt.Errorf("failed to parse public template %s: %w", relPath, err)
+		}
+
+		// Store both template variants
 		r.mu.Lock()
 		r.templates[relPath] = tmpl
+		r.templates["public:"+relPath] = publicTmpl
 		r.mu.Unlock()
 
 		return nil

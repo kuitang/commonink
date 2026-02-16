@@ -94,8 +94,8 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
-	// Initialize mock OIDC client (not used directly in browser tests but needed for completeness)
-	_ = auth.NewMockOIDCClient()
+	// Initialize local mock OIDC provider (serves consent page at /auth/mock-oidc/authorize)
+	var localMockOIDC *auth.LocalMockOIDCProvider
 
 	// Initialize public notes service
 	publicNotes := notes.NewPublicNoteService(s3Client)
@@ -140,8 +140,10 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 
 	// Register web UI routes (GET pages) and auth handler routes (POST form actions)
 	webHandler.RegisterRoutes(mux, authMiddleware)
-	authHandler := auth.NewHandler(auth.NewMockOIDCClient(), userService, sessionService)
+	localMockOIDC = auth.NewLocalMockOIDCProvider("PLACEHOLDER")
+	authHandler := auth.NewHandler(localMockOIDC, userService, sessionService)
 	authHandler.RegisterRoutes(mux)
+	localMockOIDC.RegisterRoutes(mux)
 
 	// Rate limiting middleware
 	getUserID := func(r *http.Request) string {
@@ -159,6 +161,7 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 
 	// Create final test server
 	server = httptest.NewServer(mux)
+	localMockOIDC.SetBaseURL(server.URL)
 
 	env := &authTestEnv{
 		server:       server,
@@ -1170,6 +1173,149 @@ func TestBrowser_Auth_LoginPageLoads(t *testing.T) {
 	count, err = googleBtn.Count()
 	if err != nil || count == 0 {
 		t.Error("Google sign-in button not found")
+	}
+}
+
+// =============================================================================
+// Google OIDC (Mock) Browser Tests
+// =============================================================================
+
+func TestBrowser_Auth_GoogleOIDC_FullFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	_, err := page.Goto(env.baseURL + "/login")
+	if err != nil {
+		t.Fatalf("Failed to navigate to login page: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Page did not load: %v", err)
+	}
+
+	// Click "Sign in with Google" button
+	googleBtn := page.Locator("form[action='/auth/google'] button[type='submit']")
+	err = googleBtn.Click()
+	if err != nil {
+		t.Fatalf("Failed to click Google sign-in button: %v", err)
+	}
+
+	// Should land on the mock OIDC consent page
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Mock OIDC page did not load: %v", err)
+	}
+
+	heading := page.Locator("h1")
+	headingText, err := heading.TextContent()
+	if err != nil || headingText != "Mock Google Sign-In" {
+		t.Fatalf("Expected mock OIDC consent page, got heading: %q", headingText)
+	}
+
+	emailInput := page.Locator("input[name='email']")
+	err = emailInput.Fill("oidc-browser@example.com")
+	if err != nil {
+		t.Fatalf("Failed to fill email: %v", err)
+	}
+
+	submitBtn := page.Locator("button[type='submit']")
+	err = submitBtn.Click()
+	if err != nil {
+		t.Fatalf("Failed to click submit: %v", err)
+	}
+
+	// Should redirect through callback and land on app
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Post-OIDC page did not load: %v", err)
+	}
+
+	currentURL := page.URL()
+	if strings.Contains(currentURL, "/login") || strings.Contains(currentURL, "/auth/mock-oidc") {
+		t.Fatalf("Expected to be redirected away from login after OIDC, but URL is: %s", currentURL)
+	}
+}
+
+func TestBrowser_Auth_GoogleOIDC_ReturnTo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	_, err := page.Goto(env.baseURL + "/login?return_to=/notes")
+	if err != nil {
+		t.Fatalf("Failed to navigate to login page: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Page did not load: %v", err)
+	}
+
+	googleBtn := page.Locator("form[action='/auth/google'] button[type='submit']")
+	err = googleBtn.Click()
+	if err != nil {
+		t.Fatalf("Failed to click Google sign-in button: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Mock OIDC page did not load: %v", err)
+	}
+
+	emailInput := page.Locator("input[name='email']")
+	err = emailInput.Fill("oidc-return@example.com")
+	if err != nil {
+		t.Fatalf("Failed to fill email: %v", err)
+	}
+
+	submitBtn := page.Locator("button[type='submit']")
+	err = submitBtn.Click()
+	if err != nil {
+		t.Fatalf("Failed to click submit: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Post-OIDC page did not load: %v", err)
+	}
+
+	currentURL := page.URL()
+	if !strings.HasSuffix(currentURL, "/notes") {
+		t.Fatalf("Expected to be redirected to /notes, but URL is: %s", currentURL)
 	}
 }
 

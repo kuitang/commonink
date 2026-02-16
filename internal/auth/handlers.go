@@ -66,10 +66,23 @@ func (h *Handler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    state,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secureCookies,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600, // 10 minutes
 	})
+
+	// Preserve return_to through the OIDC redirect flow
+	if returnTo := r.FormValue("return_to"); isValidReturnTo(returnTo) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "oauth_return_to",
+			Value:    returnTo,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   secureCookies,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   600, // 10 minutes
+		})
+	}
 
 	// Redirect to OIDC provider
 	authURL := h.oidcClient.GetAuthURL(state)
@@ -140,8 +153,20 @@ func (h *Handler) HandleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// Set session cookie
 	SetCookie(w, sessionID)
 
-	// Redirect to home or dashboard
-	http.Redirect(w, r, "/", http.StatusFound)
+	// Check for return_to cookie set during HandleGoogleLogin
+	redirectTo := "/"
+	if returnToCookie, err := r.Cookie("oauth_return_to"); err == nil && isValidReturnTo(returnToCookie.Value) {
+		redirectTo = returnToCookie.Value
+		// Clear the cookie
+		http.SetCookie(w, &http.Cookie{
+			Name:   "oauth_return_to",
+			Value:  "",
+			Path:   "/",
+			MaxAge: -1,
+		})
+	}
+
+	http.Redirect(w, r, redirectTo, http.StatusFound)
 }
 
 // MagicLinkRequest is the request body for magic link requests.

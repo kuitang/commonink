@@ -1050,11 +1050,231 @@ func TestOIDC_MissingCode(t *testing.T) {
 		"Missing code should return 400")
 }
 
+// TestOIDC_ReturnTo_Propagation tests that return_to is preserved through the OIDC flow
+func TestOIDC_ReturnTo_Propagation(t *testing.T) {
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+
+	ts.queueUser("return-to-sub", "returnto@example.com", "ReturnTo User", true)
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	client := ts.Client()
+	client.Jar = jar
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	form := url.Values{"return_to": {"/notes"}}
+	resp, err := client.PostForm(ts.URL+"/auth/google", form)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+
+	authURL := resp.Header.Get("Location")
+	require.NotEmpty(t, authURL)
+
+	returnToCookieFound := false
+	for _, c := range resp.Cookies() {
+		if c.Name == "oauth_return_to" && c.Value == "/notes" {
+			returnToCookieFound = true
+			break
+		}
+	}
+	require.True(t, returnToCookieFound, "oauth_return_to cookie should be set")
+
+	oidcClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	oidcResp, err := oidcClient.Get(authURL)
+	require.NoError(t, err)
+	oidcResp.Body.Close()
+	require.Equal(t, http.StatusFound, oidcResp.StatusCode)
+
+	callbackURL := oidcResp.Header.Get("Location")
+	parsedCallback, err := url.Parse(callbackURL)
+	require.NoError(t, err)
+
+	fullCallbackURL := ts.URL + "/auth/google/callback?" + parsedCallback.RawQuery
+	callbackResp, err := client.Get(fullCallbackURL)
+	require.NoError(t, err)
+	defer callbackResp.Body.Close()
+
+	require.Equal(t, http.StatusFound, callbackResp.StatusCode)
+
+	location := callbackResp.Header.Get("Location")
+	require.Equal(t, "/notes", location, "Should redirect to return_to URL, not /")
+
+	for _, c := range callbackResp.Cookies() {
+		if c.Name == "oauth_return_to" {
+			require.Equal(t, -1, c.MaxAge, "oauth_return_to cookie should be cleared")
+			break
+		}
+	}
+}
+
+// =============================================================================
+// LOCAL MOCK OIDC PROVIDER TESTS
+// =============================================================================
+
+type localMockOIDCTestServer struct {
+	*httptest.Server
+	sessionsDB     *db.SessionsDB
+	userService    *auth.UserService
+	sessionService *auth.SessionService
+	emailService   *email.MockEmailService
+	mockOIDC       *auth.LocalMockOIDCProvider
+	tempDir        string
+}
+
+func setupLocalMockOIDCTestServer(t testing.TB) *localMockOIDCTestServer {
+	t.Helper()
+	oidcTestMutex.Lock()
+
+	tempDir := t.TempDir()
+	db.ResetForTesting()
+	db.DataDirectory = tempDir
+
+	sessionsDB, err := db.OpenSessionsDB()
+	if err != nil {
+		panic("Failed to open sessions DB: " + err.Error())
+	}
+
+	masterKey := make([]byte, 32)
+	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
+	emailService := email.NewMockEmailService()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+
+	mockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
+
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	sessionService := auth.NewSessionService(sessionsDB)
+
+	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
+	authHandler.RegisterRoutes(mux)
+	mockOIDC.RegisterRoutes(mux)
+
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("home"))
+	})
+
+	return &localMockOIDCTestServer{
+		Server:         server,
+		sessionsDB:     sessionsDB,
+		userService:    userService,
+		sessionService: sessionService,
+		emailService:   emailService,
+		mockOIDC:       mockOIDC,
+		tempDir:        tempDir,
+	}
+}
+
+func (ts *localMockOIDCTestServer) cleanup() {
+	ts.Server.Close()
+	db.ResetForTesting()
+	oidcTestMutex.Unlock()
+}
+
+func TestLocalMockOIDC_FullFlow(t *testing.T) {
+	ts := setupLocalMockOIDCTestServer(t)
+	defer ts.cleanup()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	client := &http.Client{Jar: jar}
+
+	auth.SetSecureCookies(false)
+	defer auth.SetSecureCookies(true)
+
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Post(ts.URL+"/auth/google", "", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+
+	authURL := resp.Header.Get("Location")
+	require.Contains(t, authURL, "/auth/mock-oidc/authorize")
+
+	parsedAuth, err := url.Parse(authURL)
+	require.NoError(t, err)
+	state := parsedAuth.Query().Get("state")
+	require.NotEmpty(t, state)
+
+	consentResp, err := client.Get(authURL)
+	require.NoError(t, err)
+	defer consentResp.Body.Close()
+	require.Equal(t, http.StatusOK, consentResp.StatusCode)
+	body, _ := io.ReadAll(consentResp.Body)
+	require.Contains(t, string(body), "Mock Google Sign-In")
+
+	form := url.Values{"state": {state}, "email": {"mockuser@example.com"}}
+	consentPostResp, err := client.PostForm(ts.URL+"/auth/mock-oidc/authorize", form)
+	require.NoError(t, err)
+	consentPostResp.Body.Close()
+	require.Equal(t, http.StatusFound, consentPostResp.StatusCode)
+
+	callbackURL := consentPostResp.Header.Get("Location")
+	require.Contains(t, callbackURL, "/auth/google/callback")
+
+	callbackResp, err := client.Get(callbackURL)
+	require.NoError(t, err)
+	defer callbackResp.Body.Close()
+	require.Equal(t, http.StatusFound, callbackResp.StatusCode)
+
+	sessionFound := false
+	for _, c := range callbackResp.Cookies() {
+		if c.Name == "session_id" && c.Value != "" {
+			sessionFound = true
+			break
+		}
+	}
+	require.True(t, sessionFound, "Session cookie should be set after mock OIDC login")
+}
+
+func TestLocalMockOIDC_InvalidCode(t *testing.T) {
+	ts := setupLocalMockOIDCTestServer(t)
+	defer ts.cleanup()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	client := &http.Client{Jar: jar}
+	auth.SetSecureCookies(false)
+	defer auth.SetSecureCookies(true)
+
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Get(ts.URL + "/auth/google")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	stateValue := ""
+	for _, c := range resp.Cookies() {
+		if c.Name == "oauth_state" {
+			stateValue = c.Value
+			break
+		}
+	}
+
+	fakeCallbackURL := fmt.Sprintf("%s/auth/google/callback?code=fakecode123&state=%s",
+		ts.URL, url.QueryEscape(stateValue))
+	callbackResp, err := client.Get(fakeCallbackURL)
+	require.NoError(t, err)
+	defer callbackResp.Body.Close()
+
+	require.NotEqual(t, http.StatusFound, callbackResp.StatusCode)
+}
+
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
-// generateRandomState generates a random state string for CSRF protection
 func generateRandomState() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -1063,7 +1283,6 @@ func generateRandomState() (string, error) {
 	return base64.URLEncoding.EncodeToString(bytes), nil
 }
 
-// errIsAny checks if err matches any of the target errors
 func errIsAny(err error, targets ...error) bool {
 	for _, target := range targets {
 		if errors.Is(err, target) {

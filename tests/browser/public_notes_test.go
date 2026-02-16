@@ -514,10 +514,16 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
 
-	// Navigate to the short URL - should redirect to /public/{user_id}/{note_id}
+	// Navigate to the short URL - renders inline at /pub/
 	_, err = anonPage.Goto(shareURL)
 	if err != nil {
 		t.Fatalf("failed to navigate to share URL: %v", err)
+	}
+
+	// URL should stay at /pub/ (no redirect to /public/)
+	finalURL := anonPage.URL()
+	if !strings.Contains(finalURL, "/pub/") {
+		t.Fatalf("expected URL to stay at /pub/..., got: %s", finalURL)
 	}
 
 	// Verify note title is visible
@@ -538,6 +544,26 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 	}
 	if !isVisible {
 		t.Error("Public Note badge should be visible")
+	}
+
+	// Verify minimal chrome: wordmark present, no full nav/footer
+	wordmark := anonPage.Locator("header a:has-text('common.ink')")
+	wordmarkVisible, err := wordmark.IsVisible()
+	if err != nil {
+		t.Fatalf("failed to check wordmark: %v", err)
+	}
+	if !wordmarkVisible {
+		t.Error("public note page should show 'common.ink' wordmark")
+	}
+
+	navCount, _ := anonPage.Locator("nav").Count()
+	if navCount > 0 {
+		t.Error("public note page should NOT have a <nav> element")
+	}
+
+	footerCount, _ := anonPage.Locator("footer").Count()
+	if footerCount > 0 {
+		t.Error("public note page should NOT have a <footer> element")
 	}
 }
 
@@ -956,19 +982,19 @@ func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
 
-	// The short URL should redirect to /public/{user_id}/{note_id}
+	// The short URL renders inline (no redirect to /public/)
 	_, err = anonPage.Goto(shareURL)
 	if err != nil {
 		t.Fatalf("failed to navigate to short URL: %v", err)
 	}
 
-	// After redirect, URL should be the public note path
+	// URL should stay at /pub/... (no redirect)
 	finalURL := anonPage.URL()
-	if !strings.Contains(finalURL, "/public/") {
-		t.Fatalf("short URL should redirect to /public/... path, got: %s", finalURL)
+	if !strings.Contains(finalURL, "/pub/") {
+		t.Fatalf("short URL should render inline at /pub/..., got: %s", finalURL)
 	}
-	if !strings.Contains(finalURL, userID) {
-		t.Fatalf("redirected URL should contain user ID, got: %s", finalURL)
+	if strings.Contains(finalURL, "/public/") {
+		t.Fatalf("short URL should NOT redirect to /public/..., got: %s", finalURL)
 	}
 
 	// Verify the page loads and shows the note
@@ -989,5 +1015,47 @@ func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 	}
 	if !isContentVisible {
 		t.Error("article content section should be visible")
+	}
+
+	// === Minimal chrome style assertions ===
+
+	// Verify: NO full nav bar (the app nav has desktop nav links like "Notes", "API Keys")
+	fullNav := anonPage.Locator("nav")
+	fullNavCount, err := fullNav.Count()
+	if err != nil {
+		t.Fatalf("failed to count nav elements: %v", err)
+	}
+	if fullNavCount > 0 {
+		t.Error("public note page should NOT have a <nav> element (minimal chrome)")
+	}
+
+	// Verify: minimal header has "common.ink" wordmark link
+	wordmark := anonPage.Locator("header a:has-text('common.ink')")
+	wordmarkVisible, err := wordmark.IsVisible()
+	if err != nil {
+		t.Fatalf("failed to check wordmark: %v", err)
+	}
+	if !wordmarkVisible {
+		t.Error("public note page should show 'common.ink' wordmark in header")
+	}
+
+	// Verify: NO app footer (the full footer has "About", "Privacy", "Terms" links)
+	footer := anonPage.Locator("footer")
+	footerCount, err := footer.Count()
+	if err != nil {
+		t.Fatalf("failed to count footer elements: %v", err)
+	}
+	if footerCount > 0 {
+		t.Error("public note page should NOT have a <footer> element (minimal chrome)")
+	}
+
+	// Verify: "Get Started Free" CTA is present (article-level CTA, not app footer)
+	ctaLink := anonPage.Locator("a:has-text('Get Started Free')")
+	ctaVisible, err := ctaLink.IsVisible()
+	if err != nil {
+		t.Fatalf("failed to check CTA: %v", err)
+	}
+	if !ctaVisible {
+		t.Error("public note page should show 'Get Started Free' CTA")
 	}
 }

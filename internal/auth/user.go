@@ -9,8 +9,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
-	"time"
+	stdtime "time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/argon2"
@@ -32,29 +33,32 @@ var (
 	ErrEmailNotVerified   = errors.New("email not verified")
 )
 
-// Argon2id parameters (OWASP recommendations)
+// Argon2id parameters (OWASP second recommendation: m=19456, t=2, p=1)
+// Reduced from 64 MiB to ~19 MiB to avoid OOM on 256 MB Fly.io VMs.
+// Parameters are embedded in each hash string, so existing 64 MiB hashes
+// still verify correctly — only new hashes use these lighter params.
 const (
-	argon2Time    = 1
-	argon2Memory  = 64 * 1024 // 64 MiB
-	argon2Threads = 4
+	argon2Time    = 2
+	argon2Memory  = 19 * 1024 // ~19 MiB (OWASP lighter alternative)
+	argon2Threads = 1
 	argon2KeyLen  = 32
 	argon2SaltLen = 16
 )
 
 // Token expiry
 const (
-	MagicTokenExpiry = 15 * time.Minute
+	MagicTokenExpiry = 15 * stdtime.Minute
 )
 
 // Clock abstracts time for testability.
 type Clock interface {
-	Now() time.Time
+	Now() stdtime.Time
 }
 
-// realClock implements Clock using the real system time.
+// realClock implements Clock using the real system stdtime.
 type realClock struct{}
 
-func (realClock) Now() time.Time { return time.Now() }
+func (realClock) Now() stdtime.Time { return stdtime.Now() }
 
 // User represents a user account.
 type User struct {
@@ -62,7 +66,7 @@ type User struct {
 	Email     string
 	Name      string
 	GoogleSub string // Google OIDC subject ID if linked
-	CreatedAt time.Time
+	CreatedAt stdtime.Time
 }
 
 // UserService handles user management operations.
@@ -94,19 +98,24 @@ func (s *UserService) SetClock(c Clock) {
 // Returns ErrAccountExists if an account record already exists in the user DB.
 // Handles orphaned DEKs (DEK exists but no account record) by creating the account.
 func (s *UserService) RegisterWithPassword(ctx context.Context, emailAddr, password string) (*User, error) {
+	regStart := stdtime.Now()
 	userID := generateUserID(emailAddr)
 
 	// Get or create DEK (idempotent — safe even if DEK already exists)
+	dekStart := stdtime.Now()
 	dek, err := s.keyManager.GetOrCreateUserDEK(userID)
 	if err != nil {
 		return nil, fmt.Errorf("get or create user DEK: %w", err)
 	}
+	log.Printf("[REGISTER] GetOrCreateUserDEK took %s", stdtime.Since(dekStart))
 
 	// Open user DB
+	dbStart := stdtime.Now()
 	userDB, err := db.OpenUserDBWithDEK(userID, dek)
 	if err != nil {
 		return nil, fmt.Errorf("open user DB: %w", err)
 	}
+	log.Printf("[REGISTER] OpenUserDBWithDEK took %s", stdtime.Since(dbStart))
 
 	// Check if account record actually exists (not just DEK)
 	_, err = userDB.Queries().GetAccountByEmail(ctx, emailAddr)
@@ -136,6 +145,7 @@ func (s *UserService) RegisterWithPassword(ctx context.Context, emailAddr, passw
 		return nil, fmt.Errorf("create account: %w", err)
 	}
 
+	log.Printf("[REGISTER] Total RegisterWithPassword took %s", stdtime.Since(regStart))
 	return &User{
 		ID:        userID,
 		Email:     emailAddr,
@@ -146,9 +156,11 @@ func (s *UserService) RegisterWithPassword(ctx context.Context, emailAddr, passw
 // VerifyLogin verifies email/password credentials for an existing account.
 // Returns ErrInvalidCredentials if user doesn't exist or password is wrong.
 func (s *UserService) VerifyLogin(ctx context.Context, emailAddr, password string) (*User, error) {
+	loginStart := stdtime.Now()
 	userID := generateUserID(emailAddr)
 
 	// Check if user exists (has a DEK)
+	dekStart := stdtime.Now()
 	dek, err := s.keyManager.GetUserDEK(userID)
 	if err != nil {
 		if errors.Is(err, crypto.ErrUserKeyNotFound) {
@@ -156,12 +168,15 @@ func (s *UserService) VerifyLogin(ctx context.Context, emailAddr, password strin
 		}
 		return nil, fmt.Errorf("get user DEK: %w", err)
 	}
+	log.Printf("[LOGIN] GetUserDEK took %s", stdtime.Since(dekStart))
 
 	// Open user DB
+	dbStart := stdtime.Now()
 	userDB, err := db.OpenUserDBWithDEK(userID, dek)
 	if err != nil {
 		return nil, fmt.Errorf("open user DB: %w", err)
 	}
+	log.Printf("[LOGIN] OpenUserDBWithDEK took %s", stdtime.Since(dbStart))
 
 	// Get account by email
 	account, err := userDB.Queries().GetAccountByEmail(ctx, emailAddr)
@@ -182,10 +197,11 @@ func (s *UserService) VerifyLogin(ctx context.Context, emailAddr, password strin
 		return nil, ErrInvalidCredentials
 	}
 
+	log.Printf("[LOGIN] Total VerifyLogin took %s", stdtime.Since(loginStart))
 	return &User{
 		ID:        userID,
 		Email:     emailAddr,
-		CreatedAt: time.Unix(account.CreatedAt, 0),
+		CreatedAt: stdtime.Unix(account.CreatedAt, 0),
 	}, nil
 }
 
@@ -212,7 +228,7 @@ func (s *UserService) FindOrCreateByProvider(ctx context.Context, emailAddr stri
 		return &User{
 			ID:        userID,
 			Email:     emailAddr,
-			CreatedAt: time.Unix(account.CreatedAt, 0),
+			CreatedAt: stdtime.Unix(account.CreatedAt, 0),
 		}, nil
 	}
 
@@ -324,7 +340,7 @@ func (s *UserService) VerifyMagicToken(ctx context.Context, token string) (*User
 	return &User{
 		ID:        magicToken.UserID.String,
 		Email:     magicToken.Email,
-		CreatedAt: time.Unix(magicToken.CreatedAt, 0),
+		CreatedAt: stdtime.Unix(magicToken.CreatedAt, 0),
 	}, nil
 }
 
@@ -345,7 +361,9 @@ func HashPassword(password string) (string, error) {
 	}
 
 	// Hash password
+	start := stdtime.Now()
 	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	log.Printf("[ARGON2] HashPassword: m=%d KiB, t=%d, p=%d, took %s", argon2Memory, argon2Time, argon2Threads, stdtime.Since(start))
 
 	// Encode as: $argon2id$v=19$m=65536,t=1,p=4$<salt>$<hash>
 	encodedSalt := base64.RawStdEncoding.EncodeToString(salt)
@@ -402,7 +420,9 @@ func VerifyPassword(password, encodedHash string) bool {
 	}
 
 	// Compute hash of provided password
+	start := stdtime.Now()
 	computedHash := argon2.IDKey([]byte(password), saltBytes, time, memory, threads, uint32(hashLen))
+	log.Printf("[ARGON2] VerifyPassword: m=%d KiB, t=%d, p=%d, took %s", memory, time, threads, stdtime.Since(start))
 
 	// Constant-time comparison
 	return subtle.ConstantTimeCompare(hashBytes, computedHash) == 1
