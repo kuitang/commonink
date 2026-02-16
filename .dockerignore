@@ -1,0 +1,10 @@
+.git
+bin/
+data/
+test-results/
+*.fail
+internal/db/testdata/
+tests/e2e/testdata/
+coverage.out
+coverage.html
+secrets.sh

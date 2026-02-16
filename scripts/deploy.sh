@@ -14,25 +14,26 @@ echo "=== commonink Fly.io Deploy ==="
 echo ""
 echo "Required secrets (set via 'fly secrets set KEY=VALUE'):"
 echo "  MASTER_KEY           - Database encryption master key (64 hex chars)"
+echo "  OAUTH_HMAC_SECRET    - OAuth HMAC secret (64+ hex chars)"
+echo "  OAUTH_SIGNING_KEY    - OAuth Ed25519 signing key seed (64 hex chars)"
 echo "  GOOGLE_CLIENT_ID     - Google OAuth client ID"
 echo "  GOOGLE_CLIENT_SECRET - Google OAuth client secret"
 echo "  RESEND_API_KEY       - Resend email API key"
-echo "  RESEND_FROM_EMAIL    - Sender email address for Resend"
-echo "  S3_ENDPOINT          - S3/Tigris endpoint URL"
-echo "  S3_ACCESS_KEY_ID     - S3/Tigris access key"
-echo "  S3_SECRET_ACCESS_KEY - S3/Tigris secret key"
 echo ""
-echo "Optional secrets:"
-echo "  OAUTH_HMAC_SECRET    - OAuth HMAC secret (64+ hex chars, auto-generated if missing)"
-echo "  OAUTH_SIGNING_KEY    - OAuth Ed25519 signing key seed (64 hex chars, auto-generated if missing)"
-echo "  BASE_URL             - Public URL (default: https://commonink.fly.dev)"
+echo "Auto-set by Tigris (fly storage create):"
+echo "  AWS_ACCESS_KEY_ID    - Tigris access key"
+echo "  AWS_SECRET_ACCESS_KEY - Tigris secret key"
+echo "  AWS_ENDPOINT_URL_S3  - Tigris endpoint URL"
+echo "  BUCKET_NAME          - Tigris bucket name"
 echo ""
-echo "NOTE: In production, NO mock flags are used. All services must have real credentials."
+echo "Optional:"
+echo "  BASE_URL             - Public URL (default: https://common.ink)"
+echo "  RESEND_FROM_EMAIL    - Sender email (default: noreply@common.ink)"
 echo ""
 
-# Check that secrets are configured
+# Check that required secrets are configured
 MISSING=0
-for SECRET in MASTER_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET RESEND_API_KEY RESEND_FROM_EMAIL S3_ENDPOINT S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+for SECRET in MASTER_KEY OAUTH_HMAC_SECRET OAUTH_SIGNING_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET RESEND_API_KEY; do
     if ! flyctl secrets list 2>/dev/null | grep -q "$SECRET"; then
         echo "WARNING: Secret $SECRET may not be set."
         MISSING=1

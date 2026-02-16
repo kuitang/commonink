@@ -51,13 +51,13 @@ type Config struct {
 	OAuthHMACSecret string // 64 hex characters (32 bytes)
 	OAuthSigningKey string // 64 hex characters (ed25519 seed)
 
-	// S3/Tigris Storage
-	S3Endpoint        string
-	S3Region          string
-	S3AccessKeyID     string
-	S3SecretAccessKey string
-	S3Bucket          string
-	S3PublicURL       string
+	// S3/Tigris Storage (uses AWS_ env vars, set automatically by `fly storage create`)
+	AWSEndpointS3      string // AWS_ENDPOINT_URL_S3
+	AWSRegion          string // AWS_REGION
+	AWSAccessKeyID     string // AWS_ACCESS_KEY_ID
+	AWSSecretAccessKey string // AWS_SECRET_ACCESS_KEY
+	AWSBucketName      string // BUCKET_NAME
+	AWSPublicURL       string // S3_PUBLIC_URL (custom, not set by Tigris)
 }
 
 // ValidationError represents a configuration validation error with multiple issues.
@@ -141,13 +141,13 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	cfg.OAuthHMACSecret = os.Getenv("OAUTH_HMAC_SECRET")
 	cfg.OAuthSigningKey = os.Getenv("OAUTH_SIGNING_KEY")
 
-	// S3/Tigris Storage
-	cfg.S3Endpoint = os.Getenv("S3_ENDPOINT")
-	cfg.S3Region = getEnvOrDefault("S3_REGION", "auto")
-	cfg.S3AccessKeyID = os.Getenv("S3_ACCESS_KEY_ID")
-	cfg.S3SecretAccessKey = os.Getenv("S3_SECRET_ACCESS_KEY")
-	cfg.S3Bucket = getEnvOrDefault("S3_BUCKET", "remote-notes")
-	cfg.S3PublicURL = os.Getenv("S3_PUBLIC_URL")
+	// S3/Tigris Storage (AWS_ env vars set automatically by `fly storage create`)
+	cfg.AWSEndpointS3 = os.Getenv("AWS_ENDPOINT_URL_S3")
+	cfg.AWSRegion = getEnvOrDefault("AWS_REGION", "auto")
+	cfg.AWSAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+	cfg.AWSSecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	cfg.AWSBucketName = getEnvOrDefault("BUCKET_NAME", "commonink-public")
+	cfg.AWSPublicURL = os.Getenv("S3_PUBLIC_URL")
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -179,16 +179,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// S3: require S3 credentials unless --no-s3
+	// S3/Tigris: require AWS credentials unless --no-s3
 	if !c.NoS3 {
-		if c.S3Endpoint == "" {
-			errs = append(errs, "S3_ENDPOINT is required (set env var or use --no-s3)")
+		if c.AWSEndpointS3 == "" {
+			errs = append(errs, "AWS_ENDPOINT_URL_S3 is required (set env var or use --no-s3)")
 		}
-		if c.S3AccessKeyID == "" {
-			errs = append(errs, "S3_ACCESS_KEY_ID is required (set env var or use --no-s3)")
+		if c.AWSAccessKeyID == "" {
+			errs = append(errs, "AWS_ACCESS_KEY_ID is required (set env var or use --no-s3)")
 		}
-		if c.S3SecretAccessKey == "" {
-			errs = append(errs, "S3_SECRET_ACCESS_KEY is required (set env var or use --no-s3)")
+		if c.AWSSecretAccessKey == "" {
+			errs = append(errs, "AWS_SECRET_ACCESS_KEY is required (set env var or use --no-s3)")
 		}
 	}
 
@@ -267,7 +267,7 @@ func (c *Config) PrintStartupSummary() {
 	if c.NoS3 {
 		fmt.Fprintln(os.Stderr, "  Storage: Mock S3 (--no-s3)")
 	} else {
-		fmt.Fprintf(os.Stderr, "  Storage: Tigris S3 (real, endpoint: %s)\n", c.S3Endpoint)
+		fmt.Fprintf(os.Stderr, "  Storage: Tigris S3 (real, endpoint: %s)\n", c.AWSEndpointS3)
 	}
 
 	// Master key

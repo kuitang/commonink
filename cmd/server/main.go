@@ -45,7 +45,7 @@ const (
 	ShutdownTimeout = 30 * time.Second
 
 	// DefaultBucketName is the default S3 bucket for mock storage
-	DefaultBucketName = "remote-notes"
+	DefaultBucketName = "commonink-public"
 )
 
 // =============================================================================
@@ -86,6 +86,9 @@ func main() {
 
 	// Step 3: Print startup summary
 	cfg.PrintStartupSummary()
+
+	// Wire DatabasePath to db package before any DB operations
+	db.DataDirectory = cfg.DatabasePath
 
 	masterKey, err := hex.DecodeString(cfg.MasterKey)
 	if err != nil || len(masterKey) != 32 {
@@ -134,9 +137,11 @@ func main() {
 	}
 
 	var oidcClient auth.OIDCClient
+	var localMockOIDC *auth.LocalMockOIDCProvider
 	if cfg.NoOIDC {
-		oidcClient = auth.NewMockOIDCClient()
-		log.Println("Using mock OIDC client (--no-oidc)")
+		localMockOIDC = auth.NewLocalMockOIDCProvider(cfg.BaseURL)
+		oidcClient = localMockOIDC
+		log.Println("Using local mock OIDC provider (--no-oidc)")
 	} else {
 		googleRedirectURL := cfg.GoogleRedirectURL
 		if googleRedirectURL == "" {
@@ -257,6 +262,10 @@ func main() {
 
 	// Register auth API routes (no auth required for these)
 	authHandler.RegisterRoutes(mux)
+	if localMockOIDC != nil {
+		localMockOIDC.RegisterRoutes(mux)
+		log.Println("Local mock OIDC routes registered at /auth/mock-oidc/*")
+	}
 	log.Println("Auth API routes registered at /auth/*")
 
 	// Rate limiting middleware - extracts user ID and paid status from request
@@ -464,7 +473,7 @@ func createMockS3Client(cfg *config.Config) (*s3client.Client, func()) {
 		o.UsePathStyle = true // Required for gofakes3
 	})
 
-	bucketName := cfg.S3Bucket
+	bucketName := cfg.AWSBucketName
 	if bucketName == "" {
 		bucketName = DefaultBucketName
 	}
@@ -491,12 +500,12 @@ func createRealS3Client(cfg *config.Config) *s3client.Client {
 	ctx := context.Background()
 
 	s3Cfg := s3client.Config{
-		Endpoint:        cfg.S3Endpoint,
-		Region:          cfg.S3Region,
-		AccessKeyID:     cfg.S3AccessKeyID,
-		SecretAccessKey: cfg.S3SecretAccessKey,
-		BucketName:      cfg.S3Bucket,
-		PublicURL:       cfg.S3PublicURL,
+		Endpoint:        cfg.AWSEndpointS3,
+		Region:          cfg.AWSRegion,
+		AccessKeyID:     cfg.AWSAccessKeyID,
+		SecretAccessKey: cfg.AWSSecretAccessKey,
+		BucketName:      cfg.AWSBucketName,
+		PublicURL:       cfg.AWSPublicURL,
 		UsePathStyle:    false, // Tigris uses virtual-hosted style
 	}
 
