@@ -79,7 +79,7 @@ func setupNotesCrudEnv(t *testing.T) *notesCrudEnv {
 	// Initialize services
 	emailService := email.NewMockEmailService()
 	sessionService := auth.NewSessionService(sessionsDB)
-	userService := auth.NewUserService(sessionsDB, emailService, "http://localhost:8080")
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, "http://localhost:8080")
 	consentService := auth.NewConsentService(sessionsDB)
 
 	// Initialize mock S3
@@ -281,7 +281,7 @@ func (env *notesCrudEnv) loginCrudTestUser(t *testing.T, testEmail string) {
 	ctx := context.Background()
 
 	// Create/find user
-	user, err := env.userService.FindOrCreateByEmail(ctx, testEmail)
+	user, err := env.userService.FindOrCreateByProvider(ctx, testEmail)
 	if err != nil {
 		t.Fatalf("Failed to create test user: %v", err)
 	}

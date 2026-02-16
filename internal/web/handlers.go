@@ -172,12 +172,14 @@ type ConsentResultData struct {
 // LoginPageData contains data for the login page.
 type LoginPageData struct {
 	PageData
+	ReturnTo string
 }
 
 // RegisterPageData contains data for the register page.
 type RegisterPageData struct {
 	PageData
-	Email string
+	Email    string
+	ReturnTo string
 }
 
 // MagicSentData contains data for the magic link sent page.
@@ -218,6 +220,7 @@ func (h *WebHandler) HandleLoginPage(w http.ResponseWriter, r *http.Request) {
 		PageData: PageData{
 			Title: "Sign In",
 		},
+		ReturnTo: r.URL.Query().Get("return_to"),
 	}
 
 	// Check for error in query params
@@ -225,96 +228,21 @@ func (h *WebHandler) HandleLoginPage(w http.ResponseWriter, r *http.Request) {
 		data.Error = errMsg
 	}
 
+	// Check for success messages
+	if success := r.URL.Query().Get("success"); success != "" {
+		data.FlashMessage = success
+		data.FlashType = "success"
+	}
+
+	// Check for password reset requested
+	if r.URL.Query().Get("reset") == "requested" {
+		data.FlashMessage = "If an account exists with that email, we've sent a password reset link. Check your inbox."
+		data.FlashType = "success"
+	}
+
 	if err := h.renderer.Render(w, "auth/login.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
-}
-
-// HandleLogin handles POST /auth/login - processes password login form.
-func (h *WebHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/login?error=Invalid+form+data", http.StatusFound)
-		return
-	}
-
-	email := r.FormValue("email")
-	password := r.FormValue("password")
-
-	if email == "" || password == "" {
-		http.Redirect(w, r, "/login?error=Email+and+password+are+required", http.StatusFound)
-		return
-	}
-
-	// Find or create user (in production, would verify password)
-	user, err := h.authService.FindOrCreateByEmail(r.Context(), email)
-	if err != nil {
-		http.Redirect(w, r, "/login?error=Invalid+credentials", http.StatusFound)
-		return
-	}
-
-	// Create session
-	sessionID, err := h.sessionService.Create(r.Context(), user.ID)
-	if err != nil {
-		http.Redirect(w, r, "/login?error=Failed+to+create+session", http.StatusFound)
-		return
-	}
-
-	auth.SetCookie(w, sessionID)
-	http.Redirect(w, r, "/notes", http.StatusFound)
-}
-
-// HandleMagicLinkRequest handles POST /auth/magic - sends magic link.
-func (h *WebHandler) HandleMagicLinkRequest(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/login?error=Invalid+form+data", http.StatusFound)
-		return
-	}
-
-	email := r.FormValue("email")
-	if email == "" {
-		http.Redirect(w, r, "/login?error=Email+is+required", http.StatusFound)
-		return
-	}
-
-	// Send magic link (always succeed to prevent email enumeration)
-	_ = h.authService.SendMagicLink(r.Context(), email)
-
-	// Render magic link sent page
-	data := MagicSentData{
-		PageData: PageData{
-			Title: "Check Your Email",
-		},
-		Email: email,
-	}
-
-	if err := h.renderer.Render(w, "auth/magic_sent.html", data); err != nil {
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
-}
-
-// HandleMagicLinkVerify handles GET /auth/magic/verify - verifies magic link token.
-func (h *WebHandler) HandleMagicLinkVerify(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		h.renderAuthError(w, "invalid_token", "Missing token", "The magic link is invalid or has expired.")
-		return
-	}
-
-	user, err := h.authService.VerifyMagicToken(r.Context(), token)
-	if err != nil {
-		h.renderAuthError(w, "invalid_token", "Invalid or expired token", "The magic link is invalid or has expired. Please request a new one.")
-		return
-	}
-
-	// Create session
-	sessionID, err := h.sessionService.Create(r.Context(), user.ID)
-	if err != nil {
-		h.renderAuthError(w, "session_error", "Failed to create session", "Please try logging in again.")
-		return
-	}
-
-	auth.SetCookie(w, sessionID)
-	http.Redirect(w, r, "/notes", http.StatusFound)
 }
 
 // HandleRegisterPage handles GET /register - shows registration page.
@@ -323,6 +251,7 @@ func (h *WebHandler) HandleRegisterPage(w http.ResponseWriter, r *http.Request) 
 		PageData: PageData{
 			Title: "Create Account",
 		},
+		ReturnTo: r.URL.Query().Get("return_to"),
 	}
 
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
@@ -332,57 +261,6 @@ func (h *WebHandler) HandleRegisterPage(w http.ResponseWriter, r *http.Request) 
 	if err := h.renderer.Render(w, "auth/register.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
-}
-
-// HandleRegister handles POST /auth/register - processes registration form.
-func (h *WebHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/register?error=Invalid+form+data", http.StatusFound)
-		return
-	}
-
-	email := r.FormValue("email")
-	password := r.FormValue("password")
-	confirmPassword := r.FormValue("confirm_password")
-
-	if email == "" || password == "" {
-		http.Redirect(w, r, "/register?error=Email+and+password+are+required", http.StatusFound)
-		return
-	}
-
-	if password != confirmPassword {
-		http.Redirect(w, r, "/register?error=Passwords+do+not+match", http.StatusFound)
-		return
-	}
-
-	if err := auth.ValidatePasswordStrength(password); err != nil {
-		http.Redirect(w, r, "/register?error="+err.Error(), http.StatusFound)
-		return
-	}
-
-	// Find or create user
-	user, err := h.authService.FindOrCreateByEmail(r.Context(), email)
-	if err != nil {
-		http.Redirect(w, r, "/register?error=Failed+to+create+account", http.StatusFound)
-		return
-	}
-
-	// Hash password (in production, would store this)
-	_, err = auth.HashPassword(password)
-	if err != nil {
-		http.Redirect(w, r, "/register?error=Failed+to+create+account", http.StatusFound)
-		return
-	}
-
-	// Create session
-	sessionID, err := h.sessionService.Create(r.Context(), user.ID)
-	if err != nil {
-		http.Redirect(w, r, "/register?error=Failed+to+create+session", http.StatusFound)
-		return
-	}
-
-	auth.SetCookie(w, sessionID)
-	http.Redirect(w, r, "/notes", http.StatusFound)
 }
 
 // HandleGoogleLogin handles GET /auth/google - initiates Google OAuth.
@@ -425,36 +303,6 @@ func (h *WebHandler) HandlePasswordResetPage(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-// HandlePasswordReset handles POST /auth/password-reset - sends reset email.
-func (h *WebHandler) HandlePasswordReset(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/password-reset?error=Invalid+form+data", http.StatusFound)
-		return
-	}
-
-	email := r.FormValue("email")
-	if email == "" {
-		http.Redirect(w, r, "/password-reset?error=Email+is+required", http.StatusFound)
-		return
-	}
-
-	// Send reset email (always succeed to prevent enumeration)
-	_ = h.authService.SendPasswordReset(r.Context(), email)
-
-	// Render success page
-	data := PasswordResetData{
-		PageData: PageData{
-			Title: "Reset Password",
-		},
-		Email:   email,
-		Success: "If that email exists, a reset link has been sent.",
-	}
-
-	if err := h.renderer.Render(w, "auth/password_reset.html", data); err != nil {
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
-}
-
 // HandlePasswordResetConfirmPage handles GET /auth/password-reset-confirm - shows new password form.
 func (h *WebHandler) HandlePasswordResetConfirmPage(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
@@ -477,44 +325,6 @@ func (h *WebHandler) HandlePasswordResetConfirmPage(w http.ResponseWriter, r *ht
 	if err := h.renderer.Render(w, "auth/password_reset_confirm.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
-}
-
-// HandlePasswordResetConfirm handles POST /auth/password-reset-confirm - processes new password.
-func (h *WebHandler) HandlePasswordResetConfirm(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		h.renderAuthError(w, "invalid_form", "Invalid form data", "Please try again.")
-		return
-	}
-
-	token := r.FormValue("token")
-	password := r.FormValue("password")
-	confirmPassword := r.FormValue("confirm_password")
-
-	if token == "" {
-		h.renderAuthError(w, "invalid_token", "Missing token", "The reset link is invalid.")
-		return
-	}
-
-	if password != confirmPassword {
-		http.Redirect(w, r, "/auth/password-reset-confirm?token="+token+"&error=Passwords+do+not+match", http.StatusFound)
-		return
-	}
-
-	if err := h.authService.ResetPassword(r.Context(), token, password); err != nil {
-		if err == auth.ErrWeakPassword {
-			http.Redirect(w, r, "/auth/password-reset-confirm?token="+token+"&error="+err.Error(), http.StatusFound)
-			return
-		}
-		if err == auth.ErrInvalidToken {
-			h.renderAuthError(w, "invalid_token", "Invalid or expired token", "Please request a new password reset.")
-			return
-		}
-		h.renderAuthError(w, "reset_error", "Failed to reset password", "Please try again.")
-		return
-	}
-
-	// Redirect to login with success message
-	http.Redirect(w, r, "/login?success=Password+reset+successful", http.StatusFound)
 }
 
 // HandleNotesList handles GET /notes - shows list of notes.
@@ -655,7 +465,7 @@ func (h *WebHandler) HandleViewNote(w http.ResponseWriter, r *http.Request) {
 	userID := auth.GetUserID(r.Context())
 	shareURL := ""
 	if note.IsPublic && h.publicNotes != nil {
-		shareURL = h.publicNotes.GetPublicURL(userID, note.ID)
+		shareURL = h.publicNotes.GetShortURL(r.Context(), userID, note.ID)
 	}
 
 	data := NoteViewData{

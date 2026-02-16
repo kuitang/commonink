@@ -41,7 +41,7 @@ import (
 
 const (
 	apiKeyTestBucketName = "apikey-test-bucket"
-	apiKeyTestMasterKey  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" // 64 hex chars = 32 bytes, low entropy for gitleaks
+	apiKeyTestMasterKey  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 64 hex chars = 32 bytes, deterministic test key
 )
 
 // apiKeyTestEnv holds all the components needed for API Key settings browser testing.
@@ -84,7 +84,7 @@ func setupAPIKeyTestEnv(t *testing.T) *apiKeyTestEnv {
 	// Initialize services
 	emailService := email.NewMockEmailService()
 	sessionService := auth.NewSessionService(sessionsDB)
-	userService := auth.NewUserService(sessionsDB, emailService, "http://localhost")
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, "http://localhost")
 	consentService := auth.NewConsentService(sessionsDB)
 
 	// Initialize mock S3
@@ -275,7 +275,7 @@ func (env *apiKeyTestEnv) loginAPIKeyTestUser(t *testing.T, testEmail, password 
 	ctx := context.Background()
 
 	// Create/find user
-	user, err := env.userService.FindOrCreateByEmail(ctx, testEmail)
+	user, err := env.userService.FindOrCreateByProvider(ctx, testEmail)
 	if err != nil {
 		t.Fatalf("Failed to create test user: %v", err)
 	}

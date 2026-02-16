@@ -48,7 +48,7 @@ func (h *webFormAPIKeyHelper) createUserWithPassword(t interface {
 	ctx := context.Background()
 
 	// Create user
-	user, err := h.ts.userService.FindOrCreateByEmail(ctx, email)
+	user, err := h.ts.userService.FindOrCreateByProvider(ctx, email)
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
 	}
@@ -1073,4 +1073,3 @@ func (ts *webFormServer) cleanupForRapid() {
 	}
 	webFormTestMutex.Unlock()
 }
-

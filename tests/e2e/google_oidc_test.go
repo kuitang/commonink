@@ -27,6 +27,7 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
@@ -186,8 +187,10 @@ func createMockOIDCTestServer(tempDir string) *mockOIDCTestServer {
 	}
 
 	// Create services
+	masterKey := make([]byte, 32)
+	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	emailService := email.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 
 	// Create auth handler with the mockoidc-backed client

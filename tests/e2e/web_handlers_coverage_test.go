@@ -41,7 +41,7 @@ import (
 // webFormAuthClient creates a user, session, and returns an authenticated HTTP client.
 func webFormAuthClient(ts *webFormServer, email string) (*http.Client, string) {
 	ctx := context.Background()
-	user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
+	user, _ := ts.userService.FindOrCreateByProvider(ctx, email)
 	sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 
 	jar, _ := cookiejar.New(nil)
@@ -594,7 +594,7 @@ func setupWebFormServerWithShortURL(t testing.TB) *webFormServer {
 	server := newTestServerFromMux(mux)
 
 	// Recreate user service with new URL
-	ts.userService = newUserServiceForTest(ts.sessionsDB, ts.emailService, server.URL)
+	ts.userService = newUserServiceForTest(ts.sessionsDB, ts.keyManager, ts.emailService, server.URL)
 
 	// Create web handler with shortURL service
 	webHandler := newWebHandlerForTest(renderer, ts.userService, ts.sessionService, ts.sessionsDB, shortURLSvc, server.URL)
@@ -829,7 +829,7 @@ func setupWebFormServerWithConsentDecision(t testing.TB) *webFormServer {
 	mux := http.NewServeMux()
 	server := newTestServerFromMux(mux)
 
-	ts.userService = newUserServiceForTest(ts.sessionsDB, ts.emailService, server.URL)
+	ts.userService = newUserServiceForTest(ts.sessionsDB, ts.keyManager, ts.emailService, server.URL)
 
 	webHandler := newWebHandlerForTest(renderer, ts.userService, ts.sessionService, ts.sessionsDB, nil, server.URL)
 
@@ -1003,9 +1003,9 @@ func TestWebHandler_PasswordResetConfirmMismatch_Properties(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		// Auth handler returns 400 for bad input
-		if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusFound {
-			rt.Fatalf("Expected 400 or 302 for mismatched passwords, got %d", resp.StatusCode)
+		// Auth handler redirects (303 SeeOther) for mismatched passwords
+		if resp.StatusCode != http.StatusSeeOther && resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusFound {
+			rt.Fatalf("Expected 303, 400, or 302 for mismatched passwords, got %d", resp.StatusCode)
 		}
 	})
 }
@@ -1318,8 +1318,8 @@ func newTestServerFromMux(mux *http.ServeMux) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func newUserServiceForTest(sessionsDB *db.SessionsDB, emailService *emailpkg.MockEmailService, baseURL string) *auth.UserService {
-	return auth.NewUserService(sessionsDB, emailService, baseURL)
+func newUserServiceForTest(sessionsDB *db.SessionsDB, keyManager *crypto.KeyManager, emailService *emailpkg.MockEmailService, baseURL string) *auth.UserService {
+	return auth.NewUserService(sessionsDB, keyManager, emailService, baseURL)
 }
 
 func newWebHandlerForTest(renderer *web.Renderer, userService *auth.UserService, sessionService *auth.SessionService, sessionsDB *db.SessionsDB, shortURLSvc *shorturl.Service, baseURL string) *web.WebHandler {

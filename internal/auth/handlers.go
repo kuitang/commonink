@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // Handler provides HTTP handlers for authentication routes.
@@ -115,8 +118,8 @@ func (h *Handler) HandleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find or create user
-	user, err := h.userService.FindOrCreateByEmail(r.Context(), claims.Email)
+	// Find or create user (OIDC auto-creates)
+	user, err := h.userService.FindOrCreateByProvider(r.Context(), claims.Email)
 	if err != nil {
 		http.Error(w, "Failed to find or create user", http.StatusInternalServerError)
 		return
@@ -177,9 +180,16 @@ func (h *Handler) HandleMagicLinkVerify(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	user, err := h.userService.VerifyMagicToken(r.Context(), token)
+	tokenUser, err := h.userService.VerifyMagicToken(r.Context(), token)
 	if err != nil {
 		http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	// Ensure account exists (auto-creates with NULL password for magic link users)
+	user, err := h.userService.FindOrCreateByProvider(r.Context(), tokenUser.Email)
+	if err != nil {
+		http.Error(w, "Failed to create account", http.StatusInternalServerError)
 		return
 	}
 
@@ -212,6 +222,7 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	email := r.FormValue("email")
 	password := r.FormValue("password")
+	returnTo := r.FormValue("return_to")
 
 	if email == "" || password == "" {
 		http.Error(w, "Email and password are required", http.StatusBadRequest)
@@ -224,17 +235,14 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find or create user
-	user, err := h.userService.FindOrCreateByEmail(r.Context(), email)
+	// Register new user with password
+	user, err := h.userService.RegisterWithPassword(r.Context(), email, password)
 	if err != nil {
+		if errors.Is(err, ErrAccountExists) {
+			http.Redirect(w, r, "/login?error=Account+already+exists.+Please+sign+in.", http.StatusSeeOther)
+			return
+		}
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)
-		return
-	}
-
-	// Hash and store password (in full implementation)
-	_, err = HashPassword(password)
-	if err != nil {
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 		return
 	}
 
@@ -248,7 +256,11 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	// Set session cookie
 	SetCookie(w, sessionID)
 
-	// Redirect to notes page
+	// Redirect to return_to or notes page
+	if isValidReturnTo(returnTo) {
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/notes", http.StatusSeeOther)
 }
 
@@ -267,22 +279,23 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	email := r.FormValue("email")
 	password := r.FormValue("password")
-	_ = password // TODO: verify against stored hash
+	returnTo := r.FormValue("return_to")
 
 	if email == "" || password == "" {
 		http.Error(w, "Email and password are required", http.StatusBadRequest)
 		return
 	}
 
-	// Find user (in full implementation, would verify password)
-	user, err := h.userService.FindOrCreateByEmail(r.Context(), email)
+	// Verify credentials against stored hash
+	user, err := h.userService.VerifyLogin(r.Context(), email, password)
 	if err != nil {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		if errors.Is(err, ErrInvalidCredentials) {
+			http.Redirect(w, r, "/login?error=Invalid+email+or+password", http.StatusSeeOther)
+			return
+		}
+		http.Error(w, "Login failed", http.StatusInternalServerError)
 		return
 	}
-
-	// In full implementation: verify password against stored hash
-	// For now, we'll accept any password for testing with mocks
 
 	// Create session
 	sessionID, err := h.sessionService.Create(r.Context(), user.ID)
@@ -294,7 +307,11 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Set session cookie
 	SetCookie(w, sessionID)
 
-	// Redirect to notes page
+	// Redirect to return_to or notes page
+	if isValidReturnTo(returnTo) {
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/notes", http.StatusSeeOther)
 }
 
@@ -305,9 +322,12 @@ type PasswordResetRequest struct {
 
 // HandlePasswordResetRequest sends a password reset email.
 func (h *Handler) HandlePasswordResetRequest(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
+	// Support both URL-encoded and multipart form data (JS fetch sends multipart)
+	if err := r.ParseMultipartForm(32 << 10); err != nil {
+		if err2 := r.ParseForm(); err2 != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
 	}
 
 	email := r.FormValue("email")
@@ -337,20 +357,28 @@ func (h *Handler) HandlePasswordResetConfirm(w http.ResponseWriter, r *http.Requ
 	}
 
 	token := r.FormValue("token")
-	newPassword := r.FormValue("new_password")
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirm_password")
 
-	if token == "" || newPassword == "" {
+	if token == "" || password == "" {
 		http.Error(w, "Token and new password are required", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.userService.ResetPassword(r.Context(), token, newPassword); err != nil {
+	if password != confirmPassword {
+		q := url.Values{"token": {token}, "error": {"Passwords do not match"}}
+		http.Redirect(w, r, "/auth/password-reset-confirm?"+q.Encode(), http.StatusSeeOther)
+		return
+	}
+
+	if err := h.userService.ResetPassword(r.Context(), token, password); err != nil {
 		if err == ErrWeakPassword {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			q := url.Values{"token": {token}, "error": {err.Error()}}
+			http.Redirect(w, r, "/auth/password-reset-confirm?"+q.Encode(), http.StatusSeeOther)
 			return
 		}
 		if err == ErrInvalidToken {
-			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			http.Redirect(w, r, "/login?error=Reset+link+is+invalid+or+expired.+Please+request+a+new+one.", http.StatusSeeOther)
 			return
 		}
 		http.Error(w, "Failed to reset password", http.StatusInternalServerError)
@@ -358,7 +386,7 @@ func (h *Handler) HandlePasswordResetConfirm(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Redirect to login page with success message
-	http.Redirect(w, r, "/login?reset=success", http.StatusSeeOther)
+	http.Redirect(w, r, "/login?success=Password+reset+successfully.+Please+sign+in.", http.StatusSeeOther)
 }
 
 // HandleLogout logs out the current user.
@@ -414,4 +442,20 @@ func generateState() (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(bytes), nil
+}
+
+// isValidReturnTo checks if a return_to URL is a safe local path.
+// Prevents open redirect attacks by only allowing paths that start with /
+// and are not protocol-relative URLs.
+func isValidReturnTo(returnTo string) bool {
+	if returnTo == "" {
+		return false
+	}
+	if !strings.HasPrefix(returnTo, "/") {
+		return false
+	}
+	if strings.HasPrefix(returnTo, "//") {
+		return false
+	}
+	return true
 }

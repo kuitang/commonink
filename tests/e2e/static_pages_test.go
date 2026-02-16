@@ -88,7 +88,7 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	emailService := emailpkg.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -97,7 +97,7 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 		Issuer:     server.URL,
 		Resource:   server.URL,
 		HMACSecret: hmacSecret,
-		SigningKey:  signingKey,
+		SigningKey: signingKey,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create OAuth provider: %v", err)
@@ -125,7 +125,7 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 	server = httptest.NewServer(mux)
 
 	// Re-create userService with correct base URL
-	userService = auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 
 	// Mock S3
 	s3Backend := s3mem.New()
@@ -331,7 +331,7 @@ func TestRenderHelpers_MarkdownRendering(t *testing.T) {
 
 	// Create a user and session
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, "render-test@example.com")
+	user, err := ts.userService.FindOrCreateByProvider(ctx, "render-test@example.com")
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestRenderHelpers_FormatTimeAndTruncate(t *testing.T) {
 
 	// Create a user and session
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, "helpers-test@example.com")
+	user, err := ts.userService.FindOrCreateByProvider(ctx, "helpers-test@example.com")
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestRenderHelpers_FormatFloat(t *testing.T) {
 
 	// Create a user and session
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, "float-test@example.com")
+	user, err := ts.userService.FindOrCreateByProvider(ctx, "float-test@example.com")
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
 	}

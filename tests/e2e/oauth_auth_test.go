@@ -36,6 +36,7 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/internal/oauth"
@@ -125,10 +126,12 @@ func createOAuthTestServer(tempDir string) *oauthTestServer {
 	}
 
 	// Create services
+	masterKey := make([]byte, 32)
+	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	emailService := email.NewMockEmailService()
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 
 	// Find templates directory for renderer
 	templatesDir := findTemplatesDir()
@@ -710,7 +713,7 @@ func createTestUser(t testing.TB, ts *oauthTestServer, userEmail string) string 
 	t.Helper()
 
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, userEmail)
+	user, err := ts.userService.FindOrCreateByProvider(ctx, userEmail)
 	require.NoError(t, err, "Failed to create test user")
 
 	return user.ID
@@ -719,7 +722,7 @@ func createTestUser(t testing.TB, ts *oauthTestServer, userEmail string) string 
 // createTestUserRapid creates a user for rapid tests (panics on error)
 func createTestUserRapid(ts *oauthTestServer, userEmail string) string {
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, userEmail)
+	user, err := ts.userService.FindOrCreateByProvider(ctx, userEmail)
 	if err != nil {
 		panic("Failed to create test user: " + err.Error())
 	}
@@ -948,7 +951,7 @@ func handleTestLogin(w http.ResponseWriter, r *http.Request, userService *auth.U
 		return
 	}
 
-	user, err := userService.FindOrCreateByEmail(r.Context(), email)
+	user, err := userService.FindOrCreateByProvider(r.Context(), email)
 	if err != nil {
 		http.Error(w, "User error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1018,7 +1021,7 @@ func handleTestRegister(w http.ResponseWriter, r *http.Request, userService *aut
 		return
 	}
 
-	user, err := userService.FindOrCreateByEmail(r.Context(), email)
+	user, err := userService.FindOrCreateByProvider(r.Context(), email)
 	if err != nil {
 		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
@@ -1122,14 +1125,14 @@ func handleTestPasswordResetConfirm(w http.ResponseWriter, r *http.Request, user
 	}
 
 	token := r.FormValue("token")
-	newPassword := r.FormValue("new_password")
+	password := r.FormValue("password")
 
-	if token == "" || newPassword == "" {
+	if token == "" || password == "" {
 		http.Error(w, "Token and new password are required", http.StatusBadRequest)
 		return
 	}
 
-	if err := userService.ResetPassword(r.Context(), token, newPassword); err != nil {
+	if err := userService.ResetPassword(r.Context(), token, password); err != nil {
 		if err == auth.ErrWeakPassword {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

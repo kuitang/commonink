@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -125,7 +126,12 @@ func (h *Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate resource matches server's resource
-	if req.Resource != "" && req.Resource != h.provider.Resource() {
+	// Accept base URL with or without trailing slash, and /mcp suffix
+	serverResource := h.provider.Resource()
+	normalizedResource := strings.TrimRight(req.Resource, "/")
+	normalizedServer := strings.TrimRight(serverResource, "/")
+	if req.Resource != "" && normalizedResource != normalizedServer && normalizedResource != normalizedServer+"/mcp" {
+		log.Printf("[OAUTH] Resource mismatch: got %q, expected %q (normalized: %q vs %q)", req.Resource, serverResource, normalizedResource, normalizedServer)
 		h.redirectWithError(w, r, req.RedirectURI, req.State, "invalid_target", "resource parameter does not match server resource")
 		return
 	}

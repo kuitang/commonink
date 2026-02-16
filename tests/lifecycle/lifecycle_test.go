@@ -530,6 +530,7 @@ func TestLifecycle_PasswordReset_Properties(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		email := genValidEmail().Draw(rt, "email")
 		password := "TestPass123!"
+		newPassword := "NewSecure456!"
 		client := newClient(srv.baseURL)
 
 		// Register user first
@@ -557,6 +558,63 @@ func TestLifecycle_PasswordReset_Properties(t *testing.T) {
 		}
 		if !strings.Contains(link, "password-reset") {
 			rt.Fatalf("Link should contain password-reset: %s", link)
+		}
+
+		// Extract token from link and confirm reset
+		parsedLink, err := url.Parse(link)
+		if err != nil {
+			rt.Fatalf("Failed to parse reset link: %v", err)
+		}
+		token := parsedLink.Query().Get("token")
+		if token == "" {
+			rt.Fatalf("Reset link should contain token")
+		}
+
+		// Confirm password reset
+		confirmResp, err := client.PostForm(srv.baseURL+"/auth/password-reset-confirm", url.Values{
+			"token":            {token},
+			"password":         {newPassword},
+			"confirm_password": {newPassword},
+		})
+		if err != nil {
+			rt.Fatalf("Password reset confirm failed: %v", err)
+		}
+		confirmResp.Body.Close()
+
+		// Login with NEW password should succeed (303 to /notes)
+		freshClient := newClient(srv.baseURL)
+		newPwResp, err := freshClient.PostForm(srv.baseURL+"/auth/login", url.Values{
+			"email":    {email},
+			"password": {newPassword},
+		})
+		if err != nil {
+			rt.Fatalf("Login with new password failed: %v", err)
+		}
+		newPwResp.Body.Close()
+		if newPwResp.StatusCode != http.StatusSeeOther {
+			rt.Fatalf("Login with new password should 303, got %d", newPwResp.StatusCode)
+		}
+		newPwLoc := newPwResp.Header.Get("Location")
+		if !strings.Contains(newPwLoc, "/notes") {
+			rt.Fatalf("Login with new password should redirect to /notes, got: %s", newPwLoc)
+		}
+
+		// Login with OLD password should fail (303 to /login?error=...)
+		oldClient := newClient(srv.baseURL)
+		oldResp, err := oldClient.PostForm(srv.baseURL+"/auth/login", url.Values{
+			"email":    {email},
+			"password": {password},
+		})
+		if err != nil {
+			rt.Fatalf("Login with old password request failed: %v", err)
+		}
+		oldResp.Body.Close()
+		if oldResp.StatusCode != http.StatusSeeOther {
+			rt.Fatalf("Login with old password should redirect (303), got %d", oldResp.StatusCode)
+		}
+		oldLoc := oldResp.Header.Get("Location")
+		if !strings.Contains(oldLoc, "error") {
+			rt.Fatalf("Login with old password should redirect with error, got: %s", oldLoc)
 		}
 	})
 }

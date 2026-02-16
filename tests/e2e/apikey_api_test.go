@@ -111,17 +111,17 @@ func setupAPIKeyTestServerWithDir(tempDir string) *apiKeyTestServer {
 	// Ensure database is fully initialized by making a query
 	_, _ = sessionsDB.Queries().CountSessions(context.Background())
 
-	// Initialize services
-	emailSvc := email.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, emailSvc, "http://test.local")
-	sessionService := auth.NewSessionService(sessionsDB)
-
 	// Create a test master key and key manager
 	masterKey := make([]byte, 32)
 	for i := range masterKey {
 		masterKey[i] = byte(i)
 	}
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
+
+	// Initialize services
+	emailSvc := email.NewMockEmailService()
+	userService := auth.NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local")
+	sessionService := auth.NewSessionService(sessionsDB)
 
 	// Create API Key handler and middleware
 	apiKeyHandler := auth.NewAPIKeyHandler(userService)
@@ -187,7 +187,7 @@ func (s *apiKeyTestServer) createTestUserWithCachedPassword(t testHelper, emailA
 	}
 
 	// Create or find user
-	user, err := s.userService.FindOrCreateByEmail(ctx, emailAddr)
+	user, err := s.userService.FindOrCreateByProvider(ctx, emailAddr)
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
 	}

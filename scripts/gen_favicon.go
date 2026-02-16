@@ -31,7 +31,7 @@ func drawLineAA(img *image.RGBA, x0, y0, x1, y1 float64, c color.RGBA) {
 	// First endpoint
 	xEnd := math.Round(x0)
 	yEnd := y0 + gradient*(xEnd-x0)
-	xGap := 1 - (x0+0.5-math.Floor(x0+0.5))
+	xGap := 1 - (x0 + 0.5 - math.Floor(x0+0.5))
 	xPx1 := int(xEnd)
 	yPx1 := int(math.Floor(yEnd))
 	plotAA(img, xPx1, yPx1, (1-(yEnd-math.Floor(yEnd)))*xGap, c, steep)
@@ -225,19 +225,19 @@ func writeICO(w *bytes.Buffer, img *image.RGBA) {
 	pngData := pngBuf.Bytes()
 
 	// ICO header
-	binary.Write(w, binary.LittleEndian, uint16(0))    // reserved
-	binary.Write(w, binary.LittleEndian, uint16(1))    // ICO type
-	binary.Write(w, binary.LittleEndian, uint16(1))    // 1 image
+	binary.Write(w, binary.LittleEndian, uint16(0)) // reserved
+	binary.Write(w, binary.LittleEndian, uint16(1)) // ICO type
+	binary.Write(w, binary.LittleEndian, uint16(1)) // 1 image
 
 	// ICO directory entry
-	w.WriteByte(32)  // width
-	w.WriteByte(32)  // height
-	w.WriteByte(0)   // color palette
-	w.WriteByte(0)   // reserved
-	binary.Write(w, binary.LittleEndian, uint16(1))    // color planes
-	binary.Write(w, binary.LittleEndian, uint16(32))   // bits per pixel
+	w.WriteByte(32)                                            // width
+	w.WriteByte(32)                                            // height
+	w.WriteByte(0)                                             // color palette
+	w.WriteByte(0)                                             // reserved
+	binary.Write(w, binary.LittleEndian, uint16(1))            // color planes
+	binary.Write(w, binary.LittleEndian, uint16(32))           // bits per pixel
 	binary.Write(w, binary.LittleEndian, uint32(len(pngData))) // size
-	binary.Write(w, binary.LittleEndian, uint32(22))   // offset (6 header + 16 entry)
+	binary.Write(w, binary.LittleEndian, uint32(22))           // offset (6 header + 16 entry)
 
 	// PNG data
 	w.Write(pngData)

@@ -24,7 +24,7 @@ export S3_REGION := auto
 export S3_BUCKET := remote-notes
 export S3_PUBLIC_URL :=
 export LISTEN_ADDR := :8080
-export BASE_URL := http://localhost:8080
+export BASE_URL ?= http://localhost:8080
 
 # Deterministic test secrets (safe to commit - only used for local testing)
 # These propagate to all child processes (go test, subprocess servers) via os.Environ().

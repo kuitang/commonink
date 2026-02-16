@@ -112,7 +112,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 
 	// Initialize services
 	emailService := emailpkg.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -153,7 +153,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 	server = httptest.NewServer(mux)
 
 	// Update userService baseURL
-	userService = auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 
 	// Create mock S3 server and client
 	s3Server, mockS3Client := createMockS3Server()
@@ -710,8 +710,9 @@ func TestWebForm_PasswordReset_Properties(t *testing.T) {
 
 		// Property 4: POST /auth/password-reset-confirm with form data resets password
 		confirmForm := url.Values{
-			"token":        {token},
-			"new_password": {newPassword},
+			"token":            {token},
+			"password":         {newPassword},
+			"confirm_password": {newPassword},
 		}
 
 		confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", confirmForm)
@@ -728,8 +729,9 @@ func TestWebForm_PasswordReset_Properties(t *testing.T) {
 
 		// Property 5: Token should be consumed
 		confirmForm2 := url.Values{
-			"token":        {token},
-			"new_password": {"AnotherPassword789!"},
+			"token":            {token},
+			"password":         {"AnotherPassword789!"},
+			"confirm_password": {"AnotherPassword789!"},
 		}
 
 		reuse, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", confirmForm2)
@@ -763,7 +765,7 @@ func TestWebForm_NotesCRUD_Properties(t *testing.T) {
 
 		// Create user and get session
 		ctx := context.Background()
-		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
+		user, _ := ts.userService.FindOrCreateByProvider(ctx, email)
 		sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 
 		jar, _ := cookiejar.New(nil)
@@ -922,8 +924,8 @@ func TestWebForm_SessionIsolation_Properties(t *testing.T) {
 
 		// Create two users
 		ctx := context.Background()
-		user1, _ := ts.userService.FindOrCreateByEmail(ctx, email1)
-		user2, _ := ts.userService.FindOrCreateByEmail(ctx, email2)
+		user1, _ := ts.userService.FindOrCreateByProvider(ctx, email1)
+		user2, _ := ts.userService.FindOrCreateByProvider(ctx, email2)
 		session1, _ := ts.sessionService.Create(ctx, user1.ID)
 		session2, _ := ts.sessionService.Create(ctx, user2.ID)
 
@@ -1022,7 +1024,7 @@ func TestWebForm_Logout_Properties(t *testing.T) {
 		email := testutil.EmailGenerator().Draw(rt, "email")
 
 		ctx := context.Background()
-		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
+		user, _ := ts.userService.FindOrCreateByProvider(ctx, email)
 		sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 
 		jar, _ := cookiejar.New(nil)
@@ -1091,7 +1093,7 @@ func TestWebForm_EmptyStateAndPagination_Properties(t *testing.T) {
 		email := testutil.EmailGenerator().Draw(rt, "email")
 
 		ctx := context.Background()
-		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
+		user, _ := ts.userService.FindOrCreateByProvider(ctx, email)
 		sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 
 		jar, _ := cookiejar.New(nil)
@@ -1173,7 +1175,7 @@ func TestWebForm_PublicNotes_Properties(t *testing.T) {
 		noteContent := testutil.NoteContentGenerator().Draw(rt, "content")
 
 		ctx := context.Background()
-		user, _ := ts.userService.FindOrCreateByEmail(ctx, email)
+		user, _ := ts.userService.FindOrCreateByProvider(ctx, email)
 		sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 
 		jar, _ := cookiejar.New(nil)
@@ -1298,7 +1300,7 @@ func TestWebForm_ArbitraryInputs_Properties(t *testing.T) {
 		// Property 5: XSS characters in note content are escaped
 		ctx := context.Background()
 		xssEmail := testutil.EmailGenerator().Draw(rt, "xss_email")
-		user, _ := ts.userService.FindOrCreateByEmail(ctx, xssEmail)
+		user, _ := ts.userService.FindOrCreateByProvider(ctx, xssEmail)
 		sessionID, _ := ts.sessionService.Create(ctx, user.ID)
 
 		jar, _ := cookiejar.New(nil)

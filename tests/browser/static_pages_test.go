@@ -80,7 +80,7 @@ func setupStaticTestEnv(t *testing.T) (*staticTestEnv, func()) {
 	server := httptest.NewServer(mux)
 
 	// Initialize services
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 	publicNotes := notes.NewPublicNoteService(s3Client)

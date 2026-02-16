@@ -26,13 +26,14 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/playwright-community/playwright-go"
 )
 
 const (
 	publicNotesTestBucketName = "test-bucket-public-notes"
-	publicNotesTestMasterKey  = "test0000000000000000000000000000test0000000000000000000000000000" // 64 hex chars = 32 bytes, low entropy for gitleaks
+	publicNotesTestMasterKey  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 64 hex chars = 32 bytes, deterministic test key
 )
 
 // publicNotesTestServer encapsulates the test server and all its dependencies for public notes tests.
@@ -112,13 +113,6 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	}
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 
-	// Initialize services
-	emailService := email.NewMockEmailService()
-	sessionService := auth.NewSessionService(sessionsDB)
-	userService := auth.NewUserService(sessionsDB, emailService, "http://localhost")
-	consentService := auth.NewConsentService(sessionsDB)
-	publicNotes := notes.NewPublicNoteService(s3Client)
-
 	// Initialize template renderer
 	// Try relative path first, then absolute path
 	templatesDir := "./web/templates"
@@ -135,21 +129,26 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	}
 
 	// Initialize middleware
+	sessionService := auth.NewSessionService(sessionsDB)
 	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
 
-	// Initialize rate limiter (high limits for tests)
-	rateLimiter := ratelimit.NewRateLimiter(ratelimit.Config{
-		FreeRPS:         10000,
-		FreeBurst:       10000,
-		PaidRPS:         10000,
-		PaidBurst:       10000,
-		CleanupInterval: time.Hour,
-	})
-
-	// Create mux with all routes
+	// Create mux and server first to get the URL
 	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
 
-	// Create web handler
+	// Now create services that need server.URL
+	emailService := email.NewMockEmailService()
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	consentService := auth.NewConsentService(sessionsDB)
+
+	// Create short URL service
+	shortURLSvc := shorturl.NewService(sessionsDB.Queries())
+
+	// Create public notes service with short URL support
+	publicNotes := notes.NewPublicNoteService(s3Client).
+		WithShortURLService(shortURLSvc, server.URL)
+
+	// Create web handler with short URL service
 	webHandler := web.NewWebHandler(
 		renderer,
 		nil, // notesService created per-request
@@ -158,11 +157,11 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 		sessionService,
 		consentService,
 		s3Client,
-		nil, // shortURLSvc not needed for public notes tests
-		"",  // baseURL will be set after server starts
+		shortURLSvc,
+		server.URL,
 	)
 
-	// Register routes
+	// Register routes on mux (already used by server, but routes are additive)
 	webHandler.RegisterRoutes(mux, authMiddleware)
 
 	// Health check
@@ -172,6 +171,13 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	})
 
 	// Rate limit middleware for API routes
+	rateLimiter := ratelimit.NewRateLimiter(ratelimit.Config{
+		FreeRPS:         10000,
+		FreeBurst:       10000,
+		PaidRPS:         10000,
+		PaidBurst:       10000,
+		CleanupInterval: time.Hour,
+	})
 	getUserID := func(r *http.Request) string {
 		return auth.GetUserID(r.Context())
 	}
@@ -184,9 +190,6 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	notesHandler := &publicNotesAPIHandler{}
 	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.listNotes))))
 	mux.Handle("POST /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.createNote))))
-
-	// Create test server
-	server := httptest.NewServer(mux)
 
 	ts := &publicNotesTestServer{
 		server:         server,
@@ -221,7 +224,7 @@ func (h *publicNotesAPIHandler) createNote(w http.ResponseWriter, r *http.Reques
 func (ts *publicNotesTestServer) createTestUser(t *testing.T, email string) string {
 	t.Helper()
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, email)
+	user, err := ts.userService.FindOrCreateByProvider(ctx, email)
 	if err != nil {
 		t.Fatalf("failed to create test user: %v", err)
 	}
@@ -321,7 +324,7 @@ func TestBrowser_PublishNote(t *testing.T) {
 	}
 
 	// Submit the form
-	err = page.Locator("button[type='submit']:has-text('Create Note')").Click()
+	err = page.Locator("button[type='submit']:has-text('Create')").Click()
 	if err != nil {
 		t.Fatalf("failed to click submit: %v", err)
 	}
@@ -376,14 +379,26 @@ func TestBrowser_PublishNote(t *testing.T) {
 		t.Error("Public badge not visible after making note public")
 	}
 
-	// Verify share URL section appears
+	// Verify share URL section appears with a short URL
 	shareURLInput := page.Locator("input#share-url")
 	isShareVisible, err := shareURLInput.IsVisible()
 	if err != nil {
 		t.Fatalf("failed to check share URL visibility: %v", err)
 	}
 	if !isShareVisible {
-		t.Error("Share URL input not visible after making note public")
+		t.Fatal("Share URL input not visible after making note public")
+	}
+
+	// Regression: share URL must be a short URL (/pub/...), not an S3 or long public path
+	shareURL, err := shareURLInput.InputValue()
+	if err != nil {
+		t.Fatalf("failed to get share URL value: %v", err)
+	}
+	if !strings.Contains(shareURL, "/pub/") {
+		t.Fatalf("share URL must be a short URL (/pub/...), got: %s", shareURL)
+	}
+	if strings.Contains(shareURL, "/public/") {
+		t.Fatalf("share URL must NOT be a long public path, got: %s", shareURL)
 	}
 }
 
@@ -445,7 +460,7 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = authPage.Locator("button[type='submit']:has-text('Create Note')").Click()
+	err = authPage.Locator("button[type='submit']:has-text('Create')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit form: %v", err)
 	}
@@ -482,6 +497,11 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 		t.Fatal("share URL is empty")
 	}
 
+	// Regression: share URL must be a short URL
+	if !strings.Contains(shareURL, "/pub/") {
+		t.Fatalf("share URL must be a short URL (/pub/...), got: %s", shareURL)
+	}
+
 	// Now create a new browser context WITHOUT authentication (incognito-like)
 	anonContext, err := browser.NewContext()
 	if err != nil {
@@ -494,19 +514,10 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
 
-	// Navigate to the public note URL
-	// The share URL might be the S3 URL, but we need the web route
-	// Extract note ID from the current URL and construct public URL
-	currentURL := authPage.URL()
-	// URL format: /notes/{id}
-	parts := strings.Split(currentURL, "/")
-	noteID := parts[len(parts)-1]
-
-	publicURL := fmt.Sprintf("%s/public/%s/%s", ts.baseURL, userID, noteID)
-
-	_, err = anonPage.Goto(publicURL)
+	// Navigate to the short URL - should redirect to /public/{user_id}/{note_id}
+	_, err = anonPage.Goto(shareURL)
 	if err != nil {
-		t.Fatalf("failed to navigate to public URL: %v", err)
+		t.Fatalf("failed to navigate to share URL: %v", err)
 	}
 
 	// Verify note title is visible
@@ -515,8 +526,6 @@ func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
 		t.Fatalf("failed to get title: %v", err)
 	}
 
-	// The public_view template should show "Public Note" as title (from stub handler)
-	// or the actual note title if the handler is fully implemented
 	if titleText == "" {
 		t.Error("title should not be empty on public note page")
 	}
@@ -587,7 +596,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = page.Locator("button[type='submit']:has-text('Create Note')").Click()
+	err = page.Locator("button[type='submit']:has-text('Create')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit: %v", err)
 	}
@@ -598,11 +607,6 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to wait for URL: %v", err)
 	}
-
-	// Get note ID from URL
-	currentURL := page.URL()
-	parts := strings.Split(currentURL, "/")
-	noteID := parts[len(parts)-1]
 
 	// Make public
 	err = page.Locator("button:has-text('Make Public')").Click()
@@ -625,6 +629,19 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 	}
 	if !isPublic {
 		t.Fatal("note should be public")
+	}
+
+	// Capture the short URL while note is still public
+	shareURLInput := page.Locator("input#share-url")
+	shareURL, err := shareURLInput.InputValue()
+	if err != nil {
+		t.Fatalf("failed to get share URL: %v", err)
+	}
+	if shareURL == "" {
+		t.Fatal("share URL is empty while note is public")
+	}
+	if !strings.Contains(shareURL, "/pub/") {
+		t.Fatalf("share URL must be a short URL, got: %s", shareURL)
 	}
 
 	// Now click "Make Private"
@@ -651,8 +668,8 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 	}
 
 	// Verify share URL is no longer visible
-	shareURLInput := page.Locator("input#share-url")
-	isShareVisible, err := shareURLInput.IsVisible()
+	shareURLGone := page.Locator("input#share-url")
+	isShareVisible, err := shareURLGone.IsVisible()
 	if err != nil {
 		t.Fatalf("failed to check share URL: %v", err)
 	}
@@ -660,7 +677,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 		t.Error("share URL should not be visible after unpublishing")
 	}
 
-	// Try to access public URL (should not find the note content)
+	// Try to access the previously-working short URL (should 404 now)
 	anonContext, err := browser.NewContext()
 	if err != nil {
 		t.Fatalf("failed to create anon context: %v", err)
@@ -672,18 +689,14 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
 
-	publicURL := fmt.Sprintf("%s/public/%s/%s", ts.baseURL, userID, noteID)
-	resp, err := anonPage.Goto(publicURL)
+	resp, err := anonPage.Goto(shareURL)
 	if err != nil {
-		t.Fatalf("failed to navigate to public URL: %v", err)
+		t.Fatalf("failed to navigate to short URL: %v", err)
 	}
 
-	// The handler should still render the page (it's a stub that always renders)
-	// In a fully implemented version, this would return 404 or "not found"
-	// For now, we just verify the page loads
-	if resp.Status() == http.StatusNotFound {
-		// This is expected behavior when fully implemented
-		t.Log("correctly returned 404 for unpublished note")
+	// Short URL should no longer resolve after unpublishing
+	if resp.Status() != http.StatusNotFound {
+		t.Logf("short URL returned status %d after unpublishing (expected 404)", resp.Status())
 	}
 }
 
@@ -744,7 +757,7 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = authPage.Locator("button[type='submit']:has-text('Create Note')").Click()
+	err = authPage.Locator("button[type='submit']:has-text('Create')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit: %v", err)
 	}
@@ -755,11 +768,6 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to wait for URL: %v", err)
 	}
-
-	// Get note ID
-	currentURL := authPage.URL()
-	parts := strings.Split(currentURL, "/")
-	noteID := parts[len(parts)-1]
 
 	// Make public
 	err = authPage.Locator("button:has-text('Make Public')").Click()
@@ -774,7 +782,17 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 		t.Fatalf("failed to wait: %v", err)
 	}
 
-	// Navigate to public URL in anonymous context
+	// Get the short URL from share input
+	shareURLInput := authPage.Locator("input#share-url")
+	shareURL, err := shareURLInput.InputValue()
+	if err != nil {
+		t.Fatalf("failed to get share URL: %v", err)
+	}
+	if shareURL == "" {
+		t.Fatal("share URL is empty")
+	}
+
+	// Navigate to public URL via short URL in anonymous context
 	anonContext, err := browser.NewContext()
 	if err != nil {
 		t.Fatalf("failed to create anon context: %v", err)
@@ -786,10 +804,9 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
 
-	publicURL := fmt.Sprintf("%s/public/%s/%s", ts.baseURL, userID, noteID)
-	_, err = anonPage.Goto(publicURL)
+	_, err = anonPage.Goto(shareURL)
 	if err != nil {
-		t.Fatalf("failed to navigate to public URL: %v", err)
+		t.Fatalf("failed to navigate to share URL: %v", err)
 	}
 
 	// Check for og:title meta tag
@@ -822,8 +839,8 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 	}
 }
 
-// TestBrowser_ShareLinkWorks tests that copying and using the share link works.
-func TestBrowser_ShareLinkWorks(t *testing.T) {
+// TestBrowser_ShareLinkIsShortURL tests that the share link is a short URL (/pub/...) and is navigable.
+func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping browser test in short mode")
 	}
@@ -881,7 +898,7 @@ func TestBrowser_ShareLinkWorks(t *testing.T) {
 		t.Fatalf("failed to fill content: %v", err)
 	}
 
-	err = authPage.Locator("button[type='submit']:has-text('Create Note')").Click()
+	err = authPage.Locator("button[type='submit']:has-text('Create')").Click()
 	if err != nil {
 		t.Fatalf("failed to submit: %v", err)
 	}
@@ -919,7 +936,15 @@ func TestBrowser_ShareLinkWorks(t *testing.T) {
 
 	t.Logf("Share URL: %s", shareURL)
 
-	// Open share URL in new anonymous context
+	// Regression: share URL MUST be a short URL, not an S3 URL
+	if !strings.Contains(shareURL, "/pub/") {
+		t.Fatalf("share URL must be a short URL (/pub/...), got: %s", shareURL)
+	}
+	if strings.Contains(shareURL, "/public/") {
+		t.Fatalf("share URL must NOT be a long public path, got: %s", shareURL)
+	}
+
+	// Navigate to the short URL in an anonymous context
 	anonContext, err := browser.NewContext()
 	if err != nil {
 		t.Fatalf("failed to create anon context: %v", err)
@@ -931,28 +956,27 @@ func TestBrowser_ShareLinkWorks(t *testing.T) {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
 
-	// The share URL might point to S3 or to the web route
-	// Try the web route first (derived from current URL)
-	currentURL := authPage.URL()
-	parts := strings.Split(currentURL, "/")
-	noteID := parts[len(parts)-1]
-
-	webPublicURL := fmt.Sprintf("%s/public/%s/%s", ts.baseURL, userID, noteID)
-
-	_, err = anonPage.Goto(webPublicURL)
+	// The short URL should redirect to /public/{user_id}/{note_id}
+	_, err = anonPage.Goto(shareURL)
 	if err != nil {
-		t.Fatalf("failed to navigate to web public URL: %v", err)
+		t.Fatalf("failed to navigate to short URL: %v", err)
+	}
+
+	// After redirect, URL should be the public note path
+	finalURL := anonPage.URL()
+	if !strings.Contains(finalURL, "/public/") {
+		t.Fatalf("short URL should redirect to /public/... path, got: %s", finalURL)
+	}
+	if !strings.Contains(finalURL, userID) {
+		t.Fatalf("redirected URL should contain user ID, got: %s", finalURL)
 	}
 
 	// Verify the page loads and shows the note
-	// The public_view template should render with note info
 	titleElement := anonPage.Locator("h1")
 	titleText, err := titleElement.TextContent()
 	if err != nil {
 		t.Fatalf("failed to get title: %v", err)
 	}
-
-	// The title should contain some text (either the actual note title or "Public Note" from stub)
 	if titleText == "" {
 		t.Error("page title should not be empty")
 	}

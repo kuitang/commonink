@@ -1,4 +1,5 @@
 # CRITICAL Principles
+- You MUST use Makefile commands (`make build`, `make run-test`, `make test`, etc.) for ALL build/run/test operations. NEVER invoke `go build`, `go test`, or run the server binary directly — the Makefile handles goenv, CGO flags, secrets, and BASE_URL correctly.
 - In every task/subagent prompt, You MUST tell them to read the entire CLAUDE.md
 - EVERY TASK MUST USE OPUS 4.5.
 - Use parallel tasks, back ground tasks, everywhere. Defer implementation and research to them.
@@ -138,51 +139,80 @@ Already installed automatically. If needed:
 ./scripts/setup-hooks.sh
 ```
 
-## Building
+## Running Locally
 
-### Standard Build
+### Build & Run (all mocks, local only)
 ```bash
-go build -o bin/server ./cmd/server
+make run-test   # builds, runs on :8080 with mock OIDC + S3 + email
 ```
 
-### With SQLCipher (Requires CGO + gcc)
+### Build & Run (all mocks, with Tailscale Funnel for external clients)
 ```bash
-CGO_ENABLED=1 go build -o bin/server ./cmd/server
+# One-time: set up Tailscale Funnel (stable URL, survives restarts)
+sudo tailscale funnel --bg 8080
+# Stable URL: https://kui-vibes.tailfaeb4d.ts.net
+
+# Start server with Tailscale BASE_URL
+BASE_URL='https://kui-vibes.tailfaeb4d.ts.net' make run-test
 ```
 
-### Run Smoke Test
+### Build & Run (real services)
 ```bash
-./bin/server
+cp secrets.sh.example secrets.sh  # fill in real values
+make run                          # sources secrets.sh, uses real OIDC/S3/email
 ```
 
-### Run Test Server
+### Notes
+- Auth handlers use **form-encoded POST** (not JSON)
+- Login/register: `POST /auth/login` or `POST /auth/register` with `email=...&password=...`
+- Password: any password accepted in test mode (verification not yet implemented)
+- Sessions/OAuth state persist in SQLite (`data/sessions.db`), survive server restarts
+- User IDs are deterministic: `user-` + UUID5(DNS, email)
+
+### Manual MCP Testing (OAuth 2.1 full flow)
+With server running on :8080:
 ```bash
-START_SERVER=true ./bin/server
+# 1. Discovery
+curl -s http://localhost:8080/.well-known/oauth-protected-resource
+curl -s http://localhost:8080/.well-known/oauth-authorization-server
+
+# 2. DCR
+curl -s -X POST http://localhost:8080/oauth/register \
+  -H "Content-Type: application/json" \
+  -d '{"redirect_uris":["http://localhost:3000/callback"],"client_name":"Test","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}'
+# Returns client_id (public client, no secret)
+
+# 3. Register user + get session cookie
+curl -X POST http://localhost:8080/auth/register \
+  -d "email=test@example.com&password=TestPassword123!" -c cookies.txt
+
+# 4. Authorize (with PKCE) - renders consent page, sets oauth_auth_req cookie
+CODE_VERIFIER=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
+CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | openssl dgst -sha256 -binary | base64 -w 0 | tr '+/' '-_' | tr -d '=')
+STATE=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+curl -s -b cookies.txt -c auth_cookies.txt \
+  "http://localhost:8080/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=http://localhost:3000/callback&response_type=code&scope=notes:read+notes:write&state=${STATE}&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256" -o /dev/null
+
+# 5. Submit consent (decision=allow) - redirects with ?code=...
+curl -s -D - -o /dev/null -X POST http://localhost:8080/oauth/consent \
+  -b auth_cookies.txt -d "decision=allow"
+# Extract code from Location header
+
+# 6. Token exchange
+curl -s -X POST http://localhost:8080/oauth/token \
+  -d "grant_type=authorization_code&client_id=${CLIENT_ID}&code=${AUTH_CODE}&redirect_uri=http://localhost:3000/callback&code_verifier=${CODE_VERIFIER}"
+# Returns access_token (JWT), refresh_token
+
+# 7. MCP with token
+curl -s -X POST http://localhost:8080/mcp \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
 ```
 
-## Testing External Integrations
-
-### MCP Conformance Tests
-```bash
-# Run conformance tests (server must be running at localhost:8080)
-./scripts/mcp-conformance.sh
-```
-
-### OAuth 2.1 Conformance
-```bash
-# Run automated conformance tests (Docker required)
-./scripts/oauth-conformance-test.sh
-
-# Manual testing via OpenID suite (keep suite running)
-KEEP_RUNNING=true ./scripts/oauth-conformance-test.sh
-# Then open: https://localhost:8443
-```
-
-### Mock OIDC Provider (for Google Sign-In tests)
-```bash
-go get github.com/oauth2-proxy/mockoidc
-# See notes/testing-tools.md for usage examples
-```
+### MCP Tools Available
+`note_create`, `note_view`, `note_list`, `note_update`, `note_delete`, `note_search`
 
 ## Writing Tests
 
@@ -250,27 +280,30 @@ func TestToken_ExpiryRespected_Properties(t *testing.T) {
 }
 ```
 
-### Playwright Browser Test Template
+### Playwright Browser Test Guidelines
+
+Browser tests live in `tests/browser/` and are **excluded from `make test`** (run separately).
+
+**Selectors**: Always use specific, fast selectors — IDs, attributes, or roles. Avoid text-only selectors for waits.
 ```go
-// File: tests/browser/signup_flow_test.go
+// GOOD: specific selectors with short timeouts
+page.Locator("#magic-link-dialog").WaitFor(playwright.LocatorWaitForOptions{
+    State:   playwright.WaitForSelectorStateVisible,
+    Timeout: playwright.Float(5000), // 5s max
+})
+page.Locator("[role='status']")           // flash message banner
+page.Locator("#login-email")              // by ID
+page.Locator("input[name='email']")       // by attribute
+page.Locator("form[action='/auth/login']") // by form action
 
-func TestBrowser_SignupFlow(t *testing.T) {
-    // Deterministic scenario (NOT property-based)
-    pw, err := playwright.Run()
-    if err != nil {
-        t.Fatal(err)
-    }
-    defer pw.Stop()
-
-    browser, _ := pw.Chromium.Launch()
-    page, _ := browser.NewPage()
-
-    // Test flow
-    page.Goto("http://localhost:8080/login")
-    page.Click("button:has-text('Sign in with Google')")
-    // ... assertions ...
-}
+// BAD: vague selectors, long timeouts
+page.Locator("div.some-class")            // fragile CSS class
+page.WaitForTimeout(3000)                 // arbitrary sleep
 ```
+
+**Wait strategy**: Use `WaitForLoadState(DomContentLoaded)` for navigation, then `WaitFor(Visible, 5s)` on a specific element. Never use `NetworkIdle` unless you need all async requests to finish (e.g., after fetch()).
+
+**Test env**: Use `setupAuthTestEnv(t)` which creates httptest server with all routes (web + auth handlers). See `tests/browser/auth_flow_test.go`.
 
 ## Common Commands
 
@@ -348,19 +381,11 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 - Faster startup than real server
 
 ### MCP Transport (Streamable HTTP - MCP Spec 2025-03-26)
-- **Streamable HTTP** transport only (NOT SSE, NOT WebSocket)
-- Single endpoint `/mcp` handles:
-  - **POST**: Client sends JSON-RPC messages (requests, notifications, responses)
-  - **GET**: Server pushes messages to client (optional SSE stream)
-  - **DELETE**: Session termination (optional)
-- Session management via `Mcp-Session-Id` header
-- Test via HTTP POST to `/mcp` with proper Accept header:
-  ```bash
-  curl -X POST http://localhost:8080/mcp \
-    -H "Content-Type: application/json" \
-    -H "Accept: application/json, text/event-stream" \
-    -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
-  ```
+- **Streamable HTTP** transport, stateless mode (no initialize handshake)
+- Single endpoint `POST /mcp` - protected by OAuth 2.1 Bearer token, API Key, or session cookie
+- `JSONResponse: true` - returns `application/json` (not SSE)
+- Auth: `Authorization: Bearer <JWT>` or `Authorization: Bearer <API_KEY>`
+- 401 response includes `WWW-Authenticate: Bearer resource_metadata="..."` per RFC 6750
 - Reference: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
 
 ### Rate Limiting in Tests
@@ -423,8 +448,9 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 | Task | Command |
 |------|---------|
 | Build | `make build` |
-| Run (real services) | `make run` |
-| Run (all mocks) | `make run-test` |
+| Run (real services) | `make run` (requires secrets.sh) |
+| Run (all mocks) | `make run-test` (uses `--test` flag) |
+| Run (real email only) | `make run-email` (mock OIDC + S3) |
 | Run tests | `make test` |
 | Full tests + coverage | `make test-full` |
 | Fuzz | `make test-fuzz` |
@@ -432,7 +458,6 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 | Lint | `make vet` |
 | Clean | `make clean` |
 | Deploy | `make deploy` |
-| MCP test | `./scripts/mcp-conformance.sh` |
 | Show targets | `make help` |
 
 ---

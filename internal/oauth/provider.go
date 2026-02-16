@@ -911,7 +911,17 @@ func (p *Provider) HandleJWKS(w http.ResponseWriter, r *http.Request) {
 
 // RegisterMetadataRoutes registers all OAuth metadata routes on the given mux.
 func (p *Provider) RegisterMetadataRoutes(mux *http.ServeMux) {
+	// Root paths (standard)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", p.HandleProtectedResourceMetadata)
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", p.HandleAuthServerMetadata)
 	mux.HandleFunc("GET /.well-known/jwks.json", p.HandleJWKS)
+
+	// Sub-path variants per RFC 9728 (Claude tries these first for /mcp endpoint)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", p.HandleProtectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server/mcp", p.HandleAuthServerMetadata)
+
+	// OpenID Connect Discovery fallbacks (some clients try these)
+	mux.HandleFunc("GET /.well-known/openid-configuration", p.HandleAuthServerMetadata)
+	mux.HandleFunc("GET /.well-known/openid-configuration/mcp", p.HandleAuthServerMetadata)
+	mux.HandleFunc("GET /mcp/.well-known/openid-configuration", p.HandleAuthServerMetadata)
 }

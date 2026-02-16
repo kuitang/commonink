@@ -111,7 +111,7 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 	// Initialize services
 	emailService := emailpkg.NewMockEmailService()
 	oidcClient := auth.NewMockOIDCClient()
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -140,7 +140,7 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 	server = httptest.NewServer(mux)
 
 	// Update userService baseURL
-	userService = auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 
 	// Create mock S3 server and client
 	s3Server, mockS3Client := createShortURLWebMockS3Server()
@@ -258,7 +258,7 @@ func findShortURLWebTemplatesDir() string {
 // authenticateTestUser creates a user and returns a cookie jar with a valid session.
 func (ts *shortURLWebServer) authenticateTestUser(email string) (*cookiejar.Jar, string) {
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByEmail(ctx, email)
+	user, err := ts.userService.FindOrCreateByProvider(ctx, email)
 	if err != nil {
 		panic("Failed to create user: " + err.Error())
 	}

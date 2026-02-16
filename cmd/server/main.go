@@ -162,7 +162,7 @@ func main() {
 	}
 	_ = publicNotesURL // used by future features
 
-	userService := auth.NewUserService(sessionsDB, emailService, cfg.BaseURL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, cfg.BaseURL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -292,12 +292,34 @@ func main() {
 	// Create and mount MCP server (requires auth + rate limiting)
 	mcpHandler := &AuthenticatedMCPHandler{}
 	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
+	// GET /mcp: MCP spec allows GET for SSE streaming; return 405 in stateless mode
+	// DELETE /mcp: session termination; return 405 in stateless mode
+	mux.Handle("GET /mcp", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "GET not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
+	})))
+	mux.Handle("DELETE /mcp", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "DELETE not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
+	})))
 	log.Println("MCP server mounted at POST /mcp (protected with rate limiting)")
+
+	// Wrap mux with request logging middleware
+	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Log every incoming request
+		log.Printf("[REQ] %s %s %s (Host: %s, UA: %s)", r.Method, r.URL.Path, r.URL.RawQuery, r.Host, r.Header.Get("User-Agent"))
+
+		// Capture response status code
+		rw := &statusRecorder{ResponseWriter: w, statusCode: 200}
+		mux.ServeHTTP(rw, r)
+
+		log.Printf("[RES] %s %s -> %d", r.Method, r.URL.Path, rw.statusCode)
+	})
 
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         cfg.ListenAddr,
-		Handler:      mux,
+		Handler:      loggedMux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -719,6 +741,17 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	notesSvc := notes.NewService(userDB)
 	mcpServer := mcp.NewServer(notesSvc)
 	mcpServer.ServeHTTP(w, r)
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the status code.
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // ErrorResponse represents an API error response

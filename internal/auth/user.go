@@ -15,8 +15,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/argon2"
 
+	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/db/sessions"
+	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"github.com/kuitang/agent-notes/internal/email"
 )
 
@@ -24,6 +26,7 @@ import (
 var (
 	ErrUserNotFound       = errors.New("user not found")
 	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrAccountExists      = errors.New("account already exists")
 	ErrWeakPassword       = errors.New("password must be at least 8 characters")
 	ErrInvalidToken       = errors.New("invalid or expired token")
 	ErrEmailNotVerified   = errors.New("email not verified")
@@ -65,15 +68,17 @@ type User struct {
 // UserService handles user management operations.
 type UserService struct {
 	db           *db.SessionsDB
+	keyManager   *crypto.KeyManager
 	emailService email.EmailService
 	baseURL      string // Base URL for magic link generation
 	clock        Clock  // Clock for time operations (defaults to real time)
 }
 
 // NewUserService creates a new user service.
-func NewUserService(sessionsDB *db.SessionsDB, emailSvc email.EmailService, baseURL string) *UserService {
+func NewUserService(sessionsDB *db.SessionsDB, keyManager *crypto.KeyManager, emailSvc email.EmailService, baseURL string) *UserService {
 	return &UserService{
 		db:           sessionsDB,
+		keyManager:   keyManager,
 		emailService: emailSvc,
 		baseURL:      baseURL,
 		clock:        realClock{},
@@ -85,19 +90,152 @@ func (s *UserService) SetClock(c Clock) {
 	s.clock = c
 }
 
-// FindOrCreateByEmail finds a user by email or creates a new one.
-// This is idempotent - calling multiple times with the same email returns the same user.
-func (s *UserService) FindOrCreateByEmail(ctx context.Context, emailAddr string) (*User, error) {
-	// Try to find existing user by email
-	// For now, we'll use a simple approach with the sessions DB
-	// In a full implementation, we'd have a users table in sessions.db
-
+// RegisterWithPassword creates a new account with email/password.
+// Returns ErrAccountExists if an account record already exists in the user DB.
+// Handles orphaned DEKs (DEK exists but no account record) by creating the account.
+func (s *UserService) RegisterWithPassword(ctx context.Context, emailAddr, password string) (*User, error) {
 	userID := generateUserID(emailAddr)
+
+	// Get or create DEK (idempotent — safe even if DEK already exists)
+	dek, err := s.keyManager.GetOrCreateUserDEK(userID)
+	if err != nil {
+		return nil, fmt.Errorf("get or create user DEK: %w", err)
+	}
+
+	// Open user DB
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return nil, fmt.Errorf("open user DB: %w", err)
+	}
+
+	// Check if account record actually exists (not just DEK)
+	_, err = userDB.Queries().GetAccountByEmail(ctx, emailAddr)
+	if err == nil {
+		return nil, ErrAccountExists
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("check account existence: %w", err)
+	}
+
+	// Hash password
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return nil, fmt.Errorf("hash password: %w", err)
+	}
+
+	// Create account record in user DB
+	now := s.clock.Now()
+	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
+		UserID:             userID,
+		Email:              emailAddr,
+		PasswordHash:       sql.NullString{String: passwordHash, Valid: true},
+		CreatedAt:          now.Unix(),
+		SubscriptionStatus: sql.NullString{String: "free", Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create account: %w", err)
+	}
 
 	return &User{
 		ID:        userID,
 		Email:     emailAddr,
-		CreatedAt: s.clock.Now(),
+		CreatedAt: now,
+	}, nil
+}
+
+// VerifyLogin verifies email/password credentials for an existing account.
+// Returns ErrInvalidCredentials if user doesn't exist or password is wrong.
+func (s *UserService) VerifyLogin(ctx context.Context, emailAddr, password string) (*User, error) {
+	userID := generateUserID(emailAddr)
+
+	// Check if user exists (has a DEK)
+	dek, err := s.keyManager.GetUserDEK(userID)
+	if err != nil {
+		if errors.Is(err, crypto.ErrUserKeyNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("get user DEK: %w", err)
+	}
+
+	// Open user DB
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return nil, fmt.Errorf("open user DB: %w", err)
+	}
+
+	// Get account by email
+	account, err := userDB.Queries().GetAccountByEmail(ctx, emailAddr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("get account: %w", err)
+	}
+
+	// Check password hash is set (account may have been created via OIDC/magic link)
+	if !account.PasswordHash.Valid || account.PasswordHash.String == "" {
+		return nil, ErrInvalidCredentials
+	}
+
+	// Verify password
+	if !VerifyPassword(password, account.PasswordHash.String) {
+		return nil, ErrInvalidCredentials
+	}
+
+	return &User{
+		ID:        userID,
+		Email:     emailAddr,
+		CreatedAt: time.Unix(account.CreatedAt, 0),
+	}, nil
+}
+
+// FindOrCreateByProvider finds or creates a user account for OIDC/magic link auth.
+// Auto-creates the account with NULL password_hash if it doesn't exist.
+func (s *UserService) FindOrCreateByProvider(ctx context.Context, emailAddr string) (*User, error) {
+	userID := generateUserID(emailAddr)
+
+	// Get or create DEK (auto-creates user_keys entry if needed)
+	dek, err := s.keyManager.GetOrCreateUserDEK(userID)
+	if err != nil {
+		return nil, fmt.Errorf("get or create user DEK: %w", err)
+	}
+
+	// Open user DB
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return nil, fmt.Errorf("open user DB: %w", err)
+	}
+
+	// Try to get existing account
+	account, err := userDB.Queries().GetAccountByEmail(ctx, emailAddr)
+	if err == nil {
+		return &User{
+			ID:        userID,
+			Email:     emailAddr,
+			CreatedAt: time.Unix(account.CreatedAt, 0),
+		}, nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("get account: %w", err)
+	}
+
+	// Account doesn't exist — create with NULL password_hash
+	now := s.clock.Now()
+	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
+		UserID:             userID,
+		Email:              emailAddr,
+		CreatedAt:          now.Unix(),
+		SubscriptionStatus: sql.NullString{String: "free", Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create account: %w", err)
+	}
+
+	return &User{
+		ID:        userID,
+		Email:     emailAddr,
+		CreatedAt: now,
 	}, nil
 }
 
@@ -125,11 +263,8 @@ func (s *UserService) SendMagicLink(ctx context.Context, emailAddr string) error
 	// Hash token for storage
 	tokenHash := hashToken(token)
 
-	// Find or create user
-	user, err := s.FindOrCreateByEmail(ctx, emailAddr)
-	if err != nil {
-		return fmt.Errorf("find or create user: %w", err)
-	}
+	// Compute user ID (magic links auto-create on verification)
+	userID := generateUserID(emailAddr)
 
 	// Store hashed token
 	now := s.clock.Now()
@@ -137,7 +272,7 @@ func (s *UserService) SendMagicLink(ctx context.Context, emailAddr string) error
 	err = s.db.Queries().UpsertMagicToken(ctx, sessions.UpsertMagicTokenParams{
 		TokenHash: tokenHash,
 		Email:     emailAddr,
-		UserID:    sql.NullString{String: user.ID, Valid: true},
+		UserID:    sql.NullString{String: userID, Valid: true},
 		ExpiresAt: expiresAt.Unix(),
 		CreatedAt: now.Unix(),
 	})
@@ -284,11 +419,8 @@ func (s *UserService) SendPasswordReset(ctx context.Context, emailAddr string) e
 	// Hash token for storage
 	tokenHash := hashToken(token)
 
-	// Find user (must exist for password reset)
-	user, err := s.FindOrCreateByEmail(ctx, emailAddr)
-	if err != nil {
-		return fmt.Errorf("find user: %w", err)
-	}
+	// Compute user ID (always succeed to prevent email enumeration)
+	userID := generateUserID(emailAddr)
 
 	// Store hashed token
 	now := s.clock.Now()
@@ -296,7 +428,7 @@ func (s *UserService) SendPasswordReset(ctx context.Context, emailAddr string) e
 	err = s.db.Queries().UpsertMagicToken(ctx, sessions.UpsertMagicTokenParams{
 		TokenHash: tokenHash,
 		Email:     emailAddr,
-		UserID:    sql.NullString{String: user.ID, Valid: true},
+		UserID:    sql.NullString{String: userID, Valid: true},
 		ExpiresAt: expiresAt.Unix(),
 		CreatedAt: now.Unix(),
 	})
@@ -325,18 +457,45 @@ func (s *UserService) ResetPassword(ctx context.Context, token, newPassword stri
 	}
 
 	// Verify and consume the token
-	_, err := s.VerifyMagicToken(ctx, token)
+	user, err := s.VerifyMagicToken(ctx, token)
 	if err != nil {
 		return err
 	}
 
 	// Hash the new password
-	_, err = HashPassword(newPassword)
+	passwordHash, err := HashPassword(newPassword)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
 
-	// In a full implementation, we'd update the password hash in the users table
+	// Open user DB and update the password hash
+	dek, err := s.keyManager.GetUserDEK(user.ID)
+	if err != nil {
+		return fmt.Errorf("get user DEK: %w", err)
+	}
+
+	userDB, err := db.OpenUserDBWithDEK(user.ID, dek)
+	if err != nil {
+		return fmt.Errorf("open user DB: %w", err)
+	}
+
+	err = userDB.Queries().UpdateAccountPasswordHash(ctx, userdb.UpdateAccountPasswordHashParams{
+		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
+		UserID:       user.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("update password hash: %w", err)
+	}
+
+	// Verify the update actually affected a row
+	account, verifyErr := userDB.Queries().GetAccountByEmail(ctx, user.Email)
+	if verifyErr != nil {
+		return fmt.Errorf("password reset failed: no account record for user %s (orphaned DEK)", user.ID)
+	}
+	if !VerifyPassword(newPassword, account.PasswordHash.String) {
+		return fmt.Errorf("password reset verification failed: hash mismatch after update")
+	}
+
 	return nil
 }
 

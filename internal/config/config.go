@@ -58,7 +58,6 @@ type Config struct {
 	S3SecretAccessKey string
 	S3Bucket          string
 	S3PublicURL       string
-
 }
 
 // ValidationError represents a configuration validation error with multiple issues.

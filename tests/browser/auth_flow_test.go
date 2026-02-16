@@ -90,7 +90,7 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 	server := httptest.NewServer(mux)
 
 	// Initialize services with actual server URL
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -138,9 +138,10 @@ func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
 		w.Write([]byte(`{"status":"healthy"}`))
 	})
 
-	// Register routes - only web handler, it handles all auth flows for browser tests
-	// The auth.Handler routes are for API (JSON) clients, which conflict with web routes
+	// Register web UI routes (GET pages) and auth handler routes (POST form actions)
 	webHandler.RegisterRoutes(mux, authMiddleware)
+	authHandler := auth.NewHandler(auth.NewMockOIDCClient(), userService, sessionService)
+	authHandler.RegisterRoutes(mux)
 
 	// Rate limiting middleware
 	getUserID := func(r *http.Request) string {
@@ -569,22 +570,35 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 		t.Fatalf("Failed to click Send Magic Link button: %v", err)
 	}
 
-	// Wait for the magic_sent page to load
-	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+	// The magic link form uses fetch() + dialog.showModal() (not a page navigation).
+	// Wait for the dialog to become visible after the AJAX request completes.
+	magicDialog := page.Locator("#magic-link-dialog")
+	err = magicDialog.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
 	})
 	if err != nil {
-		t.Fatalf("Navigation did not complete: %v", err)
+		t.Fatalf("Magic link dialog did not become visible: %v", err)
 	}
 
-	// Verify magic link sent page is shown
-	pageContent, err := page.Content()
+	// Verify the dialog shows the correct email address
+	modalEmail := page.Locator("#modal-email")
+	emailText, err := modalEmail.TextContent()
 	if err != nil {
-		t.Fatalf("Failed to get page content: %v", err)
+		t.Fatalf("Failed to get modal email text: %v", err)
+	}
+	if emailText != testEmail {
+		t.Errorf("Dialog shows wrong email: got %q, want %q", emailText, testEmail)
 	}
 
-	if !strings.Contains(pageContent, "email") && !strings.Contains(pageContent, "magic") && !strings.Contains(pageContent, "Check") {
-		t.Errorf("Magic link sent page should mention email/magic/check, got content length: %d", len(pageContent))
+	// Verify dialog heading
+	dialogHeading := magicDialog.Locator("h3")
+	headingText, err := dialogHeading.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get dialog heading: %v", err)
+	}
+	if !strings.Contains(headingText, "Check your email") {
+		t.Errorf("Dialog heading should say 'Check your email', got: %q", headingText)
 	}
 
 	// Verify email was captured by mock service
@@ -672,6 +686,113 @@ func TestBrowser_Auth_MagicLinkVerify(t *testing.T) {
 		if strings.Contains(currentURL, "error") {
 			t.Errorf("Magic link verification failed, redirected to: %s", currentURL)
 		}
+	}
+}
+
+// =============================================================================
+// Forgot Password Link Tests (from Login Page)
+// =============================================================================
+
+func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Navigate to login page
+	_, err := page.Goto(env.baseURL + "/login")
+	if err != nil {
+		t.Fatalf("Failed to navigate to login page: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Page did not load: %v", err)
+	}
+
+	// Find the "Forgot password?" link — it's now href="#" with inline JS
+	forgotLink := page.Locator("#forgot-password-link")
+	count, err := forgotLink.Count()
+	if err != nil || count == 0 {
+		t.Fatal("'Forgot password?' link not found on login page")
+	}
+
+	href, err := forgotLink.GetAttribute("href")
+	if err != nil {
+		t.Fatalf("Failed to get href attribute: %v", err)
+	}
+	if href != "#" {
+		t.Errorf("Forgot password link should be href='#' (inline JS), got: %q", href)
+	}
+
+	// Test 1: Clicking without email shows error flash
+	err = forgotLink.Click()
+	if err != nil {
+		t.Fatalf("Failed to click forgot password link: %v", err)
+	}
+
+	inlineFlash := page.Locator("#inline-flash")
+	err = inlineFlash.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Inline flash did not appear after clicking without email: %v", err)
+	}
+	flashText, _ := inlineFlash.TextContent()
+	if !strings.Contains(flashText, "Enter your email") {
+		t.Errorf("Expected 'Enter your email' error flash, got: %q", flashText)
+	}
+
+	// Test 2: Fill email then click — should show success flash and send email
+	testEmail := fmt.Sprintf("forgot-test-%d@example.com", time.Now().UnixNano())
+	loginEmailInput := page.Locator("#login-email")
+	err = loginEmailInput.Fill(testEmail)
+	if err != nil {
+		t.Fatalf("Failed to fill login email: %v", err)
+	}
+
+	err = forgotLink.Click()
+	if err != nil {
+		t.Fatalf("Failed to click forgot password link: %v", err)
+	}
+
+	// Wait for the success flash to appear (replaces the error flash)
+	err = page.Locator("#inline-flash:has-text('reset link')").WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
+	})
+	if err != nil {
+		t.Fatalf("Success flash did not appear after forgot password request: %v", err)
+	}
+
+	// Should still be on /login (no page navigation)
+	currentURL := page.URL()
+	if !strings.HasSuffix(currentURL, "/login") {
+		t.Errorf("Should stay on /login page, got: %s", currentURL)
+	}
+
+	// Verify email was captured by mock service
+	if env.emailService.Count() == 0 {
+		t.Fatal("No password reset email was captured")
+	}
+	lastEmail := env.emailService.LastEmail()
+	if lastEmail.To != testEmail {
+		t.Errorf("Email sent to wrong address: got %s, want %s", lastEmail.To, testEmail)
+	}
+	if lastEmail.Template != email.TemplatePasswordReset {
+		t.Errorf("Wrong email template: got %s, want %s", lastEmail.Template, email.TemplatePasswordReset)
 	}
 }
 
@@ -776,7 +897,6 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 		t.Fatalf("Failed to navigate to password reset page: %v", err)
 	}
 
-	// Wait for page to load
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
@@ -789,27 +909,22 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get page title: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(title), "reset") && !strings.Contains(strings.ToLower(title), "password") {
+	if !strings.Contains(strings.ToLower(title), "reset") {
 		t.Errorf("Unexpected page title: %s", title)
 	}
 
 	// Fill email and submit
 	testEmail := fmt.Sprintf("reset-test-%d@example.com", time.Now().UnixNano())
-
-	emailInput := page.Locator("input[name='email']")
-	err = emailInput.Fill(testEmail)
+	err = page.Locator("input[name='email']").Fill(testEmail)
 	if err != nil {
 		t.Fatalf("Failed to fill email: %v", err)
 	}
 
-	// Submit form
-	submitBtn := page.Locator("button[type='submit']:has-text('Send reset link')")
-	err = submitBtn.Click()
+	err = page.Locator("button[type='submit']:has-text('Send reset link')").Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
 	}
 
-	// Wait for response
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
 	})
@@ -817,28 +932,49 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 		t.Fatalf("Navigation did not complete: %v", err)
 	}
 
-	// Verify confirmation message is shown
-	pageContent, err := page.Content()
-	if err != nil {
-		t.Fatalf("Failed to get page content: %v", err)
+	// After POST /auth/password-reset, should redirect to /login?reset=requested
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login, got: %s", currentURL)
 	}
 
-	if !strings.Contains(pageContent, "reset") && !strings.Contains(pageContent, "sent") && !strings.Contains(pageContent, "email") {
-		t.Log("Expected confirmation message about password reset email")
+	// Verify flash message banner is visible on login page
+	flashBanner := page.Locator("[role='status']")
+	err = flashBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Flash message banner not visible after password reset request: %v", err)
+	}
+
+	bannerText, err := flashBanner.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get banner text: %v", err)
+	}
+	if !strings.Contains(bannerText, "password reset link") {
+		t.Errorf("Flash message should mention password reset link, got: %q", bannerText)
 	}
 
 	// Verify email was captured by mock service
-	emailCount := env.emailService.Count()
-	if emailCount == 0 {
-		t.Log("No password reset email was captured (this may be expected behavior to prevent enumeration)")
-	} else {
-		lastEmail := env.emailService.LastEmail()
-		if lastEmail.To != testEmail {
-			t.Errorf("Email sent to wrong address: got %s, want %s", lastEmail.To, testEmail)
-		}
-		if lastEmail.Template != email.TemplatePasswordReset {
-			t.Errorf("Wrong email template: got %s, want %s", lastEmail.Template, email.TemplatePasswordReset)
-		}
+	if env.emailService.Count() == 0 {
+		t.Fatal("No password reset email was captured")
+	}
+	lastEmail := env.emailService.LastEmail()
+	if lastEmail.To != testEmail {
+		t.Errorf("Email sent to wrong address: got %s, want %s", lastEmail.To, testEmail)
+	}
+	if lastEmail.Template != email.TemplatePasswordReset {
+		t.Errorf("Wrong email template: got %s, want %s", lastEmail.Template, email.TemplatePasswordReset)
+	}
+
+	// Verify the reset link in the email uses the test server URL (not localhost:8080)
+	resetData, ok := lastEmail.Data.(email.PasswordResetData)
+	if !ok {
+		t.Fatalf("Email data is not PasswordResetData: %T", lastEmail.Data)
+	}
+	if !strings.HasPrefix(resetData.Link, env.baseURL) {
+		t.Errorf("Reset link should start with %s, got: %s", env.baseURL, resetData.Link)
 	}
 }
 
@@ -857,90 +993,108 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	page := env.newAuthTestPage(t)
 	defer page.Close()
 
-	testEmail := fmt.Sprintf("fullreset-test-%d@example.com", time.Now().UnixNano())
+	// Step 1: Register a user (need an account to reset password for)
+	testEmail := fmt.Sprintf("fullreset-%d@example.com", time.Now().UnixNano())
+	originalPassword := "OriginalPass123!"
 
-	// Step 1: Request password reset
-	_, err := page.Goto(env.baseURL + "/password-reset")
+	_, err := page.Goto(env.baseURL + "/register")
 	if err != nil {
-		t.Fatalf("Failed to navigate to password reset page: %v", err)
+		t.Fatalf("Failed to navigate to register: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(originalPassword)
+	page.Locator("input[name='confirm_password']").Fill(originalPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Clear cookies (logout)
+	page.Context().ClearCookies()
+	env.emailService.Clear()
+
+	// Step 2: Request password reset from /password-reset page
+	_, err = page.Goto(env.baseURL + "/password-reset")
+	if err != nil {
+		t.Fatalf("Failed to navigate to password reset: %v", err)
 	}
 
 	page.Locator("input[name='email']").Fill(testEmail)
 	page.Locator("button[type='submit']:has-text('Send reset link')").Click()
 
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
-	// Step 2: Get reset link from email
+	// Should redirect to /login with flash message
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login after reset request, got: %s", currentURL)
+	}
+
+	// Step 3: Extract reset link from email
 	if env.emailService.Count() == 0 {
-		t.Skip("No password reset email was sent")
+		t.Fatal("No password reset email was sent")
 	}
 
 	lastEmail := env.emailService.LastEmail()
 	resetData, ok := lastEmail.Data.(email.PasswordResetData)
 	if !ok {
-		t.Fatalf("Email data is not PasswordResetData type: %T", lastEmail.Data)
+		t.Fatalf("Email data is not PasswordResetData: %T", lastEmail.Data)
 	}
-
-	resetLink := resetData.Link
-	if resetLink == "" {
+	if resetData.Link == "" {
 		t.Fatal("Reset link is empty")
 	}
 
-	// Step 3: Navigate to reset link
-	_, err = page.Goto(resetLink)
+	// Verify link uses correct base URL
+	if !strings.HasPrefix(resetData.Link, env.baseURL) {
+		t.Errorf("Reset link should use test server URL, got: %s", resetData.Link)
+	}
+
+	// Step 4: Navigate to reset link — should show new password form
+	_, err = page.Goto(resetData.Link)
 	if err != nil {
 		t.Fatalf("Failed to navigate to reset link: %v", err)
 	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
 
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
+	// Verify we're on the password reset confirm page
+	heading := page.Locator("h2:has-text('Create new password')")
+	err = heading.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
 	})
-
-	// Step 4: Fill new password form (if the page has one)
-	newPasswordInput := page.Locator("input[name='password']")
-	count, _ := newPasswordInput.Count()
-	if count == 0 {
-		// The reset link might directly verify and redirect
-		currentURL := page.URL()
-		t.Logf("Reset link redirected to: %s", currentURL)
-		return
+	if err != nil {
+		t.Fatalf("Password reset confirm page heading not found: %v", err)
 	}
 
+	// Step 5: Fill new password and submit
 	newPassword := "NewSecurePass456!"
-	err = newPasswordInput.Fill(newPassword)
-	if err != nil {
-		t.Fatalf("Failed to fill new password: %v", err)
+	page.Locator("input[name='password']").Fill(newPassword)
+	page.Locator("input[name='confirm_password']").Fill(newPassword)
+	page.Locator("button[type='submit']:has-text('Reset password')").Click()
+
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Step 6: Should redirect to /login with success message
+	currentURL = page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login after password reset, got: %s", currentURL)
 	}
 
-	confirmPasswordInput := page.Locator("input[name='confirm_password']")
-	count, _ = confirmPasswordInput.Count()
-	if count > 0 {
-		err = confirmPasswordInput.Fill(newPassword)
-		if err != nil {
-			t.Fatalf("Failed to fill confirm password: %v", err)
-		}
-	}
-
-	// Submit the form
-	submitBtn := page.Locator("button[type='submit']:has-text('Reset password')")
-	err = submitBtn.Click()
-	if err != nil {
-		t.Fatalf("Failed to click submit button: %v", err)
-	}
-
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+	// Verify success flash message is visible
+	flashBanner := page.Locator("[role='status']")
+	err = flashBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
 	})
+	if err != nil {
+		t.Fatalf("Success flash message not visible after password reset: %v", err)
+	}
 
-	// Should redirect to login or show success message
-	currentURL := page.URL()
-	pageContent, _ := page.Content()
-	if strings.Contains(currentURL, "/login") || strings.Contains(pageContent, "success") || strings.Contains(pageContent, "reset") {
-		t.Log("Password reset completed successfully")
-	} else {
-		t.Logf("Password reset flow ended at: %s", currentURL)
+	bannerText, err := flashBanner.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get banner text: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(bannerText), "password reset") {
+		t.Errorf("Flash message should mention password reset, got: %q", bannerText)
 	}
 }
 
@@ -1083,6 +1237,1025 @@ func TestBrowser_Auth_SessionIsolation(t *testing.T) {
 		if !strings.Contains(pageContent, "Unauthorized") && !strings.Contains(pageContent, "login") {
 			t.Logf("User 2 accessed /notes without auth, URL: %s", page2URL)
 		}
+	}
+}
+
+// =============================================================================
+// Login Error Path Tests
+// =============================================================================
+
+func TestBrowser_Auth_LoginWrongPassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Register a user first
+	testEmail := fmt.Sprintf("wrongpw-%d@example.com", time.Now().UnixNano())
+	testPassword := "SecurePass123!"
+
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(testPassword)
+	page.Locator("input[name='confirm_password']").Fill(testPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Logout
+	page.Context().ClearCookies()
+
+	// Try login with wrong password
+	_, err = page.Goto(env.baseURL + "/login")
+	if err != nil {
+		t.Fatalf("Failed to navigate to login: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	page.Locator("#login-email").Fill(testEmail)
+	page.Locator("#login-password").Fill("WrongPassword999!")
+	page.Locator("form[action='/auth/login'] button[type='submit']").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should redirect back to /login with error
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login, got: %s", currentURL)
+	}
+
+	// Error flash should be visible
+	errorBanner := page.Locator("[role='alert']")
+	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Error banner not visible: %v", err)
+	}
+
+	bannerText, _ := errorBanner.TextContent()
+	if !strings.Contains(strings.ToLower(bannerText), "invalid") {
+		t.Errorf("Error should mention invalid credentials, got: %q", bannerText)
+	}
+}
+
+func TestBrowser_Auth_LoginNonexistentEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Try login with email that was never registered
+	_, err := page.Goto(env.baseURL + "/login")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	page.Locator("#login-email").Fill("nobody-exists@example.com")
+	page.Locator("#login-password").Fill("SomePassword123!")
+	page.Locator("form[action='/auth/login'] button[type='submit']").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should show same generic error (no email enumeration)
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login, got: %s", currentURL)
+	}
+
+	errorBanner := page.Locator("[role='alert']")
+	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Error banner not visible: %v", err)
+	}
+
+	bannerText, _ := errorBanner.TextContent()
+	if !strings.Contains(strings.ToLower(bannerText), "invalid") {
+		t.Errorf("Error should mention invalid credentials, got: %q", bannerText)
+	}
+}
+
+// =============================================================================
+// Registration Error Path Tests
+// =============================================================================
+
+func TestBrowser_Auth_RegisterDuplicateEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	testEmail := fmt.Sprintf("dup-%d@example.com", time.Now().UnixNano())
+	testPassword := "SecurePass123!"
+
+	// Register first time
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(testPassword)
+	page.Locator("input[name='confirm_password']").Fill(testPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Clear cookies and try to register again with same email
+	page.Context().ClearCookies()
+
+	_, err = page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(testPassword)
+	page.Locator("input[name='confirm_password']").Fill(testPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should redirect to /login with "Account already exists" error
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login for duplicate, got: %s", currentURL)
+	}
+
+	errorBanner := page.Locator("[role='alert']")
+	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Error banner not visible: %v", err)
+	}
+
+	bannerText, _ := errorBanner.TextContent()
+	if !strings.Contains(strings.ToLower(bannerText), "already exists") {
+		t.Errorf("Error should mention account already exists, got: %q", bannerText)
+	}
+}
+
+// =============================================================================
+// Password Reset Confirm Error Path Tests
+// =============================================================================
+
+func TestBrowser_Auth_PasswordResetConfirm_Mismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Register user, request reset, get token
+	testEmail := fmt.Sprintf("mismatch-%d@example.com", time.Now().UnixNano())
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill("OriginalPass123!")
+	page.Locator("input[name='confirm_password']").Fill("OriginalPass123!")
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	page.Context().ClearCookies()
+	env.emailService.Clear()
+
+	// Request password reset
+	_, err = page.Goto(env.baseURL + "/password-reset")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("button[type='submit']:has-text('Send reset link')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Extract token from email
+	if env.emailService.Count() == 0 {
+		t.Fatal("No reset email sent")
+	}
+	lastEmail := env.emailService.LastEmail()
+	resetData, ok := lastEmail.Data.(email.PasswordResetData)
+	if !ok {
+		t.Fatalf("Email data is not PasswordResetData: %T", lastEmail.Data)
+	}
+
+	// Navigate to reset link
+	_, err = page.Goto(resetData.Link)
+	if err != nil {
+		t.Fatalf("Failed to navigate to reset link: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Submit mismatched passwords
+	page.Locator("input[name='password']").Fill("NewPassword123!")
+	page.Locator("input[name='confirm_password']").Fill("DifferentPassword456!")
+	page.Locator("button[type='submit']:has-text('Reset password')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should show error about password mismatch, token preserved
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "password-reset-confirm") {
+		t.Fatalf("Expected to stay on password-reset-confirm, got: %s", currentURL)
+	}
+
+	errorBanner := page.Locator("[role='alert']")
+	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Error banner not visible: %v", err)
+	}
+
+	bannerText, _ := errorBanner.TextContent()
+	if !strings.Contains(strings.ToLower(bannerText), "passwords do not match") {
+		t.Errorf("Error should mention passwords don't match, got: %q", bannerText)
+	}
+
+	// Token should be preserved in the form so user can retry
+	tokenInput := page.Locator("input[name='token']")
+	tokenVal, err := tokenInput.GetAttribute("value")
+	if err != nil || tokenVal == "" {
+		t.Error("Token should be preserved in the form after mismatch error")
+	}
+}
+
+func TestBrowser_Auth_PasswordResetConfirm_InvalidToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Navigate to reset confirm page with bogus token
+	_, err := page.Goto(env.baseURL + "/auth/password-reset-confirm?token=bogus-invalid-token")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Fill passwords and submit
+	page.Locator("input[name='password']").Fill("NewPassword123!")
+	page.Locator("input[name='confirm_password']").Fill("NewPassword123!")
+	page.Locator("button[type='submit']:has-text('Reset password')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should redirect to /login with "invalid or expired" error
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login for invalid token, got: %s", currentURL)
+	}
+
+	errorBanner := page.Locator("[role='alert']")
+	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Error banner not visible: %v", err)
+	}
+
+	bannerText, _ := errorBanner.TextContent()
+	if !strings.Contains(strings.ToLower(bannerText), "invalid") || !strings.Contains(strings.ToLower(bannerText), "expired") {
+		t.Errorf("Error should mention invalid or expired, got: %q", bannerText)
+	}
+}
+
+func TestBrowser_Auth_PasswordResetConfirm_MissingToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Navigate to reset confirm page with NO token
+	_, err := page.Goto(env.baseURL + "/auth/password-reset-confirm")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Should show error page (not the form)
+	currentURL := page.URL()
+	pageContent, _ := page.Content()
+
+	// The handler renders auth error page for missing token
+	if strings.Contains(pageContent, "invalid") || strings.Contains(pageContent, "expired") || strings.Contains(pageContent, "Missing") {
+		t.Log("Missing token correctly shows error page")
+	} else {
+		t.Errorf("Expected error page for missing token, URL: %s", currentURL)
+	}
+}
+
+// =============================================================================
+// Full Password Reset → Login With New Password
+// =============================================================================
+
+func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Step 1: Register
+	testEmail := fmt.Sprintf("fullreset2-%d@example.com", time.Now().UnixNano())
+	originalPassword := "OriginalPass123!"
+	newPassword := "BrandNewPass456!"
+
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(originalPassword)
+	page.Locator("input[name='confirm_password']").Fill(originalPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	page.Context().ClearCookies()
+	env.emailService.Clear()
+
+	// Step 2: Request password reset
+	_, err = page.Goto(env.baseURL + "/password-reset")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("button[type='submit']:has-text('Send reset link')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Step 3: Use reset link
+	if env.emailService.Count() == 0 {
+		t.Fatal("No reset email sent")
+	}
+	resetData := env.emailService.LastEmail().Data.(email.PasswordResetData)
+
+	_, err = page.Goto(resetData.Link)
+	if err != nil {
+		t.Fatalf("Failed to navigate to reset link: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	page.Locator("input[name='password']").Fill(newPassword)
+	page.Locator("input[name='confirm_password']").Fill(newPassword)
+	page.Locator("button[type='submit']:has-text('Reset password')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should be on /login with success
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected /login after reset, got: %s", currentURL)
+	}
+
+	successBanner := page.Locator("[role='status']")
+	err = successBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Success banner not visible after reset: %v", err)
+	}
+
+	// Step 4: Login with NEW password
+	page.Locator("#login-email").Fill(testEmail)
+	page.Locator("#login-password").Fill(newPassword)
+	page.Locator("form[action='/auth/login'] button[type='submit']").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL = page.URL()
+	if !strings.Contains(currentURL, "/notes") {
+		t.Errorf("Expected redirect to /notes after login with new password, got: %s", currentURL)
+	}
+
+	// Step 5: Verify old password no longer works
+	page.Context().ClearCookies()
+	_, err = page.Goto(env.baseURL + "/login")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	page.Locator("#login-email").Fill(testEmail)
+	page.Locator("#login-password").Fill(originalPassword)
+	page.Locator("form[action='/auth/login'] button[type='submit']").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL = page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Errorf("Old password should be rejected, but got: %s", currentURL)
+	}
+
+	errorBanner := page.Locator("[role='alert']")
+	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Error banner not visible for old password: %v", err)
+	}
+}
+
+// =============================================================================
+// return_to Parameter Tests
+// =============================================================================
+
+func TestBrowser_Auth_ReturnTo_LoginRedirect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Register user
+	testEmail := fmt.Sprintf("returnto-%d@example.com", time.Now().UnixNano())
+	testPassword := "SecurePass123!"
+
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(testPassword)
+	page.Locator("input[name='confirm_password']").Fill(testPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	page.Context().ClearCookies()
+
+	// Visit login page with return_to
+	_, err = page.Goto(env.baseURL + "/login?return_to=/notes")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Verify hidden return_to field exists in the password form
+	returnToInput := page.Locator("form[action='/auth/login'] input[name='return_to']")
+	count, err := returnToInput.Count()
+	if err != nil || count == 0 {
+		t.Error("Hidden return_to input not found in login form")
+	} else {
+		val, _ := returnToInput.GetAttribute("value")
+		if val != "/notes" {
+			t.Errorf("return_to input should have value '/notes', got: %q", val)
+		}
+	}
+
+	// Login and verify redirect to return_to path
+	page.Locator("#login-email").Fill(testEmail)
+	page.Locator("#login-password").Fill(testPassword)
+	page.Locator("form[action='/auth/login'] button[type='submit']").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/notes") {
+		t.Errorf("Expected redirect to /notes (return_to), got: %s", currentURL)
+	}
+}
+
+func TestBrowser_Auth_ReturnTo_RegisterPropagation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Visit login page with return_to, then click "create a new account"
+	_, err := page.Goto(env.baseURL + "/login?return_to=/notes")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Click "create a new account" link — should propagate return_to
+	createLink := page.Locator("a:has-text('create a new account')")
+	href, err := createLink.GetAttribute("href")
+	if err != nil {
+		t.Fatalf("Failed to get create account href: %v", err)
+	}
+	if !strings.Contains(href, "return_to") {
+		t.Errorf("'create a new account' link should include return_to, got: %q", href)
+	}
+
+	err = createLink.Click()
+	if err != nil {
+		t.Fatalf("Failed to click create account link: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Verify we're on /register with return_to preserved
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/register") || !strings.Contains(currentURL, "return_to") {
+		t.Errorf("Expected /register with return_to, got: %s", currentURL)
+	}
+
+	// Register and verify redirect goes to return_to
+	testEmail := fmt.Sprintf("regreturn-%d@example.com", time.Now().UnixNano())
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill("SecurePass123!")
+	page.Locator("input[name='confirm_password']").Fill("SecurePass123!")
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL = page.URL()
+	if !strings.Contains(currentURL, "/notes") {
+		t.Errorf("Expected redirect to /notes (return_to), got: %s", currentURL)
+	}
+}
+
+// =============================================================================
+// Logout → Protected Page Tests
+// =============================================================================
+
+func TestBrowser_Auth_LogoutThenAccessProtected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Register and login
+	testEmail := fmt.Sprintf("logoutprot-%d@example.com", time.Now().UnixNano())
+	testPassword := "SecurePass123!"
+
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill(testPassword)
+	page.Locator("input[name='confirm_password']").Fill(testPassword)
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Verify we're on /notes
+	if !strings.Contains(page.URL(), "/notes") {
+		t.Skipf("Registration didn't redirect to /notes, got: %s", page.URL())
+	}
+
+	// Navigate to logout
+	_, err = page.Goto(env.baseURL + "/auth/logout")
+	if err != nil {
+		t.Fatalf("Failed to navigate to logout: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Try to access /notes — should redirect to /login
+	_, err = page.Goto(env.baseURL + "/notes")
+	if err != nil {
+		t.Fatalf("Failed to navigate to /notes: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Errorf("Expected redirect to /login after logout, got: %s", currentURL)
+	}
+}
+
+// =============================================================================
+// Landing Page Redirect Tests
+// =============================================================================
+
+func TestBrowser_Auth_LandingRedirect_Unauthenticated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Visit / without auth
+	_, err := page.Goto(env.baseURL + "/")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Errorf("Unauthenticated / should redirect to /login, got: %s", currentURL)
+	}
+}
+
+func TestBrowser_Auth_LandingRedirect_Authenticated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Register to get authenticated
+	testEmail := fmt.Sprintf("landing-%d@example.com", time.Now().UnixNano())
+
+	_, err := page.Goto(env.baseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.Locator("input[name='email']").Fill(testEmail)
+	page.Locator("input[name='password']").Fill("SecurePass123!")
+	page.Locator("input[name='confirm_password']").Fill("SecurePass123!")
+	page.Locator("input[name='terms']").Check()
+	page.Locator("button[type='submit']:has-text('Create account')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Now visit / — should redirect to /notes
+	_, err = page.Goto(env.baseURL + "/")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/notes") {
+		t.Errorf("Authenticated / should redirect to /notes, got: %s", currentURL)
+	}
+}
+
+// =============================================================================
+// Magic Link Dialog Close Tests
+// =============================================================================
+
+func TestBrowser_Auth_MagicLinkDialog_CloseButton(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	_, err := page.Goto(env.baseURL + "/login")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Fill email and submit magic link
+	testEmail := fmt.Sprintf("dialogclose-%d@example.com", time.Now().UnixNano())
+	page.Locator("#magic-email").Fill(testEmail)
+	page.Locator("button[type='submit']:has-text('Send Magic Link')").Click()
+
+	// Wait for dialog
+	dialog := page.Locator("#magic-link-dialog")
+	err = dialog.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
+	})
+	if err != nil {
+		t.Fatalf("Dialog did not appear: %v", err)
+	}
+
+	// Click "Got it" button
+	page.Locator("#close-modal-btn").Click()
+
+	// Dialog should close
+	err = dialog.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateHidden,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Dialog did not close after clicking 'Got it': %v", err)
+	}
+
+	// Email field should be cleared
+	emailVal, _ := page.Locator("#magic-email").InputValue()
+	if emailVal != "" {
+		t.Errorf("Email field should be cleared after dialog close, got: %q", emailVal)
+	}
+}
+
+// =============================================================================
+// Flash Message Rendering Tests
+// =============================================================================
+
+func TestBrowser_Auth_FlashMessages_LoginPage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	tests := []struct {
+		name     string
+		query    string
+		role     string // "status" for success, "alert" for error
+		contains string
+	}{
+		{
+			name:     "success flash",
+			query:    "?success=Password+reset+successfully.+Please+sign+in.",
+			role:     "status",
+			contains: "Password reset successfully",
+		},
+		{
+			name:     "reset requested flash",
+			query:    "?reset=requested",
+			role:     "status",
+			contains: "password reset link",
+		},
+		{
+			name:     "error flash",
+			query:    "?error=Invalid+email+or+password",
+			role:     "alert",
+			contains: "Invalid email or password",
+		},
+		{
+			name:     "account exists flash",
+			query:    "?error=Account+already+exists.+Please+sign+in.",
+			role:     "alert",
+			contains: "Account already exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := env.newAuthTestPage(t)
+			defer page.Close()
+
+			_, err := page.Goto(env.baseURL + "/login" + tt.query)
+			if err != nil {
+				t.Fatalf("Failed to navigate: %v", err)
+			}
+			page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+			banner := page.Locator(fmt.Sprintf("[role='%s']", tt.role))
+			err = banner.WaitFor(playwright.LocatorWaitForOptions{
+				State:   playwright.WaitForSelectorStateVisible,
+				Timeout: playwright.Float(5000),
+			})
+			if err != nil {
+				t.Fatalf("Flash banner [role='%s'] not visible for %s: %v", tt.role, tt.name, err)
+			}
+
+			text, _ := banner.TextContent()
+			if !strings.Contains(text, tt.contains) {
+				t.Errorf("Flash should contain %q, got: %q", tt.contains, text)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Password Reset Page (Standalone) Tests
+// =============================================================================
+
+func TestBrowser_Auth_PasswordResetPage_BackToLogin(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	_, err := page.Goto(env.baseURL + "/password-reset")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Verify page heading
+	heading := page.Locator("h2:has-text('Reset your password')")
+	count, err := heading.Count()
+	if err != nil || count == 0 {
+		t.Error("Password reset page heading not found")
+	}
+
+	// Click "Back to login" link
+	backLink := page.Locator("a:has-text('Back to login')")
+	err = backLink.Click()
+	if err != nil {
+		t.Fatalf("Failed to click Back to login: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	currentURL := page.URL()
+	if !strings.HasSuffix(currentURL, "/login") {
+		t.Errorf("Expected redirect to /login, got: %s", currentURL)
+	}
+}
+
+func TestBrowser_Auth_PasswordResetPage_NonexistentEmail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	_, err := page.Goto(env.baseURL + "/password-reset")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Submit for a nonexistent email — should still show success (no enumeration)
+	page.Locator("input[name='email']").Fill("nonexistent-nobody@example.com")
+	page.Locator("button[type='submit']:has-text('Send reset link')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+
+	// Should redirect to /login with success flash
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") {
+		t.Fatalf("Expected redirect to /login, got: %s", currentURL)
+	}
+
+	successBanner := page.Locator("[role='status']")
+	err = successBanner.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Success banner not visible (should not reveal email doesn't exist): %v", err)
+	}
+
+	text, _ := successBanner.TextContent()
+	if !strings.Contains(strings.ToLower(text), "if an account exists") {
+		t.Errorf("Banner should say 'if an account exists', got: %q", text)
+	}
+}
+
+// =============================================================================
+// Register Page Link Tests
+// =============================================================================
+
+func TestBrowser_Auth_RegisterPage_SignInLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env, cleanup := setupAuthTestEnv(t)
+	defer cleanup()
+
+	if err := env.initAuthTestBrowser(t); err != nil {
+		t.Skip("Playwright not available:", err)
+	}
+
+	page := env.newAuthTestPage(t)
+	defer page.Close()
+
+	// Visit register page with return_to
+	_, err := page.Goto(env.baseURL + "/register?return_to=/notes")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// "Sign in" link should propagate return_to
+	signInLink := page.Locator("a:has-text('Sign in')")
+	href, err := signInLink.GetAttribute("href")
+	if err != nil {
+		t.Fatalf("Failed to get Sign in href: %v", err)
+	}
+	if !strings.Contains(href, "return_to") {
+		t.Errorf("'Sign in' link should include return_to, got: %q", href)
+	}
+
+	err = signInLink.Click()
+	if err != nil {
+		t.Fatalf("Failed to click Sign in: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	currentURL := page.URL()
+	if !strings.Contains(currentURL, "/login") || !strings.Contains(currentURL, "return_to") {
+		t.Errorf("Expected /login with return_to, got: %s", currentURL)
 	}
 }
 

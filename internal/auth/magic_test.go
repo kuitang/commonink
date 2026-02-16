@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
 	"pgregory.net/rapid"
@@ -45,7 +46,9 @@ func setupMagicTestService(t testing.TB) (*UserService, *fakeClock, *email.MockE
 	}
 
 	emailSvc := email.NewMockEmailService()
-	svc := NewUserService(sessionsDB, emailSvc, "http://test.local")
+	masterKey := make([]byte, 32)
+	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
+	svc := NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local")
 
 	clk := newFakeClock(time.Now())
 	svc.SetClock(clk)

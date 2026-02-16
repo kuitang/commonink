@@ -135,7 +135,7 @@ func createFullAppServer(tempDir string) *fullAppServer {
 	oidcClient := auth.NewMockOIDCClient()
 	// Configure mock OIDC client with a default success response
 	oidcClient.SetNextSuccess("google-sub-12345", "test@example.com", "Test User", true)
-	userService := auth.NewUserService(sessionsDB, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -200,6 +200,12 @@ func createFullAppServer(tempDir string) *fullAppServer {
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte("<html><body><h1>Login</h1></body></html>"))
+	})
+
+	// Notes page (stub — prevents GET / catch-all from intercepting /notes redirect)
+	mux.HandleFunc("GET /notes", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><body><h1>Notes</h1></body></html>"))
 	})
 
 	// Protected notes API routes
@@ -864,6 +870,10 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	email := testutil.EmailGenerator().Draw(t, "email")
 	password := testutil.PasswordGenerator().Draw(t, "password")
 	newPassword := testutil.PasswordGenerator().Draw(t, "newPassword")
+	// Old and new passwords must differ for Property 6 to be meaningful
+	if password == newPassword {
+		t.Skip("old and new passwords must differ for Property 6")
+	}
 
 	client := ts.Client()
 
@@ -919,7 +929,7 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	}
 
 	// Property 4: POST /auth/password-reset-confirm with valid token -> redirects to login
-	confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token}, "new_password": {newPassword}})
+	confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token}, "password": {newPassword}, "confirm_password": {newPassword}})
 	if err != nil {
 		t.Fatalf("Password reset confirm request failed: %v", err)
 	}
@@ -930,16 +940,68 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 		body, _ := io.ReadAll(confirmResp.Body)
 		t.Fatalf("Expected 200 after redirect, got %d: %s", confirmResp.StatusCode, string(body))
 	}
+	// Verify the confirm actually succeeded (not just redirected to login with error)
+	confirmFinalURL := confirmResp.Request.URL.String()
+	if strings.Contains(confirmFinalURL, "error=") {
+		t.Fatalf("Password reset confirm failed: redirected to %s", confirmFinalURL)
+	}
+	if !strings.Contains(confirmFinalURL, "success=") {
+		t.Fatalf("Password reset confirm should redirect to login with success message, got: %s", confirmFinalURL)
+	}
+
+	// Property 5: Login with NEW password should succeed
+	// Use a fresh client with fresh cookies but same TLS config as test server
+	freshJar, _ := cookiejar.New(nil)
+	freshClient := ts.Client()
+	freshClient.Jar = freshJar
+	loginResp, err := freshClient.PostForm(ts.URL+"/auth/login", url.Values{"email": {email}, "password": {newPassword}})
+	if err != nil {
+		t.Fatalf("Login with new password failed: %v", err)
+	}
+	loginResp.Body.Close()
+	// After successful login, should end up at /notes (200)
+	if !strings.Contains(loginResp.Request.URL.Path, "/notes") {
+		t.Fatalf("Login with new password should redirect to /notes, got: %s", loginResp.Request.URL.String())
+	}
+
+	// Property 6: Login with OLD password should fail
+	freshJar2, _ := cookiejar.New(nil)
+	oldPwClient := ts.Client()
+	oldPwClient.Jar = freshJar2
+	oldPwClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	oldPwResp, err := oldPwClient.PostForm(ts.URL+"/auth/login", url.Values{"email": {email}, "password": {password}})
+	if err != nil {
+		t.Fatalf("Login with old password request failed: %v", err)
+	}
+	oldPwResp.Body.Close()
+	if oldPwResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("Login with old password should redirect (303), got %d", oldPwResp.StatusCode)
+	}
+	oldPwLoc := oldPwResp.Header.Get("Location")
+	if !strings.Contains(oldPwLoc, "error") {
+		t.Fatalf("Login with old password should redirect with error, got Location: %s", oldPwLoc)
+	}
 
 	// Property 7: Token should be consumed (reusing should fail)
-	confirmResp2, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token}, "new_password": {"AnotherPassword123!"}})
+	// Use a non-redirect client to verify the 303 → /login?error=... redirect
+	noRedirectClient := *client
+	noRedirectClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	confirmResp2, err := noRedirectClient.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token}, "password": {"AnotherPassword123!"}, "confirm_password": {"AnotherPassword123!"}})
 	if err != nil {
 		t.Fatalf("Second password reset confirm request failed: %v", err)
 	}
 	defer confirmResp2.Body.Close()
 
-	if confirmResp2.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("Reusing reset token should return 401, got %d", confirmResp2.StatusCode)
+	if confirmResp2.StatusCode != http.StatusSeeOther {
+		t.Fatalf("Reusing reset token should redirect (303), got %d", confirmResp2.StatusCode)
+	}
+	redirectLoc := confirmResp2.Header.Get("Location")
+	if !strings.Contains(redirectLoc, "error") {
+		t.Fatalf("Reusing consumed token should redirect with error, got Location: %s", redirectLoc)
 	}
 
 	// Property 8: Weak password should be rejected
@@ -955,15 +1017,19 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	linkURL2, _ := url.Parse(resetData2.Link)
 	token2 := linkURL2.Query().Get("token")
 
-	// Try with weak password
-	weakResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token2}, "new_password": {"weak"}})
+	// Try with weak password (use no-redirect client to see the 303)
+	weakResp, err := noRedirectClient.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {token2}, "password": {"weak"}, "confirm_password": {"weak"}})
 	if err != nil {
 		t.Fatalf("Weak password reset confirm request failed: %v", err)
 	}
 	defer weakResp.Body.Close()
 
-	if weakResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("Weak password should return 400, got %d", weakResp.StatusCode)
+	if weakResp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("Weak password should redirect (303), got %d", weakResp.StatusCode)
+	}
+	weakLoc := weakResp.Header.Get("Location")
+	if !strings.Contains(weakLoc, "error") {
+		t.Fatalf("Weak password should redirect with error, got Location: %s", weakLoc)
 	}
 }
 
@@ -1002,16 +1068,20 @@ func testIntegration_InvalidTokens_Properties(t *rapid.T) {
 		t.Fatalf("Invalid magic token should return 401 or 400, got %d", verifyResp.StatusCode)
 	}
 
-	// Property 2: Password reset confirm with arbitrary token should fail
-	confirmResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {arbitraryToken}, "new_password": {arbitraryPassword}})
+	// Property 2: Password reset confirm with arbitrary token should fail (redirect to login with error)
+	noRedirectClient := *client
+	noRedirectClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	confirmResp, err := noRedirectClient.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {arbitraryToken}, "password": {arbitraryPassword}, "confirm_password": {arbitraryPassword}})
 	if err != nil {
 		t.Fatalf("Password reset confirm request failed: %v", err)
 	}
 	confirmResp.Body.Close()
 
-	// Invalid token should return 401 Unauthorized (or 400 if weak password is checked first)
-	if confirmResp.StatusCode != http.StatusUnauthorized && confirmResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("Invalid reset token should return 401 or 400, got %d", confirmResp.StatusCode)
+	// Invalid token should redirect (303) or return 400 (if password empty/weak is caught first)
+	if confirmResp.StatusCode != http.StatusSeeOther && confirmResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Invalid reset token should redirect or return 400, got %d", confirmResp.StatusCode)
 	}
 
 	// Property 3: Empty token should be rejected with 400
@@ -1037,7 +1107,7 @@ func testIntegration_InvalidTokens_Properties(t *rapid.T) {
 	}
 
 	// Property 5: Empty fields in password reset confirm should be rejected
-	emptyFieldsResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {""}, "new_password": {""}})
+	emptyFieldsResp, err := client.PostForm(ts.URL+"/auth/password-reset-confirm", url.Values{"token": {""}, "password": {""}})
 	if err != nil {
 		t.Fatalf("Empty fields password reset confirm request failed: %v", err)
 	}
@@ -1324,7 +1394,7 @@ func testIntegration_OAuthMCP_Properties(t *rapid.T) {
 
 	// Step 3: Create user and session
 	testEmail := "oauth-mcp-test-" + generateIntegrationSecureRandom(8) + "@example.com"
-	user, err := ts.userService.FindOrCreateByEmail(context.Background(), testEmail)
+	user, err := ts.userService.FindOrCreateByProvider(context.Background(), testEmail)
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
 	}
@@ -1645,7 +1715,7 @@ func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
 
 	// Create user and get access token directly via provider (bypass OAuth flow for this test)
 	testEmail := "mcp-crud-test-" + generateIntegrationSecureRandom(8) + "@example.com"
-	user, _ := ts.userService.FindOrCreateByEmail(context.Background(), testEmail)
+	user, _ := ts.userService.FindOrCreateByProvider(context.Background(), testEmail)
 
 	// Register a public OAuth client
 	dcrReq := map[string]interface{}{
@@ -1932,7 +2002,7 @@ func testIntegration_RefreshToken_Properties(t *rapid.T) {
 
 	// Step 2: Create tokens directly via provider (bypass full OAuth flow for this test)
 	testEmail := "refresh-test-" + generateIntegrationSecureRandom(8) + "@example.com"
-	user, _ := ts.userService.FindOrCreateByEmail(context.Background(), testEmail)
+	user, _ := ts.userService.FindOrCreateByProvider(context.Background(), testEmail)
 
 	tokens, err := ts.oauthProvider.CreateTokens(context.Background(), oauth.TokenParams{
 		ClientID:            clientID,
