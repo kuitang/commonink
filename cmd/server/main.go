@@ -139,20 +139,16 @@ func main() {
 	var oidcClient auth.OIDCClient
 	var localMockOIDC *auth.LocalMockOIDCProvider
 	if cfg.NoOIDC {
-		localMockOIDC = auth.NewLocalMockOIDCProvider(cfg.BaseURL)
+		localMockOIDC = auth.NewLocalMockOIDCProvider("")
 		oidcClient = localMockOIDC
 		log.Println("Using local mock OIDC provider (--no-oidc)")
 	} else {
-		googleRedirectURL := cfg.GoogleRedirectURL
-		if googleRedirectURL == "" {
-			googleRedirectURL = cfg.BaseURL + "/auth/google/callback"
-		}
-		realOIDC, err := auth.NewGoogleOIDCClient(cfg.GoogleClientID, cfg.GoogleClientSecret, googleRedirectURL)
+		realOIDC, err := auth.NewGoogleOIDCClient(cfg.GoogleClientID, cfg.GoogleClientSecret)
 		if err != nil {
 			log.Fatalf("Failed to initialize Google OIDC client: %v", err)
 		}
 		oidcClient = realOIDC
-		log.Printf("Using real Google OIDC client (redirect: %s)", googleRedirectURL)
+		log.Println("Using real Google OIDC client")
 	}
 
 	// Disable secure cookies for local development (HTTP)
@@ -161,13 +157,7 @@ func main() {
 		log.Println("Secure cookies disabled for local development (HTTP)")
 	}
 
-	publicNotesURL := os.Getenv("PUBLIC_NOTES_URL")
-	if publicNotesURL == "" {
-		publicNotesURL = cfg.BaseURL + "/public"
-	}
-	_ = publicNotesURL // used by future features
-
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, cfg.BaseURL, auth.Argon2Hasher{})
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, "", auth.Argon2Hasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -176,8 +166,8 @@ func main() {
 	oauthSigningKey := loadOAuthSigningKey(cfg)
 	oauthCfg := oauth.Config{
 		DB:         sessionsDB.DB(),
-		Issuer:     cfg.BaseURL,
-		Resource:   cfg.BaseURL,
+		Issuer:     "",
+		Resource:   "",
 		HMACSecret: oauthHMACSecret,
 		SigningKey: oauthSigningKey,
 	}
@@ -195,12 +185,12 @@ func main() {
 	log.Println("Short URL service initialized")
 
 	// Initialize public notes service with short URL support
-	publicNotes := notes.NewPublicNoteService(s3Client).WithShortURLService(shortURLSvc, cfg.BaseURL)
+	publicNotes := notes.NewPublicNoteService(s3Client).WithShortURLService(shortURLSvc, "")
 
 	// Initialize auth middleware and handlers
 	// Create an OAuth token verifier adapter that wraps the OAuth provider
 	oauthTokenVerifier := &OAuthProviderVerifier{provider: oauthProvider}
-	resourceMetadataURL := cfg.BaseURL + "/.well-known/oauth-protected-resource"
+	resourceMetadataURL := "/.well-known/oauth-protected-resource"
 
 	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
 	authMiddleware.WithOAuthVerifier(oauthTokenVerifier, resourceMetadataURL)
@@ -217,7 +207,7 @@ func main() {
 		consentService,
 		s3Client,
 		shortURLSvc,
-		cfg.BaseURL,
+		"",
 	)
 
 	// Create HTTP mux

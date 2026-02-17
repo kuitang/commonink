@@ -8,6 +8,7 @@ import (
 
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
+	"github.com/kuitang/agent-notes/internal/urlutil"
 )
 
 // Context keys for auth data
@@ -81,7 +82,7 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			if IsAPIKeyToken(token) {
 				userID, userDB, err = m.authenticateWithAPIKey(r.Context(), token)
 				if err != nil {
-					m.writeUnauthorized(w, "invalid_token", "Invalid API key")
+					m.writeUnauthorized(w, r, "invalid_token", "Invalid API key")
 					return
 				}
 			} else if m.oauthVerifier != nil {
@@ -89,7 +90,7 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 				userID, userDB, err = m.authenticateWithOAuthJWT(r.Context(), token)
 				if err != nil {
 					fmt.Printf("[AUTH] OAuth JWT verification failed: %v\n", err)
-					m.writeUnauthorized(w, "invalid_token", err.Error())
+					m.writeUnauthorized(w, r, "invalid_token", err.Error())
 					return
 				}
 			}
@@ -99,14 +100,14 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 		if userID == "" {
 			sessionID, err := GetFromRequest(r)
 			if err != nil {
-				m.writeUnauthorized(w, "missing_token", "No valid authentication provided")
+				m.writeUnauthorized(w, r, "missing_token", "No valid authentication provided")
 				return
 			}
 
 			// Validate session
 			userID, err = m.sessionService.Validate(r.Context(), sessionID)
 			if err != nil {
-				m.writeUnauthorized(w, "invalid_token", "Invalid or expired session")
+				m.writeUnauthorized(w, r, "invalid_token", "Invalid or expired session")
 				return
 			}
 
@@ -165,10 +166,15 @@ func (m *Middleware) authenticateWithOAuthJWT(ctx context.Context, token string)
 }
 
 // writeUnauthorized writes a 401 response with WWW-Authenticate header per RFC 6750.
-func (m *Middleware) writeUnauthorized(w http.ResponseWriter, errorType, errorDesc string) {
+func (m *Middleware) writeUnauthorized(w http.ResponseWriter, r *http.Request, errorType, errorDesc string) {
 	if m.resourceMetadataURL != "" {
+		resourceMetadataURL := m.resourceMetadataURL
+		if strings.HasPrefix(resourceMetadataURL, "/") {
+			origin := urlutil.OriginFromRequest(r, "")
+			resourceMetadataURL = origin + resourceMetadataURL
+		}
 		challenge := fmt.Sprintf(`Bearer resource_metadata="%s", error="%s", error_description="%s"`,
-			m.resourceMetadataURL, errorType, errorDesc)
+			resourceMetadataURL, errorType, errorDesc)
 		w.Header().Set("WWW-Authenticate", challenge)
 	} else {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer error="%s", error_description="%s"`, errorType, errorDesc))

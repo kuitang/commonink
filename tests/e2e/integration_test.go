@@ -1474,7 +1474,7 @@ func testIntegration_OAuthMCP_PropertiesWithServer(t *rapid.T, ts *fullAppServer
 	// Step 1: Register OAuth client
 	dcrReq := map[string]interface{}{
 		"client_name":                "TestMCPClient",
-		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"redirect_uris":              []string{"https://client.example.test/callback"},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none", // Public client
@@ -1518,7 +1518,7 @@ func testIntegration_OAuthMCP_PropertiesWithServer(t *rapid.T, ts *fullAppServer
 	// Step 4: Build authorization request (consent will be handled via UI flow)
 	authParams := url.Values{
 		"client_id":             {clientID},
-		"redirect_uri":          {"http://localhost:8080/callback"},
+		"redirect_uri":          {"https://client.example.test/callback"},
 		"response_type":         {"code"},
 		"scope":                 {"notes:read notes:write"},
 		"state":                 {state},
@@ -1595,7 +1595,7 @@ func testIntegration_OAuthMCP_PropertiesWithServer(t *rapid.T, ts *fullAppServer
 		"grant_type":    {"authorization_code"},
 		"client_id":     {clientID},
 		"code":          {authCode},
-		"redirect_uri":  {"http://localhost:8080/callback"},
+		"redirect_uri":  {"https://client.example.test/callback"},
 		"code_verifier": {verifier},
 	}
 
@@ -1839,7 +1839,7 @@ func testIntegration_MCPFullCRUD_PropertiesWithServer(t *rapid.T, ts *fullAppSer
 	// Register a public OAuth client
 	dcrReq := map[string]interface{}{
 		"client_name":                "MCPCRUDTestClient",
-		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"redirect_uris":              []string{"https://client.example.test/callback"},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
@@ -2111,7 +2111,7 @@ func testIntegration_RefreshToken_PropertiesWithServer(t *rapid.T, ts *fullAppSe
 	// Step 1: Register OAuth client
 	dcrReq := map[string]interface{}{
 		"client_name":                "RefreshTestClient",
-		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"redirect_uris":              []string{"https://client.example.test/callback"},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
@@ -2300,7 +2300,7 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 	// ==========================================================
 	dcrReq := map[string]interface{}{
 		"client_name":                "JourneyTestClient",
-		"redirect_uris":              []string{"http://localhost:8080/callback"},
+		"redirect_uris":              []string{"https://client.example.test/callback"},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
@@ -2324,7 +2324,7 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 	// Authorization request
 	authParams := url.Values{
 		"client_id":             {clientID},
-		"redirect_uri":          {"http://localhost:8080/callback"},
+		"redirect_uri":          {"https://client.example.test/callback"},
 		"response_type":         {"code"},
 		"scope":                 {"notes:read notes:write"},
 		"state":                 {"test-state"},
@@ -2383,7 +2383,7 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 		"grant_type":    {"authorization_code"},
 		"client_id":     {clientID},
 		"code":          {authCode},
-		"redirect_uri":  {"http://localhost:8080/callback"},
+		"redirect_uri":  {"https://client.example.test/callback"},
 		"code_verifier": {verifier},
 	}
 

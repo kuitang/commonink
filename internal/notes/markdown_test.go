@@ -31,7 +31,7 @@ func urlGenerator() *rapid.Generator[string] {
 	return rapid.OneOf(
 		rapid.Just("https://example.com"),
 		rapid.Just("https://test.com/page"),
-		rapid.Just("http://localhost:8080"),
+		rapid.Just("http://example.test:8080"),
 	)
 }
 

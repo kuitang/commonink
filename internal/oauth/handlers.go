@@ -125,9 +125,9 @@ func (h *Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate resource matches server's resource
-	// Accept base URL with or without trailing slash, and /mcp suffix
-	serverResource := h.provider.Resource()
+	// Validate resource matches server's resource.
+	// Accept base URL with or without trailing slash, and /mcp suffix.
+	serverResource := h.provider.ResourceForRequest(r)
 	normalizedResource := strings.TrimRight(req.Resource, "/")
 	normalizedServer := strings.TrimRight(serverResource, "/")
 	if req.Resource != "" && normalizedResource != normalizedServer && normalizedResource != normalizedServer+"/mcp" {
@@ -303,7 +303,7 @@ func (h *Handler) issueAuthorizationCode(w http.ResponseWriter, r *http.Request,
 	// Determine resource - use server's resource if not specified
 	resource := req.Resource
 	if resource == "" {
-		resource = h.provider.Resource()
+		resource = h.provider.ResourceForRequest(r)
 	}
 
 	// Create authorization code
@@ -607,6 +607,7 @@ func (h *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 	tokens, err := h.provider.CreateTokens(r.Context(), TokenParams{
 		ClientID:            req.ClientID,
 		UserID:              authCode.UserID,
+		Issuer:              h.provider.IssuerForRequest(r),
 		Scope:               authCode.Scope,
 		Resource:            authCode.Resource,
 		IncludeRefreshToken: true,
@@ -651,6 +652,8 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 	// Refresh tokens (this also validates the refresh token and client)
 	tokens, err := h.provider.RefreshTokens(r.Context(), req.RefreshToken, TokenParams{
 		ClientID:            req.ClientID,
+		Issuer:              h.provider.IssuerForRequest(r),
+		Resource:            h.provider.ResourceForRequest(r),
 		IncludeRefreshToken: true,
 	})
 	if err != nil {

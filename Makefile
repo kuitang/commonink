@@ -17,14 +17,12 @@ BINARY_PATH := ./bin/$(BINARY_NAME)
 
 # Identifiers and URLs (not secrets - safe to commit)
 export GOOGLE_CLIENT_ID := 194850132916-dkdltj0gjc9t7inllg2cuvk30inuulen.apps.googleusercontent.com
-export GOOGLE_REDIRECT_URL := http://localhost:8080/auth/google/callback
 export RESEND_FROM_EMAIL := onboarding@resend.dev
 export AWS_ENDPOINT_URL_S3 :=
 export AWS_REGION := auto
 export BUCKET_NAME := commonink-public
 export S3_PUBLIC_URL :=
 export LISTEN_ADDR := :8080
-export BASE_URL ?= http://localhost:8080
 
 # Deterministic test secrets (safe to commit - only used for local testing)
 # These propagate to all child processes (go test, subprocess servers) via os.Environ().
@@ -33,7 +31,11 @@ export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
-.PHONY: all build run run-test run-email test test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
+# Optional regex for go test -skip (CI-friendly filtering)
+TEST_SKIP_PATTERNS ?=
+BROWSER_TEST_SKIP_PATTERNS ?=
+
+.PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
@@ -60,7 +62,17 @@ run-email: build
 test:
 	go test $(BUILD_TAGS) -v -timeout 120s -parallel $$(nproc 2>/dev/null || echo 4) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
-		-run 'Test' -rapid.checks=10
+		-run 'Test' -rapid.checks=10 $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
+
+## test-browser: Run browser tests (Playwright)
+test-browser:
+	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip '$(BROWSER_TEST_SKIP_PATTERNS)',)
+
+## test-all: Run test + browser test suite
+test-all:
+	$(MAKE) test
+	$(MAKE) test-browser
 
 ## test-full: Full tests with coverage (requires OPENAI_API_KEY for conformance)
 test-full:

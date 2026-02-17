@@ -60,6 +60,7 @@ internal/db/data/
 
 # Secret files (API keys, OAuth credentials)
 secrets.sh
+secrets.staging.sh
 google_secret.json
 google_secrets.txt
 resend_api_key.txt

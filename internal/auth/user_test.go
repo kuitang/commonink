@@ -137,8 +137,8 @@ func TestMockOIDC_Reset(t *testing.T) {
 		sub := rapid.StringMatching(`[0-9]{10}`).Draw(rt, "sub")
 		emailAddr := rapid.StringMatching(`[a-z]{5}@test\.com`).Draw(rt, "email")
 		oidcClient.SetNextSuccess(sub, emailAddr, "Test User", true)
-		oidcClient.GetAuthURL("test-state")
-		_, _ = oidcClient.ExchangeCode(context.Background(), "test-code")
+		oidcClient.GetAuthURL("test-state", "https://example.com/auth/google/callback")
+		_, _ = oidcClient.ExchangeCode(context.Background(), "test-code", "https://example.com/auth/google/callback")
 
 		// Reset
 		oidcClient.Reset()

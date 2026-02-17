@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kuitang/agent-notes/internal/urlutil"
 )
 
 // Handler provides HTTP handlers for authentication routes.
@@ -84,9 +86,34 @@ func (h *Handler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Persist request origin for mock OIDC local callback generation.
+	// This keeps host handling dynamic without hardcoded callback URLs.
+	h.setMockOIDCCallbackOriginCookie(w, r)
+
+	origin := urlutil.OriginFromRequest(r, h.userService.resolveBaseURL())
+	redirectURL := urlutil.BuildAbsolute(origin, "/auth/google/callback")
+
+	if mockOIDC, ok := h.oidcClient.(*LocalMockOIDCProvider); ok {
+		mockOIDC.SetCallbackOrigin(state, origin)
+	}
+
 	// Redirect to OIDC provider
-	authURL := h.oidcClient.GetAuthURL(state)
+	authURL := h.oidcClient.GetAuthURL(state, redirectURL)
 	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (h *Handler) setMockOIDCCallbackOriginCookie(w http.ResponseWriter, r *http.Request) {
+	origin := urlutil.OriginFromRequest(r, h.userService.resolveBaseURL())
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_mock_callback_origin",
+		Value:    origin,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secureCookies,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   600, // 10 minutes
+	})
 }
 
 // HandleGoogleCallback handles the OIDC callback after authentication.
@@ -125,7 +152,9 @@ func (h *Handler) HandleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.oidcClient.ExchangeCode(r.Context(), code)
+	origin := urlutil.OriginFromRequest(r, h.userService.resolveBaseURL())
+	redirectURL := urlutil.BuildAbsolute(origin, "/auth/google/callback")
+	claims, err := h.oidcClient.ExchangeCode(r.Context(), code, redirectURL)
 	if err != nil {
 		http.Error(w, "Failed to exchange code", http.StatusInternalServerError)
 		return
@@ -191,7 +220,7 @@ func (h *Handler) HandleMagicLinkRequest(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Send magic link (always succeed to prevent email enumeration)
-	_ = h.userService.SendMagicLink(r.Context(), email)
+	_ = h.userService.SendMagicLink(r.Context(), email, urlutil.OriginFromRequest(r, h.userService.baseURL))
 
 	// Redirect to login with success message
 	http.Redirect(w, r, "/login?magic=sent", http.StatusSeeOther)
@@ -362,7 +391,7 @@ func (h *Handler) HandlePasswordResetRequest(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Send reset email (always succeed to prevent email enumeration)
-	_ = h.userService.SendPasswordReset(r.Context(), email)
+	_ = h.userService.SendPasswordReset(r.Context(), email, urlutil.OriginFromRequest(r, h.userService.baseURL))
 
 	// Redirect to login with success message
 	http.Redirect(w, r, "/login?reset=requested", http.StatusSeeOther)

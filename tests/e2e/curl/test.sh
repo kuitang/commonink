@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 # Use port 18080 to avoid conflicts with common services on 8080
 DEFAULT_PORT="${TEST_PORT:-18080}"
-BASE_URL="${BASE_URL:-http://localhost:${DEFAULT_PORT}}"
+TARGET_URL="${TARGET_URL:-http://localhost:${DEFAULT_PORT}}"
 SERVER_PID=""
 KEEP_SERVER=false
 HEALTH_CHECK_TIMEOUT=30
@@ -202,7 +202,7 @@ wait_for_health() {
 
     local elapsed=0
     while [[ $elapsed -lt $HEALTH_CHECK_TIMEOUT ]]; do
-        if curl -s "${BASE_URL}/health" | grep -q "healthy"; then
+        if curl -s "${TARGET_URL}/health" | grep -q "healthy"; then
             log_success "Server is healthy"
             return 0
         fi
@@ -257,11 +257,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --base-url)
-            BASE_URL="$2"
+            TARGET_URL="$2"
             shift 2
             ;;
         --base-url=*)
-            BASE_URL="${1#*=}"
+            TARGET_URL="${1#*=}"
             shift
             ;;
         -h|--help)
@@ -284,7 +284,7 @@ done
 # =============================================================================
 
 log_section "HTTP API E2E Tests"
-log_info "Base URL: $BASE_URL"
+log_info "Base URL: $TARGET_URL"
 log_info "Keep server: $KEEP_SERVER"
 
 # Start server if needed
@@ -301,7 +301,7 @@ wait_for_health
 
 log_section "Health Check"
 
-http_request GET "${BASE_URL}/health"
+http_request GET "${TARGET_URL}/health"
 run_test "GET /health returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "healthy"
 
 # =============================================================================
@@ -310,7 +310,7 @@ run_test "GET /health returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "healthy"
 
 log_section "List Notes (Empty Database)"
 
-http_request GET "${BASE_URL}/notes"
+http_request GET "${TARGET_URL}/notes"
 run_test "GET /notes returns 200 for empty list" "200" "$HTTP_STATUS" "$HTTP_BODY" "notes"
 
 # Verify empty notes array
@@ -329,7 +329,7 @@ log_section "Create Note"
 
 # Create a note
 CREATE_DATA='{"title":"Test Note","content":"This is a test note created by curl E2E test."}'
-http_request POST "${BASE_URL}/notes" "$CREATE_DATA"
+http_request POST "${TARGET_URL}/notes" "$CREATE_DATA"
 run_test "POST /notes creates note (201)" "201" "$HTTP_STATUS" "$HTTP_BODY" "Test Note"
 
 # Extract note ID for later tests
@@ -353,15 +353,15 @@ run_test "Create response contains updated_at" "201" "$HTTP_STATUS" "$HTTP_BODY"
 log_section "Create Note - Validation"
 
 # Missing title
-http_request POST "${BASE_URL}/notes" '{"content":"No title"}'
+http_request POST "${TARGET_URL}/notes" '{"content":"No title"}'
 run_test "POST /notes without title returns 400" "400" "$HTTP_STATUS" "$HTTP_BODY" "Title is required"
 
 # Invalid JSON
-http_request POST "${BASE_URL}/notes" 'not valid json'
+http_request POST "${TARGET_URL}/notes" 'not valid json'
 run_test "POST /notes with invalid JSON returns 400" "400" "$HTTP_STATUS" "$HTTP_BODY" "Invalid JSON"
 
 # Empty body
-http_request POST "${BASE_URL}/notes" '{}'
+http_request POST "${TARGET_URL}/notes" '{}'
 run_test "POST /notes with empty object returns 400" "400" "$HTTP_STATUS" "$HTTP_BODY" "Title is required"
 
 # =============================================================================
@@ -370,7 +370,7 @@ run_test "POST /notes with empty object returns 400" "400" "$HTTP_STATUS" "$HTTP
 
 log_section "Read Note"
 
-http_request GET "${BASE_URL}/notes/${NOTE_ID}"
+http_request GET "${TARGET_URL}/notes/${NOTE_ID}"
 run_test "GET /notes/{id} returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "$NOTE_ID"
 run_test "Get response contains title" "200" "$HTTP_STATUS" "$HTTP_BODY" "Test Note"
 run_test "Get response contains content" "200" "$HTTP_STATUS" "$HTTP_BODY" "test note created"
@@ -381,7 +381,7 @@ run_test "Get response contains content" "200" "$HTTP_STATUS" "$HTTP_BODY" "test
 
 log_section "Read Note - Not Found"
 
-http_request GET "${BASE_URL}/notes/nonexistent-id-12345"
+http_request GET "${TARGET_URL}/notes/nonexistent-id-12345"
 run_test "GET /notes/{id} for nonexistent returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "not found"
 
 # =============================================================================
@@ -390,12 +390,12 @@ run_test "GET /notes/{id} for nonexistent returns 404" "404" "$HTTP_STATUS" "$HT
 
 log_section "List Notes (With Data)"
 
-http_request GET "${BASE_URL}/notes"
+http_request GET "${TARGET_URL}/notes"
 run_test "GET /notes returns 200 with notes" "200" "$HTTP_STATUS" "$HTTP_BODY" "notes"
 run_test "List contains our created note" "200" "$HTTP_STATUS" "$HTTP_BODY" "$NOTE_ID"
 
 # Test pagination parameters
-http_request GET "${BASE_URL}/notes?limit=10&offset=0"
+http_request GET "${TARGET_URL}/notes?limit=10&offset=0"
 run_test "GET /notes with pagination returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "notes"
 
 # =============================================================================
@@ -405,22 +405,22 @@ run_test "GET /notes with pagination returns 200" "200" "$HTTP_STATUS" "$HTTP_BO
 log_section "Update Note"
 
 UPDATE_DATA='{"title":"Updated Title","content":"Updated content from curl test."}'
-http_request PUT "${BASE_URL}/notes/${NOTE_ID}" "$UPDATE_DATA"
+http_request PUT "${TARGET_URL}/notes/${NOTE_ID}" "$UPDATE_DATA"
 run_test "PUT /notes/{id} updates note (200)" "200" "$HTTP_STATUS" "$HTTP_BODY" "Updated Title"
 run_test "Update response contains new content" "200" "$HTTP_STATUS" "$HTTP_BODY" "Updated content"
 
 # Verify update persisted by reading again
-http_request GET "${BASE_URL}/notes/${NOTE_ID}"
+http_request GET "${TARGET_URL}/notes/${NOTE_ID}"
 run_test "Updated note has new title" "200" "$HTTP_STATUS" "$HTTP_BODY" "Updated Title"
 run_test "Updated note has new content" "200" "$HTTP_STATUS" "$HTTP_BODY" "Updated content"
 
 # Test partial update (title only)
 PARTIAL_UPDATE='{"title":"Partial Update Title"}'
-http_request PUT "${BASE_URL}/notes/${NOTE_ID}" "$PARTIAL_UPDATE"
+http_request PUT "${TARGET_URL}/notes/${NOTE_ID}" "$PARTIAL_UPDATE"
 run_test "PUT /notes/{id} with partial data (200)" "200" "$HTTP_STATUS" "$HTTP_BODY" "Partial Update Title"
 
 # Verify content was preserved
-http_request GET "${BASE_URL}/notes/${NOTE_ID}"
+http_request GET "${TARGET_URL}/notes/${NOTE_ID}"
 run_test "Partial update preserved content" "200" "$HTTP_STATUS" "$HTTP_BODY" "Updated content"
 
 # =============================================================================
@@ -429,7 +429,7 @@ run_test "Partial update preserved content" "200" "$HTTP_STATUS" "$HTTP_BODY" "U
 
 log_section "Update Note - Not Found"
 
-http_request PUT "${BASE_URL}/notes/nonexistent-id-12345" '{"title":"New Title"}'
+http_request PUT "${TARGET_URL}/notes/nonexistent-id-12345" '{"title":"New Title"}'
 run_test "PUT /notes/{id} for nonexistent returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "not found"
 
 # =============================================================================
@@ -440,32 +440,32 @@ log_section "Search Notes"
 
 # Create additional notes for search testing
 CREATE_DATA2='{"title":"Search Test Note","content":"This note contains the keyword findme123 for testing."}'
-http_request POST "${BASE_URL}/notes" "$CREATE_DATA2"
+http_request POST "${TARGET_URL}/notes" "$CREATE_DATA2"
 run_test "Create second note for search (201)" "201" "$HTTP_STATUS" "$HTTP_BODY" "Search Test Note"
 NOTE_ID2=$(json_field "$HTTP_BODY" "id")
 log_info "Created second note with ID: $NOTE_ID2"
 
 CREATE_DATA3='{"title":"Another Note","content":"This is completely different content with banana."}'
-http_request POST "${BASE_URL}/notes" "$CREATE_DATA3"
+http_request POST "${TARGET_URL}/notes" "$CREATE_DATA3"
 run_test "Create third note for search (201)" "201" "$HTTP_STATUS" "$HTTP_BODY" "Another Note"
 NOTE_ID3=$(json_field "$HTTP_BODY" "id")
 log_info "Created third note with ID: $NOTE_ID3"
 
 # Search for specific keyword
-http_request POST "${BASE_URL}/notes/search" '{"query":"findme123"}'
+http_request POST "${TARGET_URL}/notes/search" '{"query":"findme123"}'
 run_test "POST /notes/search returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "results"
 run_test "Search finds note with keyword" "200" "$HTTP_STATUS" "$HTTP_BODY" "findme123"
 
 # Search for title
-http_request POST "${BASE_URL}/notes/search" '{"query":"Search Test"}'
+http_request POST "${TARGET_URL}/notes/search" '{"query":"Search Test"}'
 run_test "Search by title works" "200" "$HTTP_STATUS" "$HTTP_BODY" "Search Test"
 
 # Search for partial word
-http_request POST "${BASE_URL}/notes/search" '{"query":"banana"}'
+http_request POST "${TARGET_URL}/notes/search" '{"query":"banana"}'
 run_test "Search for banana returns result" "200" "$HTTP_STATUS" "$HTTP_BODY" "banana"
 
 # Search with no results
-http_request POST "${BASE_URL}/notes/search" '{"query":"zzzznonexistentwordzzz"}'
+http_request POST "${TARGET_URL}/notes/search" '{"query":"zzzznonexistentwordzzz"}'
 run_test "Search with no matches returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "results"
 
 # =============================================================================
@@ -475,15 +475,15 @@ run_test "Search with no matches returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" 
 log_section "Search Notes - Validation"
 
 # Empty query
-http_request POST "${BASE_URL}/notes/search" '{"query":""}'
+http_request POST "${TARGET_URL}/notes/search" '{"query":""}'
 run_test "POST /notes/search with empty query returns 400" "400" "$HTTP_STATUS" "$HTTP_BODY" "query is required"
 
 # Missing query field
-http_request POST "${BASE_URL}/notes/search" '{}'
+http_request POST "${TARGET_URL}/notes/search" '{}'
 run_test "POST /notes/search without query returns 400" "400" "$HTTP_STATUS" "$HTTP_BODY" "query is required"
 
 # Invalid JSON
-http_request POST "${BASE_URL}/notes/search" 'not json'
+http_request POST "${TARGET_URL}/notes/search" 'not json'
 run_test "POST /notes/search with invalid JSON returns 400" "400" "$HTTP_STATUS" "$HTTP_BODY" "Invalid JSON"
 
 # =============================================================================
@@ -493,23 +493,23 @@ run_test "POST /notes/search with invalid JSON returns 400" "400" "$HTTP_STATUS"
 log_section "Delete Note"
 
 # Delete one of the test notes
-http_request DELETE "${BASE_URL}/notes/${NOTE_ID3}"
+http_request DELETE "${TARGET_URL}/notes/${NOTE_ID3}"
 run_test "DELETE /notes/{id} returns 204" "204" "$HTTP_STATUS"
 
 # Verify note is deleted
-http_request GET "${BASE_URL}/notes/${NOTE_ID3}"
+http_request GET "${TARGET_URL}/notes/${NOTE_ID3}"
 run_test "Deleted note returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "not found"
 
 # Delete second test note
-http_request DELETE "${BASE_URL}/notes/${NOTE_ID2}"
+http_request DELETE "${TARGET_URL}/notes/${NOTE_ID2}"
 run_test "DELETE second note returns 204" "204" "$HTTP_STATUS"
 
 # Delete original note
-http_request DELETE "${BASE_URL}/notes/${NOTE_ID}"
+http_request DELETE "${TARGET_URL}/notes/${NOTE_ID}"
 run_test "DELETE original note returns 204" "204" "$HTTP_STATUS"
 
 # Verify original note is deleted
-http_request GET "${BASE_URL}/notes/${NOTE_ID}"
+http_request GET "${TARGET_URL}/notes/${NOTE_ID}"
 run_test "Original deleted note returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "not found"
 
 # =============================================================================
@@ -518,7 +518,7 @@ run_test "Original deleted note returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "
 
 log_section "Delete Note - Not Found"
 
-http_request DELETE "${BASE_URL}/notes/nonexistent-id-12345"
+http_request DELETE "${TARGET_URL}/notes/nonexistent-id-12345"
 run_test "DELETE /notes/{id} for nonexistent returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "not found"
 
 # =============================================================================
@@ -527,7 +527,7 @@ run_test "DELETE /notes/{id} for nonexistent returns 404" "404" "$HTTP_STATUS" "
 
 log_section "Delete Already Deleted Note"
 
-http_request DELETE "${BASE_URL}/notes/${NOTE_ID}"
+http_request DELETE "${TARGET_URL}/notes/${NOTE_ID}"
 run_test "DELETE already deleted note returns 404" "404" "$HTTP_STATUS" "$HTTP_BODY" "not found"
 
 # =============================================================================
@@ -536,7 +536,7 @@ run_test "DELETE already deleted note returns 404" "404" "$HTTP_STATUS" "$HTTP_B
 
 log_section "List Notes (After Cleanup)"
 
-http_request GET "${BASE_URL}/notes"
+http_request GET "${TARGET_URL}/notes"
 run_test "GET /notes after cleanup returns 200" "200" "$HTTP_STATUS" "$HTTP_BODY" "notes"
 
 # Verify all test notes are deleted

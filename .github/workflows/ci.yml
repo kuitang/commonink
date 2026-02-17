@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - prod
+  pull_request:
+    branches:
+      - master
+      - prod
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.6"
+          check-latest: true
+      - name: Run Go tests
+        run: make test
+      - name: Install Playwright
+        run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+      - name: Run browser tests
+        env:
+          BROWSER_TEST_SKIP_PATTERNS: Pagination|Screenshot
+        run: make test-browser
+
+  deploy-preview:
+    name: deploy-preview
+    needs: test
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-preview-${{ github.event.number }}
+      cancel-in-progress: true
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Deploy preview
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          bash ./scripts/deploy-staging-preview.sh
+
+  deploy-prod:
+    name: deploy-prod
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/prod')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Deploy production
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
+          APP_NAME: commonink
+          CONFIG_FILE: fly.toml
+        run: |
+          bash ./scripts/deploy.sh

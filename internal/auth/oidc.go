@@ -25,11 +25,11 @@ type Claims struct {
 type OIDCClient interface {
 	// GetAuthURL returns the URL to redirect the user to for authentication.
 	// The state parameter should be a random string for CSRF protection.
-	GetAuthURL(state string) string
+	GetAuthURL(state, redirectURL string) string
 
 	// ExchangeCode exchanges an authorization code for ID token claims.
 	// Returns the user's claims if successful.
-	ExchangeCode(ctx context.Context, code string) (*Claims, error)
+	ExchangeCode(ctx context.Context, code, redirectURL string) (*Claims, error)
 }
 
 // MockOIDCClient is a mock implementation for testing.
@@ -54,13 +54,13 @@ func NewMockOIDCClient() *MockOIDCClient {
 }
 
 // GetAuthURL returns a mock authorization URL.
-func (m *MockOIDCClient) GetAuthURL(state string) string {
+func (m *MockOIDCClient) GetAuthURL(state, _ string) string {
 	m.LastState = state
 	return m.AuthURL + "?state=" + state
 }
 
 // ExchangeCode returns the configured NextClaims or NextError.
-func (m *MockOIDCClient) ExchangeCode(ctx context.Context, code string) (*Claims, error) {
+func (m *MockOIDCClient) ExchangeCode(ctx context.Context, code, _ string) (*Claims, error) {
 	m.LastCode = code
 	if m.NextError != nil {
 		return nil, m.NextError

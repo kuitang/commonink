@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +59,39 @@ func setupMagicTestService(t testing.TB) (*UserService, *fakeClock, *email.MockE
 	return svc, clk, emailSvc
 }
 
+func extractLinkFromEmailRT(t *rapid.T, emailSvc *email.MockEmailService, expectedTemplate string) *url.URL {
+	last := emailSvc.LastEmail()
+	if expectedTemplate != "" && last.Template != expectedTemplate {
+		t.Fatalf("expected template %s, got %s", expectedTemplate, last.Template)
+	}
+	var link string
+	switch data := last.Data.(type) {
+	case email.MagicLinkData:
+		if expectedTemplate != "" && expectedTemplate != "magic_link" {
+			t.Fatalf("expected template %s, got magic_link", expectedTemplate)
+		}
+		link = data.Link
+	case email.PasswordResetData:
+		if expectedTemplate != "" && expectedTemplate != "password_reset" {
+			t.Fatalf("expected template %s, got password_reset", expectedTemplate)
+		}
+		link = data.Link
+	default:
+		if expectedTemplate != "" && expectedTemplate != "none" {
+			t.Fatalf("expected template %s but got unsupported payload: %T", expectedTemplate, last.Data)
+		}
+		t.Fatalf("unexpected email payload type: %T", last.Data)
+	}
+	if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+		t.Fatalf("unexpected link format: %s", link)
+	}
+	parsed, err := url.Parse(link)
+	if err != nil {
+		t.Fatalf("failed to parse link %s: %v", link, err)
+	}
+	return parsed
+}
+
 // extractTokenFromEmailRT pulls the raw token string from the last magic-link
 // email captured by the mock email service. It parses the link query parameter.
 // Uses *rapid.T for compatibility with property test callbacks.
@@ -71,6 +107,65 @@ func extractTokenFromEmailRT(t *rapid.T, emailSvc *email.MockEmailService) strin
 		t.Fatalf("unexpected link format: %s", data.Link)
 	}
 	return data.Link[len(prefix):]
+}
+
+func TestMagicAndResetLinks_AreHostAgnostic_Properties(t *testing.T) {
+	svc, _, emailSvc := setupMagicTestService(t)
+	ctx := context.Background()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		scheme := rapid.SampledFrom([]string{"http", "https"}).Draw(rt, "scheme")
+		host := fmt.Sprintf(
+			"%s.%s",
+			rapid.StringMatching(`[a-z]{3,10}`).Draw(rt, "baseHost"),
+			rapid.StringMatching(`[a-z]{2,8}`).Draw(rt, "baseTld"),
+		)
+		port := rapid.IntRange(1024, 65535).Draw(rt, "port")
+		hasPort := rapid.Bool().Draw(rt, "hasPort")
+		baseHost := host
+		if hasPort {
+			baseHost = fmt.Sprintf("%s:%d", host, port)
+		}
+		baseURL := fmt.Sprintf("%s://%s", scheme, baseHost)
+
+		emailAddr := fmt.Sprintf("%s@%s", rapid.StringMatching(`[a-z]{3,12}`).Draw(rt, "name"), rapid.StringMatching(`[a-z]{2,6}`).Draw(rt, "domain"))
+
+		emailSvc.Clear()
+		if err := svc.SendMagicLink(ctx, emailAddr, baseURL); err != nil {
+			rt.Fatalf("SendMagicLink failed: %v", err)
+		}
+		magicURL := extractLinkFromEmailRT(rt, emailSvc, "magic_link")
+		if magicURL.Scheme != scheme {
+			rt.Fatalf("magic link scheme mismatch: got=%s want=%s", magicURL.Scheme, scheme)
+		}
+		if magicURL.Host != baseHost {
+			rt.Fatalf("magic link host mismatch: got=%s want=%s", magicURL.Host, baseHost)
+		}
+		if magicURL.Path != "/auth/magic/verify" {
+			rt.Fatalf("magic link path mismatch: %s", magicURL.Path)
+		}
+		if magicURL.Query().Get("token") == "" {
+			rt.Fatalf("magic link missing token")
+		}
+
+		emailSvc.Clear()
+		if err := svc.SendPasswordReset(ctx, emailAddr, baseURL); err != nil {
+			rt.Fatalf("SendPasswordReset failed: %v", err)
+		}
+		resetURL := extractLinkFromEmailRT(rt, emailSvc, "password_reset")
+		if resetURL.Scheme != scheme {
+			rt.Fatalf("password reset scheme mismatch: got=%s want=%s", resetURL.Scheme, scheme)
+		}
+		if resetURL.Host != baseHost {
+			rt.Fatalf("password reset host mismatch: got=%s want=%s", resetURL.Host, baseHost)
+		}
+		if resetURL.Path != "/auth/password-reset-confirm" {
+			rt.Fatalf("password reset path mismatch: %s", resetURL.Path)
+		}
+		if resetURL.Query().Get("token") == "" {
+			rt.Fatalf("password reset missing token")
+		}
+	})
 }
 
 // TestMain resets the database singleton before/after all tests in this package.

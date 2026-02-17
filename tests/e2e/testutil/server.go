@@ -391,7 +391,6 @@ func startServer(t testing.TB) (*ServerFixture, func(), error) {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("LISTEN_ADDR=:%d", port),
 		fmt.Sprintf("DATABASE_PATH=%s", dataDir),
-		fmt.Sprintf("BASE_URL=http://localhost:%d", port),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
 		fmt.Sprintf("MASTER_KEY=%s", testMasterKey),
 		fmt.Sprintf("OAUTH_HMAC_SECRET=%s", testOAuthHMACKey),

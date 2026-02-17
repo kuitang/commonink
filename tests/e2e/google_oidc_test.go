@@ -93,15 +93,20 @@ func NewMockOIDCClientAdapter(mockServer *mockoidc.MockOIDC, redirectURL string)
 	}, nil
 }
 
-// GetAuthURL returns the authorization URL with the provided state parameter
-func (a *MockOIDCClientAdapter) GetAuthURL(state string) string {
-	return a.oauthConfig.AuthCodeURL(state)
+// GetAuthURL returns the authorization URL with the provided state parameter.
+func (a *MockOIDCClientAdapter) GetAuthURL(state, redirectURL string) string {
+	cfg := *a.oauthConfig
+	cfg.RedirectURL = redirectURL
+	return cfg.AuthCodeURL(state)
 }
 
 // ExchangeCode exchanges an authorization code for ID token claims
-func (a *MockOIDCClientAdapter) ExchangeCode(ctx context.Context, code string) (*auth.Claims, error) {
+func (a *MockOIDCClientAdapter) ExchangeCode(ctx context.Context, code, redirectURL string) (*auth.Claims, error) {
+	cfg := *a.oauthConfig
+	cfg.RedirectURL = redirectURL
+
 	// Exchange the authorization code for tokens
-	oauth2Token, err := a.oauthConfig.Exchange(ctx, code)
+	oauth2Token, err := cfg.Exchange(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", auth.ErrCodeExchangeFailed, err)
 	}
@@ -340,7 +345,7 @@ func testOIDC_AuthURL_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
 	state := testutil.StateGenerator().Draw(t, "state")
 
 	// Get auth URL
-	authURL := ts.oidcClient.GetAuthURL(state)
+	authURL := ts.oidcClient.GetAuthURL(state, ts.URL+"/auth/google/callback")
 
 	// Property 1: Auth URL should not be empty
 	if authURL == "" {

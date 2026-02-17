@@ -1,5 +1,5 @@
 // dcr.go implements RFC 7591 Dynamic Client Registration for OAuth 2.1.
-// Supports public clients (Claude) and confidential clients (ChatGPT).
+// Supports public and confidential clients.
 package oauth
 
 import (
@@ -12,21 +12,6 @@ import (
 
 	"github.com/kuitang/agent-notes/internal/db/sessions"
 )
-
-// AllowedRedirectURIs defines the redirect URI allowlist per client type.
-var AllowedRedirectURIs = struct {
-	ChatGPT []string
-	Claude  []string
-}{
-	ChatGPT: []string{
-		"https://chatgpt.com/connector_platform_oauth_redirect",
-		"https://platform.openai.com/apps-manage/oauth",
-	},
-	Claude: []string{
-		"https://claude.ai/api/mcp/auth_callback",
-		"https://claude.com/api/mcp/auth_callback",
-	},
-}
 
 // DCRRequest represents the client registration request per RFC 7591.
 type DCRRequest struct {
@@ -86,7 +71,7 @@ func (p *Provider) DCR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate redirect_uris against allowlist
+	// Validate redirect_uris
 	if err := validateRedirectURIs(req.RedirectURIs); err != nil {
 		writeDCRError(w, http.StatusBadRequest, DCRErrorInvalidRedirectURI, err.Error())
 		return
@@ -198,63 +183,42 @@ func (p *Provider) DCR(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// validateRedirectURIs checks all URIs against the allowlist.
+// validateRedirectURIs checks all redirect_uris are valid absolute URLs.
 func validateRedirectURIs(uris []string) error {
 	for _, uri := range uris {
-		if !isAllowedRedirectURI(uri) {
-			return &redirectURIError{uri: uri}
+		if err := validateRedirectURI(uri); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// isAllowedRedirectURI checks if a URI is in the allowlist.
-func isAllowedRedirectURI(uri string) bool {
-	// Check ChatGPT allowlist
-	for _, allowed := range AllowedRedirectURIs.ChatGPT {
-		if uri == allowed {
-			return true
-		}
+// validateRedirectURI validates one redirect URI for DCR.
+func validateRedirectURI(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return &redirectURIError{uri: raw, reason: "must not be empty"}
 	}
 
-	// Check Claude allowlist
-	for _, allowed := range AllowedRedirectURIs.Claude {
-		if uri == allowed {
-			return true
-		}
+	parsed, err := url.Parse(raw)
+	if err != nil || !parsed.IsAbs() || parsed.Scheme == "" || parsed.Host == "" {
+		return &redirectURIError{uri: raw, reason: "must be an absolute URI with scheme and host"}
 	}
 
-	// Check localhost for local testing
-	if isLocalhostURI(uri) {
-		return true
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" {
+		return &redirectURIError{uri: raw, reason: "scheme must be https"}
 	}
 
-	return false
-}
-
-// isLocalhostURI checks if the URI is a localhost URI for testing.
-func isLocalhostURI(uri string) bool {
-	parsed, err := url.Parse(uri)
-	if err != nil {
-		return false
+	if parsed.Fragment != "" {
+		return &redirectURIError{uri: raw, reason: "must not include fragment"}
 	}
 
-	// Allow http://localhost:* for testing
-	if parsed.Scheme == "http" && strings.HasPrefix(parsed.Host, "localhost:") {
-		return true
-	}
-
-	// Also allow http://127.0.0.1:* for testing
-	if parsed.Scheme == "http" && strings.HasPrefix(parsed.Host, "127.0.0.1:") {
-		return true
-	}
-
-	return false
+	return nil
 }
 
 // isPublicClient determines if the client is public based on auth method.
 func isPublicClient(authMethod string) bool {
-	// "none" or empty defaults to public if redirect URIs match Claude patterns
+	// "none" or empty indicates public-client auth behavior.
 	return authMethod == "none" || authMethod == ""
 }
 
@@ -270,11 +234,15 @@ func isValidAuthMethod(method string) bool {
 
 // redirectURIError is an error for invalid redirect URIs.
 type redirectURIError struct {
-	uri string
+	uri    string
+	reason string
 }
 
 func (e *redirectURIError) Error() string {
-	return "Redirect URI not in allowlist: " + e.uri
+	if e.reason == "" {
+		return "invalid redirect URI: " + e.uri
+	}
+	return "invalid redirect URI: " + e.reason
 }
 
 // writeDCRError writes an RFC 7591 error response.

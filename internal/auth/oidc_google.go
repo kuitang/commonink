@@ -12,13 +12,13 @@ import (
 type GoogleOIDCClient struct {
 	provider    *oidc.Provider
 	verifier    *oidc.IDTokenVerifier
-	oauthConfig *oauth2.Config
+	oauthConfig oauth2.Config
 }
 
 // NewGoogleOIDCClient creates a new Google OIDC client.
 // It initializes the OIDC provider using Google's well-known endpoint
 // (https://accounts.google.com/.well-known/openid-configuration).
-func NewGoogleOIDCClient(clientID, clientSecret, redirectURL string) (*GoogleOIDCClient, error) {
+func NewGoogleOIDCClient(clientID, clientSecret string) (*GoogleOIDCClient, error) {
 	ctx := context.Background()
 
 	// Initialize the OIDC provider using Google's issuer URL
@@ -33,10 +33,9 @@ func NewGoogleOIDCClient(clientID, clientSecret, redirectURL string) (*GoogleOID
 	})
 
 	// Configure OAuth2 with the provider's endpoints
-	oauthConfig := &oauth2.Config{
+	oauthConfig := oauth2.Config{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
-		RedirectURL:  redirectURL,
 		Endpoint:     provider.Endpoint(),
 		Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
 	}
@@ -50,15 +49,20 @@ func NewGoogleOIDCClient(clientID, clientSecret, redirectURL string) (*GoogleOID
 
 // GetAuthURL returns the Google authorization URL with the provided state parameter.
 // The state parameter should be a random string for CSRF protection.
-func (g *GoogleOIDCClient) GetAuthURL(state string) string {
-	return g.oauthConfig.AuthCodeURL(state)
+func (g *GoogleOIDCClient) GetAuthURL(state, redirectURL string) string {
+	cfg := g.oauthConfig
+	cfg.RedirectURL = redirectURL
+	return cfg.AuthCodeURL(state)
 }
 
 // ExchangeCode exchanges an authorization code for ID token claims.
 // It performs the OAuth2 token exchange, verifies the ID token, and extracts the claims.
-func (g *GoogleOIDCClient) ExchangeCode(ctx context.Context, code string) (*Claims, error) {
+func (g *GoogleOIDCClient) ExchangeCode(ctx context.Context, code, redirectURL string) (*Claims, error) {
+	cfg := g.oauthConfig
+	cfg.RedirectURL = redirectURL
+
 	// Exchange the authorization code for tokens
-	oauth2Token, err := g.oauthConfig.Exchange(ctx, code)
+	oauth2Token, err := cfg.Exchange(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCodeExchangeFailed, err)
 	}

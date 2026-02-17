@@ -21,6 +21,7 @@ import (
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/kuitang/agent-notes/internal/db/sessions"
+	"github.com/kuitang/agent-notes/internal/urlutil"
 )
 
 // Errors returned by the OAuth provider.
@@ -94,9 +95,6 @@ func NewProvider(cfg Config) (*Provider, error) {
 	if cfg.DB == nil {
 		return nil, errors.New("oauth: DB is required")
 	}
-	if cfg.Issuer == "" {
-		return nil, errors.New("oauth: Issuer is required")
-	}
 	if len(cfg.HMACSecret) < 32 {
 		return nil, errors.New("oauth: HMACSecret must be at least 32 bytes")
 	}
@@ -145,9 +143,25 @@ func (p *Provider) Issuer() string {
 	return p.issuer
 }
 
+// IssuerForRequest resolves the issuer URL dynamically from request origin when unset.
+func (p *Provider) IssuerForRequest(r *http.Request) string {
+	if p.issuer != "" {
+		return p.issuer
+	}
+	return urlutil.OriginFromRequest(r, "")
+}
+
 // Resource returns the protected resource identifier.
 func (p *Provider) Resource() string {
 	return p.resource
+}
+
+// ResourceForRequest resolves the protected resource dynamically when unset.
+func (p *Provider) ResourceForRequest(r *http.Request) string {
+	if p.resource != "" {
+		return p.resource
+	}
+	return p.IssuerForRequest(r)
 }
 
 // PublicKey returns the Ed25519 public key for JWT verification.
@@ -205,7 +219,7 @@ func HashToken(token string) string {
 // SignAccessToken creates a signed JWT access token with the given claims.
 func (p *Provider) SignAccessToken(claims AccessTokenClaims) (string, error) {
 	// Set issuer if not already set
-	if claims.Issuer == "" {
+	if claims.Issuer == "" && p.issuer != "" {
 		claims.Issuer = p.issuer
 	}
 
@@ -245,9 +259,9 @@ func (p *Provider) VerifyAccessToken(token string) (*AccessTokenClaims, error) {
 	}
 
 	// Validate standard claims
-	expected := jwt.Expected{
-		Issuer: p.issuer,
-		Time:   time.Now(),
+	expected := jwt.Expected{Time: time.Now()}
+	if p.issuer != "" {
+		expected.Issuer = p.issuer
 	}
 
 	if err := claims.Validate(expected); err != nil {
@@ -543,6 +557,7 @@ func VerifyPKCE(codeChallenge, codeChallengeMethod, codeVerifier string) error {
 type TokenParams struct {
 	ClientID             string
 	UserID               string
+	Issuer               string
 	Scope                string
 	Resource             string
 	AccessTokenLifetime  time.Duration
@@ -568,6 +583,14 @@ func (p *Provider) CreateTokens(ctx context.Context, params TokenParams) (*Token
 
 	now := time.Now()
 	expiresAt := now.Add(accessLifetime)
+	issuer := params.Issuer
+	if issuer == "" {
+		issuer = p.issuer
+	}
+	resource := params.Resource
+	if resource == "" {
+		resource = p.resource
+	}
 
 	// Generate JWT ID
 	jti, err := GenerateSecureID()
@@ -579,15 +602,15 @@ func (p *Provider) CreateTokens(ctx context.Context, params TokenParams) (*Token
 	claims := AccessTokenClaims{
 		Claims: jwt.Claims{
 			ID:        jti,
-			Issuer:    p.issuer,
+			Issuer:    issuer,
 			Subject:   params.UserID,
-			Audience:  jwt.Audience{p.resource},
+			Audience:  jwt.Audience{resource},
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			Expiry:    jwt.NewNumericDate(expiresAt),
 		},
 		Scope:    params.Scope,
-		Resource: params.Resource,
+		Resource: resource,
 		ClientID: params.ClientID,
 	}
 
@@ -618,7 +641,7 @@ func (p *Provider) CreateTokens(ctx context.Context, params TokenParams) (*Token
 		ClientID:         params.ClientID,
 		UserID:           params.UserID,
 		Scope:            sql.NullString{String: params.Scope, Valid: params.Scope != ""},
-		Resource:         sql.NullString{String: params.Resource, Valid: params.Resource != ""},
+		Resource:         sql.NullString{String: resource, Valid: resource != ""},
 		ExpiresAt:        expiresAt.Unix(),
 		CreatedAt:        now.Unix(),
 	})
@@ -829,8 +852,8 @@ func (p *Provider) HandleProtectedResourceMetadata(w http.ResponseWriter, r *htt
 	}
 
 	metadata := ProtectedResourceMetadata{
-		Resource:             p.resource,
-		AuthorizationServers: []string{p.issuer},
+		Resource:             p.ResourceForRequest(r),
+		AuthorizationServers: []string{p.IssuerForRequest(r)},
 		ScopesSupported:      []string{"notes:read", "notes:write"},
 	}
 
@@ -847,12 +870,13 @@ func (p *Provider) HandleAuthServerMetadata(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	issuer := p.IssuerForRequest(r)
 	metadata := AuthServerMetadata{
-		Issuer:                            p.issuer,
-		AuthorizationEndpoint:             p.issuer + "/oauth/authorize",
-		TokenEndpoint:                     p.issuer + "/oauth/token",
-		RegistrationEndpoint:              p.issuer + "/oauth/register",
-		JWKSUri:                           p.issuer + "/.well-known/jwks.json",
+		Issuer:                            issuer,
+		AuthorizationEndpoint:             issuer + "/oauth/authorize",
+		TokenEndpoint:                     issuer + "/oauth/token",
+		RegistrationEndpoint:              issuer + "/oauth/register",
+		JWKSUri:                           issuer + "/.well-known/jwks.json",
 		ScopesSupported:                   []string{"notes:read", "notes:write"},
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},

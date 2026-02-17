@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fly.io deployment helper for commonink
+APP_NAME="${APP_NAME:-commonink}"
+CONFIG_FILE="${CONFIG_FILE:-fly.toml}"
 
 # Check flyctl is installed
 if ! command -v flyctl &> /dev/null; then
@@ -11,6 +12,8 @@ if ! command -v flyctl &> /dev/null; then
 fi
 
 echo "=== commonink Fly.io Deploy ==="
+echo "App: ${APP_NAME}"
+echo "Config: ${CONFIG_FILE}"
 echo ""
 echo "Required secrets (set via 'fly secrets set KEY=VALUE'):"
 echo "  MASTER_KEY           - Database encryption master key (64 hex chars)"
@@ -27,21 +30,38 @@ echo "  AWS_ENDPOINT_URL_S3  - Tigris endpoint URL"
 echo "  BUCKET_NAME          - Tigris bucket name"
 echo ""
 echo "Optional:"
-echo "  BASE_URL             - Public URL (default: https://common.ink)"
 echo "  RESEND_FROM_EMAIL    - Sender email (default: noreply@common.ink)"
 echo ""
 
 # Check that required secrets are configured
-MISSING=0
-for SECRET in MASTER_KEY OAUTH_HMAC_SECRET OAUTH_SIGNING_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET RESEND_API_KEY; do
-    if ! flyctl secrets list 2>/dev/null | grep -q "$SECRET"; then
-        echo "WARNING: Secret $SECRET may not be set."
-        MISSING=1
+required_secrets=(
+  MASTER_KEY
+  OAUTH_HMAC_SECRET
+  OAUTH_SIGNING_KEY
+  GOOGLE_CLIENT_ID
+  GOOGLE_CLIENT_SECRET
+  RESEND_API_KEY
+  AWS_ENDPOINT_URL_S3
+  AWS_REGION
+  AWS_ACCESS_KEY_ID
+  AWS_SECRET_ACCESS_KEY
+  BUCKET_NAME
+)
+secret_list="$(flyctl secrets list --app "${APP_NAME}" 2>/dev/null || true)"
+missing=()
+for SECRET in "${required_secrets[@]}"; do
+    if ! printf '%s\n' "${secret_list}" | grep -q "${SECRET}"; then
+        echo "WARNING: Secret ${SECRET} may not be set."
+        missing+=("${SECRET}")
     fi
 done
 
-if [ "$MISSING" -eq 1 ]; then
+if [ "${#missing[@]}" -gt 0 ]; then
     echo ""
+    if [ "${CI:-}" = "true" ]; then
+        echo "ERROR: Missing required secrets in CI: ${missing[*]}"
+        exit 1
+    fi
     read -rp "Some secrets may be missing. Continue deployment? [y/N] " REPLY
     if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
         echo "Aborted."
@@ -51,4 +71,7 @@ fi
 
 echo ""
 echo "Deploying..."
-flyctl deploy
+flyctl deploy \
+  --remote-only \
+  --config "${CONFIG_FILE}" \
+  --app "${APP_NAME}"

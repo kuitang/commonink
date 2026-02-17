@@ -1,7 +1,7 @@
 # CRITICAL Principles
 - NEVER add `.gitleaksignore`, `.gitleaks.toml`, or otherwise bypass/override gitleaks. If gitleaks flags a false positive, fix the source: use innocuous placeholder strings (e.g., `$COMMON_INK_API_KEY`, `demo-token-here`) instead of patterns that look like real secrets. This applies to documentation, tests, and any committed files.
 - Other agents may be working in this directory. Carefully scope your edits. Do NOT use bulk commands like git checkout or git stash that will destroy other agents progress.
-- You MUST use Makefile commands (`make build`, `make run-test`, `make test`, etc.) for ALL build/run/test operations. NEVER invoke `go build`, `go test`, or run the server binary directly — the Makefile handles goenv, CGO flags, secrets, and BASE_URL correctly.
+- You MUST use Makefile commands (`make build`, `make run-test`, `make test`, etc.) for ALL build/run/test operations. NEVER invoke `go build`, `go test`, or run the server binary directly — the Makefile handles goenv, CGO flags, and secrets correctly.
 - In every task/subagent prompt, You MUST tell them to read the entire CLAUDE.md
 - EVERY TASK MUST USE OPUS 4.6.
 - Use parallel tasks, back ground tasks, everywhere. Defer implementation and research to them.
@@ -61,7 +61,7 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 All secrets (MASTER_KEY, OAUTH_HMAC_SECRET, OAUTH_SIGNING_KEY, API keys) are **hard-required** -- there is no fallback generation. Secrets are managed in two places:
 
 - **`secrets.sh`** -- Contains ONLY secrets (GOOGLE_CLIENT_SECRET, RESEND_API_KEY, OPENAI_API_KEY, etc.). Gitignored.
-- **`Makefile`** -- Contains identifiers/URLs (GOOGLE_CLIENT_ID, BASE_URL, etc.) and deterministic test secrets (MASTER_KEY, OAUTH_HMAC_SECRET, OAUTH_SIGNING_KEY). Make's `export` only propagates to child processes, not the caller.
+- **`Makefile`** -- Contains identifiers/URLs (GOOGLE_CLIENT_ID, etc.) and deterministic test secrets (MASTER_KEY, OAUTH_HMAC_SECRET, OAUTH_SIGNING_KEY). Make's `export` only propagates to child processes, not the caller.
 
 For local testing, `make test` injects the deterministic test secrets automatically -- no need to source anything.
 For production runs (`make run`), the Makefile sources `secrets.sh`:
@@ -152,8 +152,8 @@ make run-test   # builds, runs on :8080 with mock OIDC + S3 + email
 sudo tailscale funnel --bg 8080
 # Stable URL: https://kui-vibes.tailfaeb4d.ts.net
 
-# Start server with Tailscale BASE_URL
-BASE_URL='https://kui-vibes.tailfaeb4d.ts.net' make run-test
+# Start server with Tailscale Funnel URL (runtime URL resolution is dynamic)
+make run-test
 ```
 
 ### Build & Run (real services)

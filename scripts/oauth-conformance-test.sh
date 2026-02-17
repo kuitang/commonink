@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-SERVER_URL="${OAUTH_SERVER_URL:-http://localhost:8080}"
+SERVER_URL="${OAUTH_SERVER_URL:?Set OAUTH_SERVER_URL}"
 OUTPUT_DIR="${1:-./test-results/oauth-conformance}"
 
 echo -e "${BLUE}============================================${NC}"

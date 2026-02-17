@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,7 +17,8 @@ import (
 // the developer can enter an email to "sign in as". This makes "Sign in with
 // Google" functional in --no-oidc / make run-test mode.
 type LocalMockOIDCProvider struct {
-	baseURL string
+	baseURL        string
+	callbackOrigins map[string]string
 
 	mu    sync.Mutex
 	codes map[string]pendingCode // code -> pending auth info
@@ -30,8 +32,9 @@ type pendingCode struct {
 // NewLocalMockOIDCProvider creates a mock OIDC provider that serves local endpoints.
 func NewLocalMockOIDCProvider(baseURL string) *LocalMockOIDCProvider {
 	return &LocalMockOIDCProvider{
-		baseURL: baseURL,
-		codes:   make(map[string]pendingCode),
+		baseURL:         strings.TrimRight(baseURL, "/"),
+		callbackOrigins: make(map[string]string),
+		codes:           make(map[string]pendingCode),
 	}
 }
 
@@ -41,13 +44,22 @@ func (p *LocalMockOIDCProvider) SetBaseURL(baseURL string) {
 	p.baseURL = baseURL
 }
 
+// SetCallbackOrigin stores a request-specific origin for a given auth state.
+// This is used by /auth/google/login to ensure callback redirects include the
+// originating host for previews and local deployments.
+func (p *LocalMockOIDCProvider) SetCallbackOrigin(state, origin string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.callbackOrigins[strings.TrimSpace(state)] = strings.TrimRight(strings.TrimSpace(origin), "/")
+}
+
 // GetAuthURL returns a URL to the local mock consent page.
-func (p *LocalMockOIDCProvider) GetAuthURL(state string) string {
+func (p *LocalMockOIDCProvider) GetAuthURL(state, _ string) string {
 	return fmt.Sprintf("%s/auth/mock-oidc/authorize?state=%s", p.baseURL, url.QueryEscape(state))
 }
 
 // ExchangeCode looks up a previously-issued code and returns mock claims.
-func (p *LocalMockOIDCProvider) ExchangeCode(_ context.Context, code string) (*Claims, error) {
+func (p *LocalMockOIDCProvider) ExchangeCode(_ context.Context, code, _ string) (*Claims, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -134,8 +146,47 @@ func (p *LocalMockOIDCProvider) handleConsent(w http.ResponseWriter, r *http.Req
 	p.codes[code] = pendingCode{email: email, createdAt: time.Now()}
 	p.mu.Unlock()
 
+	callbackBase := p.popCallbackOrigin(state)
+	if callbackBase == "" {
+		callbackBase = r.Header.Get("X-Forwarded-Proto")
+		if callbackBase == "" {
+			if r.TLS != nil {
+				callbackBase = "https"
+			} else {
+				callbackBase = "http"
+			}
+		}
+		if strings.Contains(callbackBase, ",") {
+			callbackBase = strings.TrimSpace(strings.Split(callbackBase, ",")[0])
+		}
+		callbackBase = strings.TrimSpace(callbackBase)
+		if callbackBase != "http" && callbackBase != "https" {
+			callbackBase = "http"
+		}
+
+		host := strings.TrimSpace(r.Host)
+		if host != "" {
+			callbackBase = callbackBase + "://" + host
+		} else {
+			callbackBase = strings.TrimRight(p.baseURL, "/")
+		}
+	}
+
 	// Redirect back to the callback with code and state
 	callbackURL := fmt.Sprintf("%s/auth/google/callback?code=%s&state=%s",
-		p.baseURL, url.QueryEscape(code), url.QueryEscape(state))
+		strings.TrimRight(callbackBase, "/"), url.QueryEscape(code), url.QueryEscape(state))
 	http.Redirect(w, r, callbackURL, http.StatusFound)
+}
+
+func (p *LocalMockOIDCProvider) popCallbackOrigin(state string) string {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return ""
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	origin := strings.TrimRight(p.callbackOrigins[state], "/")
+	delete(p.callbackOrigins, state)
+	return origin
 }

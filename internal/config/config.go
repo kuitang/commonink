@@ -18,11 +18,14 @@ import (
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 )
 
+const (
+	defaultTigrisRegion = "auto"
+)
+
 // Config holds all application configuration.
 type Config struct {
 	// Server settings
 	ListenAddr   string
-	BaseURL      string
 	TemplatesDir string
 
 	// Database and encryption
@@ -41,7 +44,6 @@ type Config struct {
 	// Google OIDC
 	GoogleClientID     string
 	GoogleClientSecret string
-	GoogleRedirectURL  string
 
 	// Resend Email
 	ResendAPIKey    string
@@ -67,6 +69,10 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("configuration validation failed:\n  - %s", strings.Join(e.Errors, "\n  - "))
+}
+
+func trimEnv(key string) string {
+	return strings.TrimSpace(os.Getenv(key))
 }
 
 // ParseFlags parses CLI flags and returns them. Call before LoadConfig.
@@ -105,14 +111,10 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	if addr != "" {
 		cfg.ListenAddr = addr
 	}
-	cfg.BaseURL = os.Getenv("BASE_URL")
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = "http://localhost" + cfg.ListenAddr
-	}
 	cfg.TemplatesDir = getEnvOrDefault("TEMPLATES_DIR", "./web/templates")
 
 	// Database and encryption
-	cfg.MasterKey = os.Getenv("MASTER_KEY")
+	cfg.MasterKey = trimEnv("MASTER_KEY")
 	cfg.DatabasePath = getEnvOrDefault("DATABASE_PATH", "/data")
 	cfg.SessionDuration = parseDurationOrDefault("SESSION_DURATION", 24*time.Hour)
 
@@ -126,28 +128,27 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	}
 
 	// Google OIDC
-	cfg.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")
-	cfg.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
-	cfg.GoogleRedirectURL = os.Getenv("GOOGLE_REDIRECT_URL")
-	if cfg.GoogleRedirectURL == "" && cfg.GoogleClientID != "" {
-		cfg.GoogleRedirectURL = cfg.BaseURL + "/auth/google/callback"
-	}
+	cfg.GoogleClientID = trimEnv("GOOGLE_CLIENT_ID")
+	cfg.GoogleClientSecret = trimEnv("GOOGLE_CLIENT_SECRET")
 
 	// Resend Email
-	cfg.ResendAPIKey = os.Getenv("RESEND_API_KEY")
+	cfg.ResendAPIKey = trimEnv("RESEND_API_KEY")
 	cfg.ResendFromEmail = getEnvOrDefault("RESEND_FROM_EMAIL", "noreply@common.ink")
 
 	// OAuth 2.1 Provider
-	cfg.OAuthHMACSecret = os.Getenv("OAUTH_HMAC_SECRET")
-	cfg.OAuthSigningKey = os.Getenv("OAUTH_SIGNING_KEY")
+	cfg.OAuthHMACSecret = trimEnv("OAUTH_HMAC_SECRET")
+	cfg.OAuthSigningKey = trimEnv("OAUTH_SIGNING_KEY")
 
 	// S3/Tigris Storage (AWS_ env vars set automatically by `fly storage create`)
-	cfg.AWSEndpointS3 = os.Getenv("AWS_ENDPOINT_URL_S3")
-	cfg.AWSRegion = getEnvOrDefault("AWS_REGION", "auto")
-	cfg.AWSAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
-	cfg.AWSSecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
-	cfg.AWSBucketName = getEnvOrDefault("BUCKET_NAME", "commonink-public")
-	cfg.AWSPublicURL = os.Getenv("S3_PUBLIC_URL")
+	cfg.AWSEndpointS3 = trimEnv("AWS_ENDPOINT_URL_S3")
+	cfg.AWSRegion = getEnvOrDefault("AWS_REGION", defaultTigrisRegion)
+	cfg.AWSAccessKeyID = trimEnv("AWS_ACCESS_KEY_ID")
+	cfg.AWSSecretAccessKey = trimEnv("AWS_SECRET_ACCESS_KEY")
+	cfg.AWSBucketName = trimEnv("BUCKET_NAME")
+	cfg.AWSPublicURL = trimEnv("S3_PUBLIC_URL")
+	if cfg.AWSPublicURL == "" && cfg.AWSEndpointS3 != "" && cfg.AWSBucketName != "" {
+		cfg.AWSPublicURL = strings.TrimRight(cfg.AWSEndpointS3, "/") + "/" + cfg.AWSBucketName
+	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -183,6 +184,9 @@ func (c *Config) Validate() error {
 	if !c.NoS3 {
 		if c.AWSEndpointS3 == "" {
 			errs = append(errs, "AWS_ENDPOINT_URL_S3 is required (set env var or use --no-s3)")
+		}
+		if c.AWSBucketName == "" {
+			errs = append(errs, "BUCKET_NAME is required (set env var or use --no-s3)")
 		}
 		if c.AWSAccessKeyID == "" {
 			errs = append(errs, "AWS_ACCESS_KEY_ID is required (set env var or use --no-s3)")
@@ -238,10 +242,9 @@ func (c *Config) IsDevelopment() bool {
 }
 
 // RequireSecureCookies returns true if secure cookies should be required.
-// Returns false for localhost development URLs.
+// Returns false for local/dev modes that run over plain HTTP.
 func (c *Config) RequireSecureCookies() bool {
-	return !strings.HasPrefix(c.BaseURL, "http://localhost") &&
-		!strings.HasPrefix(c.BaseURL, "http://127.0.0.1")
+	return !c.IsDevelopment()
 }
 
 // PrintStartupSummary prints a human-readable summary of the configuration to stderr.
@@ -275,14 +278,13 @@ func (c *Config) PrintStartupSummary() {
 
 	// Listen address
 	fmt.Fprintf(os.Stderr, "  Listen:  %s\n", c.ListenAddr)
-	fmt.Fprintf(os.Stderr, "  Base:    %s\n", c.BaseURL)
 	fmt.Fprintln(os.Stderr, "")
 }
 
 // Helper functions for parsing environment variables
 
 func getEnvOrDefault(key, defaultValue string) string {
-	value := os.Getenv(key)
+	value := trimEnv(key)
 	if value == "" {
 		return defaultValue
 	}
@@ -290,7 +292,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 }
 
 func parseIntOrDefault(key string, defaultValue int) int {
-	value := os.Getenv(key)
+	value := trimEnv(key)
 	if value == "" {
 		return defaultValue
 	}
@@ -302,7 +304,7 @@ func parseIntOrDefault(key string, defaultValue int) int {
 }
 
 func parseFloat64OrDefault(key string, defaultValue float64) float64 {
-	value := os.Getenv(key)
+	value := trimEnv(key)
 	if value == "" {
 		return defaultValue
 	}
@@ -314,7 +316,7 @@ func parseFloat64OrDefault(key string, defaultValue float64) float64 {
 }
 
 func parseDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
-	value := os.Getenv(key)
+	value := trimEnv(key)
 	if value == "" {
 		return defaultValue
 	}

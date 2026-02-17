@@ -76,8 +76,7 @@ func setupShortURLTestServer(t *testing.T) *shortURLTestServer {
 
 	// Create services
 	notesService := notes.NewService(userDB)
-	baseURL := "http://localhost:8080"
-	publicService := notes.NewPublicNoteService(s3Client).WithShortURLService(shortURLSvc, baseURL)
+	publicService := notes.NewPublicNoteService(s3Client)
 
 	// Create mux
 	mux := http.NewServeMux()
@@ -178,6 +177,7 @@ func setupShortURLTestServer(t *testing.T) *shortURLTestServer {
 	})
 
 	server := httptest.NewServer(mux)
+	publicService.WithShortURLService(shortURLSvc, server.URL)
 
 	return &shortURLTestServer{
 		server:        server,
@@ -443,7 +443,7 @@ func TestShortURL_RemoveOnUnpublish(t *testing.T) {
 	json.NewDecoder(publishResp.Body).Decode(&publishResult)
 	publishResp.Body.Close()
 
-	shortID := strings.TrimPrefix(publishResult.ShortURL, "http://localhost:8080/pub/")
+	shortID := strings.TrimPrefix(publishResult.ShortURL, srv.server.URL+"/pub/")
 
 	// Verify short URL works
 	resp, _ := http.Get(srv.server.URL + "/pub/" + shortID)
