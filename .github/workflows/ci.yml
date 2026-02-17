@@ -38,22 +38,57 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Compute preview app name
+      - name: Compute preview slot and app name
         id: app
         run: |
-          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
-          APP="pr-${{ github.event.number }}-${OWNER}-commonink"
+          PR_NUMBER="${{ github.event.number }}"
+          SLOT=$(( (PR_NUMBER - 1) % 3 + 1 ))
+          APP="staging-${SLOT}-commonink"
           APP="${APP:0:63}"
           APP="${APP%-}"
+          BASE_URL="https://${APP}.fly.dev"
+          GOOGLE_REDIRECT_URL="${BASE_URL}/auth/google/callback"
+          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
           echo "name=$APP" >> "$GITHUB_OUTPUT"
+          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "google_redirect_url=$GOOGLE_REDIRECT_URL" >> "$GITHUB_OUTPUT"
       - name: Deploy preview
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID_STAGING }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET_STAGING }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY_STAGING }}
+          MASTER_KEY: ${{ secrets.MASTER_KEY_STAGING }}
+          OAUTH_HMAC_SECRET: ${{ secrets.OAUTH_HMAC_SECRET_STAGING }}
+          OAUTH_SIGNING_KEY: ${{ secrets.OAUTH_SIGNING_KEY_STAGING }}
+          AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3_STAGING }}
+          AWS_REGION: ${{ secrets.AWS_REGION_STAGING }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          S3_PUBLIC_URL: ${{ secrets.S3_PUBLIC_URL_STAGING }}
         run: |
           APP_NAME="${{ steps.app.outputs.name }}"
-          FLY_ORG="personal"
+          FLY_ORG="commonink-staging"
+          BASE_URL="${{ steps.app.outputs.base_url }}"
+          GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
+
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
+            exit 1
+          fi
+
+          if [ -z "${GOOGLE_CLIENT_ID}" ] || [ -z "${GOOGLE_CLIENT_SECRET}" ]; then
+            echo "Missing GOOGLE_CLIENT_ID_STAGING / GOOGLE_CLIENT_SECRET_STAGING secrets"
+            exit 1
+          fi
+
+          if [ -z "${RESEND_API_KEY}" ] || [ -z "${MASTER_KEY}" ] || [ -z "${OAUTH_HMAC_SECRET}" ] || [ -z "${OAUTH_SIGNING_KEY}" ]; then
+            echo "Missing required auth/email staging secrets"
+            exit 1
+          fi
+
+          if [ -z "${AWS_ENDPOINT_URL_S3}" ] || [ -z "${AWS_ACCESS_KEY_ID}" ] || [ -z "${AWS_SECRET_ACCESS_KEY}" ]; then
+            echo "Missing required Tigris staging secrets"
             exit 1
           fi
 
@@ -69,8 +104,8 @@ jobs:
                 continue
               fi
               case "${key}" in
-                BASE_URL)
-                  value="https://${APP_NAME}.fly.dev"
+                BASE_URL|GOOGLE_REDIRECT_URL|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|RESEND_API_KEY|MASTER_KEY|OAUTH_HMAC_SECRET|OAUTH_SIGNING_KEY|AWS_ENDPOINT_URL_S3|AWS_REGION|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|S3_PUBLIC_URL|BUCKET_NAME)
+                  continue
                   ;;
               esac
               if [ -n "${value}" ]; then
@@ -78,6 +113,23 @@ jobs:
               fi
             done < .env.staging
           fi
+
+          flyctl secrets set \
+            "BASE_URL=${BASE_URL}" \
+            "GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}" \
+            "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}" \
+            "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}" \
+            "RESEND_API_KEY=${RESEND_API_KEY}" \
+            "MASTER_KEY=${MASTER_KEY}" \
+            "OAUTH_HMAC_SECRET=${OAUTH_HMAC_SECRET}" \
+            "OAUTH_SIGNING_KEY=${OAUTH_SIGNING_KEY}" \
+            "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3}" \
+            "AWS_REGION=${AWS_REGION:-auto}" \
+            "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" \
+            "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" \
+            "S3_PUBLIC_URL=${S3_PUBLIC_URL}" \
+            "BUCKET_NAME=${BUCKET_NAME:-commonink-staging-public}" \
+            --app "${APP_NAME}"
 
           flyctl deploy \
             --remote-only \
