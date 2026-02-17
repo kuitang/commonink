@@ -34,11 +34,20 @@ const (
 	// SessionsDBName is the filename for the shared sessions database
 	SessionsDBName = "sessions.db"
 
-	// MaxOpenConns is the maximum number of open connections per database
-	MaxOpenConns = 25
+	// MaxOpenConns is the maximum number of open connections for the sessions database.
+	// SQLite is single-writer, so high connection counts are counterproductive.
+	MaxOpenConns = 10
 
-	// MaxIdleConns is the maximum number of idle connections per database
-	MaxIdleConns = 5
+	// MaxIdleConns is the maximum number of idle connections for the sessions database
+	MaxIdleConns = 2
+
+	// UserDBMaxOpenConns is the maximum open connections per user database.
+	// Each user gets their own SQLite file, so keep this low to avoid
+	// connection goroutine exhaustion when many users are created in tests.
+	UserDBMaxOpenConns = 2
+
+	// UserDBMaxIdleConns is the maximum idle connections per user database
+	UserDBMaxIdleConns = 1
 )
 
 var (
@@ -337,9 +346,9 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 		return nil, fmt.Errorf("failed to open user database for %s: %w", userID, err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(MaxOpenConns)
-	db.SetMaxIdleConns(MaxIdleConns)
+	// Configure connection pool — keep low for per-user SQLite files
+	db.SetMaxOpenConns(UserDBMaxOpenConns)
+	db.SetMaxIdleConns(UserDBMaxIdleConns)
 
 	// Verify connection and encryption by executing a simple query
 	// If the encryption key is wrong, this will fail
@@ -445,6 +454,20 @@ func ResetForTesting() {
 	// Note: userDBs is already cleared by CloseAll
 }
 
+// ResetUserDBsForTesting closes and clears cached per-user database connections
+// without resetting the shared sessions database singleton.
+// This is useful for long-lived test fixtures that need cheap state reset.
+func ResetUserDBsForTesting() {
+	userDBsMu.Lock()
+	defer userDBsMu.Unlock()
+
+	for userID, userDB := range userDBs {
+		_ = userDB.Close()
+		delete(userDBs, userID)
+	}
+	userDBs = make(map[string]*sql.DB)
+}
+
 // NewUserDBInMemory creates an in-memory encrypted UserDB for testing.
 // This is faster than file-based databases and avoids filesystem contention.
 // The database is not cached and should be closed when done.
@@ -484,6 +507,42 @@ func NewUserDBInMemory(userID string) (*UserDB, error) {
 		db:      db,
 		queries: userdb.New(db),
 		userID:  userID,
+	}, nil
+}
+
+// Close closes the SessionsDB connection.
+func (s *SessionsDB) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
+	return nil
+}
+
+// NewSessionsDBInMemory creates an in-memory unencrypted SessionsDB for testing.
+// Each call creates a fresh, independent database (no singleton caching).
+// The caller is responsible for calling Close() when done.
+func NewSessionsDBInMemory() (*SessionsDB, error) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open in-memory sessions database: %w", err)
+	}
+
+	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(10)
+
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping in-memory sessions database: %w", err)
+	}
+
+	if _, err := db.Exec(SessionsDBSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize in-memory sessions schema: %w", err)
+	}
+
+	return &SessionsDB{
+		db:      db,
+		queries: sessions.New(db),
 	}, nil
 }
 

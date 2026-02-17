@@ -64,7 +64,7 @@ func (h *webFormAPIKeyHelper) createUserWithPassword(t interface {
 	}
 
 	// Hash password and create account
-	passwordHash, err := auth.HashPassword(password)
+	passwordHash, err := auth.FakeInsecureHasher{}.HashPassword(password)
 	if err != nil {
 		t.Fatalf("Failed to hash password: %v", err)
 	}

@@ -167,7 +167,7 @@ func main() {
 	}
 	_ = publicNotesURL // used by future features
 
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, cfg.BaseURL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, cfg.BaseURL, auth.Argon2Hasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -242,18 +242,14 @@ func main() {
 	webHandler.RegisterRoutes(mux, authMiddleware)
 	log.Println("Web UI routes registered")
 
-	// Initialize and register static page handler (privacy, terms, about, api-docs)
-	staticGenDir := os.Getenv("STATIC_GEN_DIR")
-	if staticGenDir == "" {
-		staticGenDir = "./static/gen"
-	}
+	// Initialize and register static page handler (privacy, terms, about, api-docs, install)
 	staticSrcDir := os.Getenv("STATIC_SRC_DIR")
 	if staticSrcDir == "" {
 		staticSrcDir = "./static/src"
 	}
-	staticHandler := web.NewStaticHandler(renderer, staticGenDir, staticSrcDir)
+	staticHandler := web.NewStaticHandler(renderer, staticSrcDir, authMiddleware)
 	staticHandler.RegisterRoutes(mux)
-	log.Println("Static page routes registered at /privacy, /terms, /about, /docs/api")
+	log.Println("Static page routes registered at /privacy, /terms, /about, /docs/api, /docs/install")
 
 	// Serve favicon.ico from static directory
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {

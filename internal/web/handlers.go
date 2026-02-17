@@ -95,8 +95,6 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("POST /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
 	mux.Handle("POST /api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
 
-	// Documentation pages (no auth required)
-	mux.Handle("GET /docs/install", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleInstallPage)))
 }
 
 // PageData contains common data passed to all templates.
@@ -236,21 +234,6 @@ func (h *WebHandler) HandleLanding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.renderer.Render(w, "landing.html", data); err != nil {
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
-}
-
-// HandleInstallPage handles GET /docs/install - shows the installation/setup page.
-func (h *WebHandler) HandleInstallPage(w http.ResponseWriter, r *http.Request) {
-	data := PageData{
-		Title: "Connect Your AI Assistant",
-	}
-
-	if auth.IsAuthenticated(r.Context()) {
-		data.User = getUserWithEmail(r)
-	}
-
-	if err := h.renderer.Render(w, "install.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }

@@ -35,10 +35,17 @@ import (
 // =============================================================================
 
 var (
-	testServer  *ServerFixture
-	testOnce    sync.Once
-	testCleanup func()
-	testMu      sync.Mutex
+	testServer   *ServerFixture
+	testOnce     sync.Once
+	testCleanup  func()
+	testStartErr error
+	testMu       sync.Mutex
+)
+
+const (
+	testMasterKey    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testOAuthHMACKey = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testOAuthSignKey = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
 // ServerFixture holds the running server instance
@@ -47,79 +54,292 @@ type ServerFixture struct {
 	BaseURL    string
 	Port       int
 	Logs       *LogCapture
+	Outbox     *EmailOutbox
 	DataDir    string
 	ProjectDir string
 	cancel     context.CancelFunc
 }
 
+// EmailOutbox reads mock-email files written by internal/email.MockEmailService.
+type EmailOutbox struct {
+	dir string
+}
+
+type outboxEmailEvent struct {
+	Sequence uint64 `json:"sequence"`
+	To       string `json:"to"`
+	Template string `json:"template"`
+	Link     string `json:"link"`
+}
+
+func NewEmailOutbox(dir string) *EmailOutbox {
+	return &EmailOutbox{dir: dir}
+}
+
+func (o *EmailOutbox) Cursor() uint64 {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		return 0
+	}
+
+	var maxSeq uint64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		seq, ok := parseOutboxSequence(entry.Name())
+		if ok && seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq
+}
+
+func (o *EmailOutbox) WaitForEmailSince(
+	to string,
+	startSeq uint64,
+	ctx context.Context,
+	logs *LogCapture,
+) (link, template string, err error) {
+	cursor := startSeq
+
+	for {
+		var ok bool
+		link, template, cursor, ok, err = o.findEmailSince(to, cursor)
+		if err != nil {
+			return "", "", err
+		}
+		if ok {
+			return link, template, nil
+		}
+
+		waitCh := logs.waitCh()
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("timeout waiting for email to %s: %w", to, ctx.Err())
+		}
+	}
+}
+
+func (o *EmailOutbox) findEmailSince(to string, startSeq uint64) (link, template string, next uint64, ok bool, err error) {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", startSeq, false, nil
+		}
+		return "", "", startSeq, false, fmt.Errorf("read outbox: %w", err)
+	}
+
+	maxSeq := startSeq
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		seq, seqOK := parseOutboxSequence(entry.Name())
+		if !seqOK {
+			continue
+		}
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+		if seq <= startSeq {
+			continue
+		}
+
+		path := filepath.Join(o.dir, entry.Name())
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+
+		var event outboxEmailEvent
+		if unmarshalErr := json.Unmarshal(raw, &event); unmarshalErr != nil {
+			continue
+		}
+
+		if strings.EqualFold(event.To, to) {
+			return event.Link, event.Template, maxSeq, true, nil
+		}
+	}
+
+	return "", "", maxSeq, false, nil
+}
+
+func parseOutboxSequence(fileName string) (uint64, bool) {
+	parts := strings.SplitN(fileName, "-", 2)
+	if len(parts) < 2 {
+		return 0, false
+	}
+	var seq uint64
+	if _, err := fmt.Sscanf(parts[0], "%d", &seq); err != nil {
+		return 0, false
+	}
+	return seq, true
+}
+
 // LogCapture captures server logs for inspection
 type LogCapture struct {
-	mu    sync.RWMutex
-	lines []string
+	mu     sync.Mutex
+	lines  []string
+	notify chan struct{}
+}
+
+func NewLogCapture() *LogCapture {
+	return &LogCapture{
+		lines:  make([]string, 0, 256),
+		notify: make(chan struct{}),
+	}
 }
 
 func (l *LogCapture) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	added := false
 	for _, line := range strings.Split(string(p), "\n") {
 		if line != "" {
 			l.lines = append(l.lines, line)
+			added = true
 		}
+	}
+	if added {
+		close(l.notify)
+		l.notify = make(chan struct{})
 	}
 	return len(p), nil
 }
 
 // Lines returns a copy of all captured log lines
 func (l *LogCapture) Lines() []string {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	cp := make([]string, len(l.lines))
 	copy(cp, l.lines)
 	return cp
 }
 
+// Cursor returns the current log index.
+func (l *LogCapture) Cursor() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.lines)
+}
+
+func (l *LogCapture) waitCh() <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.notify
+}
+
 // FindEmail searches logs for an email sent to the given address
 func (l *LogCapture) FindEmail(to string) (link string, template string, ok bool) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	link, template, _, ok = l.FindEmailSince(to, 0)
+	return link, template, ok
+}
+
+// FindEmailSince searches logs from a cursor and returns the next cursor.
+func (l *LogCapture) FindEmailSince(to string, start int) (link string, template string, next int, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	toPattern := regexp.MustCompile(`\[EMAIL\] To: ` + regexp.QuoteMeta(to) + ` \| Template: (\w+)`)
 	linkPattern := regexp.MustCompile(`\[EMAIL\] (?:Magic Link|Password Reset Link): (http[^\s]+)`)
 
-	for i, line := range l.lines {
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(l.lines); i++ {
+		line := l.lines[i]
 		if m := toPattern.FindStringSubmatch(line); m != nil {
 			template = m[1]
 			if i+1 < len(l.lines) {
 				if lm := linkPattern.FindStringSubmatch(l.lines[i+1]); lm != nil {
-					return lm[1], template, true
+					return lm[1], template, i + 2, true
 				}
 			}
 		}
 	}
-	return "", "", false
+	return "", "", len(l.lines), false
 }
 
 // WaitForEmail waits for an email to appear in logs
 func (l *LogCapture) WaitForEmail(to string, timeout time.Duration) (link, template string, err error) {
+	return l.WaitForEmailSince(to, 0, timeout)
+}
+
+// WaitForEmailSince waits for a matching email after the provided cursor.
+func (l *LogCapture) WaitForEmailSince(to string, start int, timeout time.Duration) (link, template string, err error) {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if link, template, ok := l.FindEmail(to); ok {
+	cursor := start
+	for {
+		var ok bool
+		link, template, cursor, ok = l.FindEmailSince(to, cursor)
+		if ok {
 			return link, template, nil
 		}
-		time.Sleep(50 * time.Millisecond)
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+
+		waitCh := l.waitCh()
+		timer := time.NewTimer(remaining)
+		select {
+		case <-waitCh:
+			timer.Stop()
+		case <-timer.C:
+			return "", "", fmt.Errorf("timeout waiting for email to %s", to)
+		}
 	}
 	return "", "", fmt.Errorf("timeout waiting for email to %s", to)
+}
+
+func (l *LogCapture) waitForSubstringSince(ctx context.Context, substr string, start int) error {
+	cursor := start
+
+	for {
+		l.mu.Lock()
+		if cursor < 0 {
+			cursor = 0
+		}
+		for i := cursor; i < len(l.lines); i++ {
+			if strings.Contains(l.lines[i], substr) {
+				l.mu.Unlock()
+				return nil
+			}
+		}
+		cursor = len(l.lines)
+		waitCh := l.notify
+		l.mu.Unlock()
+
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for log line containing %q: %w", substr, ctx.Err())
+		}
+	}
 }
 
 // GetServer returns the shared server fixture, starting it if needed.
 // Uses sync.Once to ensure server is started only once across all tests.
 func GetServer(t testing.TB) *ServerFixture {
+	t.Helper()
+
 	testMu.Lock()
 	defer testMu.Unlock()
 
 	testOnce.Do(func() {
-		testServer, testCleanup = startServer(t)
+		testServer, testCleanup, testStartErr = startServer(t)
 	})
+	if testStartErr != nil {
+		t.Fatalf("Failed to start shared e2e server fixture: %v", testStartErr)
+	}
+	if testServer == nil {
+		t.Fatalf("Shared e2e server fixture is nil")
+	}
 	return testServer
 }
 
@@ -133,13 +353,13 @@ func Cleanup() {
 	}
 }
 
-func startServer(t testing.TB) (*ServerFixture, func()) {
+func startServer(t testing.TB) (*ServerFixture, func(), error) {
 	projectRoot := FindProjectRoot()
 
 	// Create temp data dir
 	dataDir, err := os.MkdirTemp("", "e2e-test-*")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		return nil, nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
 	// Build server with required CGO flags
@@ -152,22 +372,31 @@ func startServer(t testing.TB) (*ServerFixture, func()) {
 		"CGO_LDFLAGS=-lm",
 	)
 	if out, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("Build failed: %v\n%s", err, out)
+		return nil, nil, fmt.Errorf("build failed: %w\n%s", err, out)
 	}
 
 	// Find free port
 	port := findFreePort()
+	outboxDir := filepath.Join(dataDir, "email-outbox")
+	if err := os.MkdirAll(outboxDir, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("failed to create mock email outbox dir: %w", err)
+	}
 
 	// Start server as subprocess
-	logs := &LogCapture{}
+	logs := NewLogCapture()
+	outbox := NewEmailOutbox(outboxDir)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, binary, "--test")
 	cmd.Dir = dataDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("LISTEN_ADDR=:%d", port),
-		fmt.Sprintf("DATA_DIR=%s", dataDir),
+		fmt.Sprintf("DATABASE_PATH=%s", dataDir),
 		fmt.Sprintf("BASE_URL=http://localhost:%d", port),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
+		fmt.Sprintf("MASTER_KEY=%s", testMasterKey),
+		fmt.Sprintf("OAUTH_HMAC_SECRET=%s", testOAuthHMACKey),
+		fmt.Sprintf("OAUTH_SIGNING_KEY=%s", testOAuthSignKey),
+		fmt.Sprintf("MOCK_EMAIL_OUTBOX_DIR=%s", outboxDir),
 	)
 
 	stdout, _ := cmd.StdoutPipe()
@@ -175,7 +404,7 @@ func startServer(t testing.TB) (*ServerFixture, func()) {
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("Failed to start server: %v", err)
+		return nil, nil, fmt.Errorf("failed to start server: %w", err)
 	}
 
 	// Capture logs
@@ -198,46 +427,35 @@ func startServer(t testing.TB) (*ServerFixture, func()) {
 
 	baseURL := fmt.Sprintf("http://localhost:%d", port)
 
-	// Wait for server ready
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	deadline := time.Now().Add(10 * time.Second)
-	ready := false
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(baseURL + "/health")
-		if err == nil && resp.StatusCode == 200 {
-			resp.Body.Close()
-			t.Logf("Server started on port %d", port)
-			ready = true
-			break
-		}
-		if resp != nil {
-			resp.Body.Close()
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !ready {
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
+	readyCursor := logs.Cursor()
+	if err := logs.waitForSubstringSince(waitCtx, "Server ready to accept connections", readyCursor); err != nil {
 		cancel()
-		t.Fatalf("Server did not become ready. Logs:\n%s", strings.Join(logs.Lines(), "\n"))
+		_ = stopProcess(cmd)
+		return nil, nil, fmt.Errorf("%w. logs:\n%s", err, strings.Join(logs.Lines(), "\n"))
 	}
+
+	t.Logf("Server started on port %d", port)
 
 	fixture := &ServerFixture{
 		cmd:        cmd,
 		BaseURL:    baseURL,
 		Port:       port,
 		Logs:       logs,
+		Outbox:     outbox,
 		DataDir:    dataDir,
 		ProjectDir: projectRoot,
 		cancel:     cancel,
 	}
 
 	cleanup := func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		time.Sleep(500 * time.Millisecond)
 		cancel()
-		os.RemoveAll(dataDir)
+		_ = stopProcess(cmd)
+		_ = os.RemoveAll(dataDir)
 	}
 
-	return fixture, cleanup
+	return fixture, cleanup, nil
 }
 
 // FindProjectRoot locates the project root by finding go.mod
@@ -259,6 +477,29 @@ func findFreePort() int {
 	l, _ := net.Listen("tcp", ":0")
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+func waitContext(t testing.TB) (context.Context, context.CancelFunc) {
+	if tbWithDeadline, ok := any(t).(interface{ Deadline() (time.Time, bool) }); ok {
+		if deadline, ok := tbWithDeadline.Deadline(); ok {
+			return context.WithDeadline(context.Background(), deadline)
+		}
+	}
+	return context.WithCancel(context.Background())
+}
+
+func stopProcess(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	return <-done
 }
 
 // =============================================================================
@@ -418,6 +659,9 @@ func registerOAuthClient(t testing.TB, client *http.Client, baseURL, clientName,
 func authenticateUser(t testing.TB, client *http.Client, baseURL, email string) {
 	t.Helper()
 
+	srv := GetServer(t)
+	emailCursor := srv.Outbox.Cursor()
+
 	// Request magic link
 	magicResp, err := client.PostForm(baseURL+"/auth/magic", url.Values{"email": {email}})
 	if err != nil {
@@ -425,9 +669,10 @@ func authenticateUser(t testing.TB, client *http.Client, baseURL, email string) 
 	}
 	magicResp.Body.Close()
 
-	// Wait for magic link in logs
-	srv := GetServer(t)
-	link, _, err := srv.Logs.WaitForEmail(email, 10*time.Second)
+	// Wait for magic link in outbox (still logged to stdout for humans).
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
+	link, _, err := srv.Outbox.WaitForEmailSince(email, emailCursor, waitCtx, srv.Logs)
 	if err != nil {
 		t.Fatalf("Failed to get magic link: %v", err)
 	}

@@ -183,7 +183,7 @@ func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	// Verify password if hash exists
 	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
-		if !VerifyPassword(req.Password, account.PasswordHash.String) {
+		if !h.userService.VerifyPasswordHash(req.Password, account.PasswordHash.String) {
 			writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -322,8 +322,8 @@ func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // ValidateAPIKeyWithDB validates an API Key against the user's database and returns the scope if valid.
-// This is used by the middleware to authenticate API requests when the userDB is already open.
-func ValidateAPIKeyWithDB(ctx context.Context, userDB *db.UserDB, tokenPart string) (string, error) {
+// The `now` parameter is the current time, injected for testability (avoids wall-clock sleeps).
+func ValidateAPIKeyWithDB(ctx context.Context, userDB *db.UserDB, tokenPart string, now time.Time) (string, error) {
 	// Hash the token part
 	tokenHash := hashAPIKeyToken(tokenPart)
 
@@ -337,13 +337,13 @@ func ValidateAPIKeyWithDB(ctx context.Context, userDB *db.UserDB, tokenPart stri
 	}
 
 	// Check expiry
-	if time.Now().Unix() > key.ExpiresAt {
+	if now.Unix() > key.ExpiresAt {
 		return "", ErrAPIKeyExpired
 	}
 
 	// Update last used timestamp
 	_ = userDB.Queries().UpdateAPIKeyLastUsed(ctx, userdb.UpdateAPIKeyLastUsedParams{
-		LastUsedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+		LastUsedAt: sql.NullInt64{Int64: now.Unix(), Valid: true},
 		ID:         key.ID,
 	})
 

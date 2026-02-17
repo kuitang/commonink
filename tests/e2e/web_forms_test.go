@@ -37,6 +37,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/oauth"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
@@ -45,13 +46,18 @@ import (
 // WEB FORM TEST SERVER - Uses REAL web handlers (HTML forms, not JSON APIs)
 // =============================================================================
 
-var webFormTestMutex sync.Mutex
+var (
+	webFormTestMutex     sync.Mutex
+	webFormSharedMu      sync.Mutex
+	webFormSharedFixture *webFormServer
+)
 
 // webFormServer wraps httptest.Server for testing web form endpoints
 type webFormServer struct {
 	*httptest.Server
 	tempDir  string
 	s3Server *httptest.Server // Mock S3 server
+	shared   bool
 
 	// Services (exposed for tests)
 	sessionsDB     *db.SessionsDB
@@ -60,6 +66,7 @@ type webFormServer struct {
 	sessionService *auth.SessionService
 	emailService   *emailpkg.MockEmailService
 	rateLimiter    *ratelimit.RateLimiter
+	oidcClient     *auth.MockOIDCClient
 }
 
 // setupWebFormServer creates a test server with all web handlers wired up.
@@ -67,9 +74,18 @@ type webFormServer struct {
 func setupWebFormServer(t testing.TB) *webFormServer {
 	t.Helper()
 	webFormTestMutex.Lock()
+	t.Cleanup(webFormTestMutex.Unlock)
 
-	tempDir := t.TempDir()
-	return createWebFormServer(tempDir)
+	ts, err := getOrCreateSharedWebFormServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared web form fixture: %v", err)
+	}
+
+	if err := resetWebFormServerState(ts); err != nil {
+		t.Fatalf("Failed to reset shared web form fixture: %v", err)
+	}
+
+	return ts
 }
 
 func createWebFormServer(tempDir string) *webFormServer {
@@ -112,7 +128,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 
 	// Initialize services
 	emailService := emailpkg.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -153,10 +169,12 @@ func createWebFormServer(tempDir string) *webFormServer {
 	server = httptest.NewServer(mux)
 
 	// Update userService baseURL
-	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 
 	// Create mock S3 server and client
 	s3Server, mockS3Client := createMockS3Server()
+
+	shortURLSvc := shorturl.NewService(sessionsDB.Queries())
 
 	// Create web handler with ALL services
 	webHandler := web.NewWebHandler(
@@ -167,15 +185,19 @@ func createWebFormServer(tempDir string) *webFormServer {
 		sessionService,
 		consentService,
 		mockS3Client,
-		nil, // shortURLSvc - not needed for form tests
+		shortURLSvc,
 		server.URL,
 	)
 
-	// Register ALL web routes (GET pages only - not POST form handlers)
+	// Register ALL web routes.
 	webHandler.RegisterRoutes(mux, authMiddleware)
+
+	// Explicitly add POST /oauth/consent to exercise consent decision flow.
+	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(webHandler.HandleConsentDecision)))
 
 	// Register auth API routes (POST /auth/* for form handling)
 	oidcClient := auth.NewMockOIDCClient()
+	oidcClient.SetNextSuccess("webform-default-sub", "webform-default@example.com", "Web Form User", true)
 	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
 	authHandler.RegisterRoutes(mux)
 
@@ -199,22 +221,93 @@ func createWebFormServer(tempDir string) *webFormServer {
 		sessionService: sessionService,
 		emailService:   emailService,
 		rateLimiter:    rateLimiter,
+		oidcClient:     oidcClient,
 	}
 }
 
+// Client returns a clone so redirect/jar mutation does not leak across tests.
+func (ts *webFormServer) Client() *http.Client {
+	base := ts.Server.Client()
+	cloned := *base
+	return &cloned
+}
+
 func (ts *webFormServer) cleanup() {
+	if ts.shared {
+		return
+	}
 	ts.Server.Close()
 	if ts.s3Server != nil {
 		ts.s3Server.Close()
 	}
 	ts.rateLimiter.Stop()
 	db.ResetForTesting()
-	// tempDir is managed by t.TempDir() - no need to remove manually
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
 	webFormTestMutex.Unlock()
 }
 
+func getOrCreateSharedWebFormServer() (*webFormServer, error) {
+	webFormSharedMu.Lock()
+	defer webFormSharedMu.Unlock()
+
+	if webFormSharedFixture != nil {
+		if err := webFormSharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return webFormSharedFixture, nil
+		}
+		webFormSharedFixture.closeSharedResources()
+		webFormSharedFixture = nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "webform-shared-*")
+	if err != nil {
+		return nil, fmt.Errorf("create shared webform temp dir: %w", err)
+	}
+
+	webFormSharedFixture = createWebFormServer(tempDir)
+	webFormSharedFixture.shared = true
+	return webFormSharedFixture, nil
+}
+
+func (ts *webFormServer) closeSharedResources() {
+	if ts.Server != nil {
+		ts.Server.Close()
+	}
+	if ts.s3Server != nil {
+		ts.s3Server.Close()
+	}
+	if ts.rateLimiter != nil {
+		ts.rateLimiter.Stop()
+	}
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
+}
+
+func resetWebFormServerState(ts *webFormServer) error {
+	if err := resetSharedDBFixtureState(ts.tempDir, ts.sessionsDB); err != nil {
+		return err
+	}
+
+	if ts.emailService != nil {
+		ts.emailService.Clear()
+	}
+	if ts.oidcClient != nil {
+		ts.oidcClient.Reset()
+		ts.oidcClient.SetNextSuccess("webform-default-sub", "webform-default@example.com", "Web Form User", true)
+	}
+	return nil
+}
+
 // createMockS3Server creates a mock S3 server and client for testing.
+// Shared across all e2e test files in this package.
 func createMockS3Server() (*httptest.Server, *s3client.Client) {
+	return createMockS3ServerWithBucket("test-bucket-webforms")
+}
+
+// createMockS3ServerWithBucket creates a mock in-memory S3 server with the given bucket name.
+func createMockS3ServerWithBucket(bucketName string) (*httptest.Server, *s3client.Client) {
 	backend := s3mem.New()
 	faker := gofakes3.New(backend)
 	s3Server := httptest.NewServer(faker.Server())
@@ -235,7 +328,6 @@ func createMockS3Server() (*httptest.Server, *s3client.Client) {
 		o.UsePathStyle = true
 	})
 
-	bucketName := "test-bucket-webforms"
 	_, err = s3c.CreateBucket(ctx, &s3.CreateBucketInput{
 		Bucket: aws.String(bucketName),
 	})
@@ -920,6 +1012,9 @@ func TestWebForm_SessionIsolation_Properties(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		email1 := testutil.EmailGenerator().Draw(rt, "email1")
 		email2 := testutil.EmailGenerator().Draw(rt, "email2")
+		if email2 == email1 {
+			email2 = "other+" + email2
+		}
 		noteTitle := testutil.NoteTitleGenerator().Draw(rt, "title")
 
 		// Create two users

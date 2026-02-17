@@ -48,7 +48,7 @@ func setupMagicTestService(t testing.TB) (*UserService, *fakeClock, *email.MockE
 	emailSvc := email.NewMockEmailService()
 	masterKey := make([]byte, 32)
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
-	svc := NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local")
+	svc := NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local", FakeInsecureHasher{})
 
 	clk := newFakeClock(time.Now())
 	svc.SetClock(clk)

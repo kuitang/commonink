@@ -2,17 +2,17 @@
 package web
 
 import (
-	"embed"
 	"html/template"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/html"
 	"github.com/gomarkdown/markdown/parser"
+	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/microcosm-cc/bluemonday"
 )
 
@@ -22,96 +22,99 @@ type StaticPageData struct {
 	Content template.HTML
 }
 
-// StaticHandler serves static pages (privacy, terms, about, api-docs).
-// It can serve from pre-generated HTML files or render markdown dynamically.
+// markdownPage describes a page rendered from a markdown source file.
+type markdownPage struct {
+	path    string // URL path, e.g., "/privacy"
+	srcFile string // filename in staticSrcDir, e.g., "privacy.md"
+	title   string // page title
+}
+
+// markdownPages lists all markdown-sourced informational pages.
+var markdownPages = []markdownPage{
+	{"/privacy", "privacy.md", "Privacy Policy"},
+	{"/terms", "tos.md", "Terms of Service"},
+	{"/about", "about.md", "About"},
+	{"/docs/api", "api-docs.md", "API Documentation"},
+	{"/docs", "api-docs.md", "API Documentation"},
+}
+
+// StaticHandler serves informational pages (privacy, terms, about, api-docs, install).
+// Markdown-sourced pages are rendered dynamically from .md files.
+// Template-sourced pages (install) render directly through the Renderer.
+// All routes use OptionalAuth so the nav reflects login state.
 type StaticHandler struct {
 	renderer     *Renderer
-	staticGenDir string
 	staticSrcDir string
+	auth         *auth.Middleware
 	cache        map[string][]byte
 	cacheMu      sync.RWMutex
-	useGenerated bool
 }
 
 // NewStaticHandler creates a new static page handler.
-// If staticGenDir contains pre-generated HTML files, those are served directly.
-// Otherwise, markdown from staticSrcDir is rendered dynamically.
-func NewStaticHandler(renderer *Renderer, staticGenDir, staticSrcDir string) *StaticHandler {
-	h := &StaticHandler{
+func NewStaticHandler(renderer *Renderer, staticSrcDir string, authMiddleware *auth.Middleware) *StaticHandler {
+	return &StaticHandler{
 		renderer:     renderer,
-		staticGenDir: staticGenDir,
 		staticSrcDir: staticSrcDir,
+		auth:         authMiddleware,
 		cache:        make(map[string][]byte),
 	}
-
-	// Check if generated files exist
-	if _, err := os.Stat(filepath.Join(staticGenDir, "privacy.html")); err == nil {
-		h.useGenerated = true
-	}
-
-	return h
 }
 
-// RegisterRoutes registers static page routes on the given mux.
+// RegisterRoutes registers all informational page routes on the given mux.
 func (h *StaticHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /privacy", h.HandlePrivacy)
-	mux.HandleFunc("GET /terms", h.HandleTerms)
-	mux.HandleFunc("GET /about", h.HandleAbout)
-	mux.HandleFunc("GET /docs/api", h.HandleAPIDocs)
-	mux.HandleFunc("GET /docs", h.HandleAPIDocs) // Alias
-}
-
-// HandlePrivacy serves the privacy policy page.
-func (h *StaticHandler) HandlePrivacy(w http.ResponseWriter, r *http.Request) {
-	h.servePage(w, r, "privacy", "Privacy Policy")
-}
-
-// HandleTerms serves the terms of service page.
-func (h *StaticHandler) HandleTerms(w http.ResponseWriter, r *http.Request) {
-	h.servePage(w, r, "terms", "Terms of Service")
-}
-
-// HandleAbout serves the about page.
-func (h *StaticHandler) HandleAbout(w http.ResponseWriter, r *http.Request) {
-	h.servePage(w, r, "about", "About")
-}
-
-// HandleAPIDocs serves the API documentation page.
-func (h *StaticHandler) HandleAPIDocs(w http.ResponseWriter, r *http.Request) {
-	h.servePage(w, r, "api-docs", "API Documentation")
-}
-
-// servePage serves a static page by slug.
-// Always renders through the page.html template so that copy buttons and
-// other template-level features (styles, scripts) are included.
-func (h *StaticHandler) servePage(w http.ResponseWriter, r *http.Request, slug, title string) {
-	var htmlContent []byte
-
-	// Try pre-generated HTML first (markdown already converted)
-	if h.useGenerated {
-		genPath := filepath.Join(h.staticGenDir, slug+".html")
-		content, err := h.readCached(genPath)
-		if err == nil {
-			htmlContent = content
-		}
+	// Markdown-sourced pages (HTML + raw .md variants)
+	for _, p := range markdownPages {
+		p := p // capture for closure
+		mux.Handle("GET "+p.path, h.auth.OptionalAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if wantsMarkdown(r) {
+				h.serveRawMarkdown(w, p)
+				return
+			}
+			h.servePage(w, r, p.srcFile, p.title)
+		})))
 	}
 
-	// Fall back to dynamic rendering from markdown
-	if htmlContent == nil {
-		srcFile := slug + ".md"
-		if slug == "terms" {
-			srcFile = "tos.md"
+	// .md suffix routes — always serve raw markdown
+	seen := make(map[string]bool)
+	for _, p := range markdownPages {
+		mdPath := p.path + ".md"
+		if seen[mdPath] {
+			continue
 		}
-
-		srcPath := filepath.Join(h.staticSrcDir, srcFile)
-		mdContent, err := h.readCached(srcPath)
-		if err != nil {
-			h.renderer.RenderError(w, http.StatusNotFound, "Page not found")
-			return
-		}
-
-		htmlContent = renderMarkdownContent(mdContent)
+		seen[mdPath] = true
+		p := p
+		mux.Handle("GET "+mdPath, h.auth.OptionalAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h.serveRawMarkdown(w, p)
+		})))
 	}
+
+	// Template-sourced pages
+	mux.Handle("GET /docs/install", h.auth.OptionalAuth(http.HandlerFunc(h.HandleInstallPage)))
+}
+
+// HandleInstallPage serves GET /docs/install — the installation/setup page.
+func (h *StaticHandler) HandleInstallPage(w http.ResponseWriter, r *http.Request) {
+	data := PageData{
+		Title: "Connect Your AI Assistant",
+	}
+	if auth.IsAuthenticated(r.Context()) {
+		data.User = getUserWithEmail(r)
+	}
+	if err := h.renderer.Render(w, "install.html", data); err != nil {
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to render page")
+	}
+}
+
+// servePage renders a markdown-sourced page through the static/page.html template.
+func (h *StaticHandler) servePage(w http.ResponseWriter, r *http.Request, srcFile, title string) {
+	srcPath := filepath.Join(h.staticSrcDir, srcFile)
+	mdContent, err := h.readCached(srcPath)
+	if err != nil {
+		h.renderer.RenderError(w, http.StatusNotFound, "Page not found")
+		return
+	}
+
+	htmlContent := renderMarkdownContent(mdContent)
 
 	data := StaticPageData{
 		PageData: PageData{
@@ -120,9 +123,32 @@ func (h *StaticHandler) servePage(w http.ResponseWriter, r *http.Request, slug, 
 		Content: template.HTML(htmlContent),
 	}
 
+	if auth.IsAuthenticated(r.Context()) {
+		data.User = getUserWithEmail(r)
+	}
+
 	if err := h.renderer.Render(w, "static/page.html", data); err != nil {
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to render page")
 	}
+}
+
+// serveRawMarkdown writes the raw .md source with appropriate headers.
+func (h *StaticHandler) serveRawMarkdown(w http.ResponseWriter, p markdownPage) {
+	srcPath := filepath.Join(h.staticSrcDir, p.srcFile)
+	md, err := h.readCached(srcPath)
+	if err != nil {
+		http.Error(w, "Page not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=UTF-8")
+	w.Header().Set("Vary", "Accept")
+	w.Write(md)
+}
+
+// wantsMarkdown returns true when the client prefers raw markdown.
+func wantsMarkdown(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/markdown")
 }
 
 // readCached reads a file with caching.
@@ -149,47 +175,21 @@ func (h *StaticHandler) readCached(path string) ([]byte, error) {
 
 // renderMarkdownContent converts markdown to sanitized HTML.
 func renderMarkdownContent(md []byte) []byte {
-	// Configure the markdown parser with common extensions
 	extensions := parser.CommonExtensions | parser.AutoHeadingIDs | parser.NoEmptyLineBeforeBlock
 	p := parser.NewWithExtensions(extensions)
-
-	// Parse the markdown
 	doc := p.Parse(md)
 
-	// Configure the HTML renderer
 	htmlFlags := html.CommonFlags | html.HrefTargetBlank
-	opts := html.RendererOptions{
-		Flags: htmlFlags,
-	}
+	opts := html.RendererOptions{Flags: htmlFlags}
 	renderer := html.NewRenderer(opts)
-
-	// Render to HTML
 	htmlContent := markdown.Render(doc, renderer)
 
-	// Sanitize HTML to prevent XSS attacks
 	policy := bluemonday.UGCPolicy()
 	policy.AllowElements("pre", "code")
 	policy.AllowAttrs("class").OnElements("code", "pre")
 	sanitized := policy.SanitizeBytes(htmlContent)
 
 	return sanitized
-}
-
-// EmbeddedStaticHandler serves static pages from embedded files.
-// This is useful for single-binary deployments.
-type EmbeddedStaticHandler struct {
-	renderer *Renderer
-	genFS    fs.FS
-	srcFS    fs.FS
-}
-
-// NewEmbeddedStaticHandler creates a handler using embedded file systems.
-func NewEmbeddedStaticHandler(renderer *Renderer, genFS, srcFS embed.FS) *EmbeddedStaticHandler {
-	return &EmbeddedStaticHandler{
-		renderer: renderer,
-		genFS:    genFS,
-		srcFS:    srcFS,
-	}
 }
 
 // ClearCache clears the static page cache (useful for development).

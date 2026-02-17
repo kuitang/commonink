@@ -8,60 +8,94 @@ import (
 )
 
 // TestPassword_HashVerify_Roundtrip tests that hashed passwords can be verified.
+// Uses FakeInsecureHasher to test the PasswordHasher interface contract without Argon2 overhead.
 func TestPassword_HashVerify_Roundtrip(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		// Generate random password (at least 8 chars to pass validation)
+		var hasher PasswordHasher = FakeInsecureHasher{}
 		password := rapid.StringN(8, 100, 200).Draw(t, "password")
 
-		hash, err := HashPassword(password)
+		hash, err := hasher.HashPassword(password)
 		if err != nil {
 			t.Fatalf("HashPassword failed: %v", err)
 		}
 
-		if !VerifyPassword(password, hash) {
+		if !hasher.VerifyPassword(password, hash) {
 			t.Fatalf("VerifyPassword failed for password %q", password)
 		}
 	})
 }
 
+func FuzzPassword_HashVerify_Roundtrip(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(t *rapid.T) {
+		var hasher PasswordHasher = FakeInsecureHasher{}
+		password := rapid.StringN(8, 100, 200).Draw(t, "password")
+
+		hash, err := hasher.HashPassword(password)
+		if err != nil {
+			t.Fatalf("HashPassword failed: %v", err)
+		}
+
+		if !hasher.VerifyPassword(password, hash) {
+			t.Fatalf("VerifyPassword failed for password %q", password)
+		}
+	}))
+}
+
 // TestPassword_WrongPassword_FailsVerify tests that wrong passwords don't verify.
 func TestPassword_WrongPassword_FailsVerify(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
+		var hasher PasswordHasher = FakeInsecureHasher{}
 		password1 := rapid.StringN(8, 50, 100).Draw(t, "password1")
 		password2 := rapid.StringN(8, 50, 100).Filter(func(s string) bool {
 			return s != password1
 		}).Draw(t, "password2")
 
-		hash, err := HashPassword(password1)
+		hash, err := hasher.HashPassword(password1)
 		if err != nil {
 			t.Fatalf("HashPassword failed: %v", err)
 		}
 
-		if VerifyPassword(password2, hash) {
+		if hasher.VerifyPassword(password2, hash) {
 			t.Fatalf("VerifyPassword should fail for wrong password")
 		}
 	})
 }
 
-// TestPassword_HashNotDeterministic tests that hashing produces different outputs.
-func TestPassword_HashNotDeterministic(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		password := rapid.StringN(8, 50, 100).Draw(t, "password")
+func FuzzPassword_WrongPassword_FailsVerify(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(t *rapid.T) {
+		var hasher PasswordHasher = FakeInsecureHasher{}
+		password1 := rapid.StringN(8, 50, 100).Draw(t, "password1")
+		password2 := rapid.StringN(8, 50, 100).Filter(func(s string) bool {
+			return s != password1
+		}).Draw(t, "password2")
 
-		hash1, err := HashPassword(password)
+		hash, err := hasher.HashPassword(password1)
 		if err != nil {
-			t.Fatalf("first HashPassword failed: %v", err)
+			t.Fatalf("HashPassword failed: %v", err)
 		}
 
-		hash2, err := HashPassword(password)
-		if err != nil {
-			t.Fatalf("second HashPassword failed: %v", err)
+		if hasher.VerifyPassword(password2, hash) {
+			t.Fatalf("VerifyPassword should fail for wrong password")
 		}
+	}))
+}
 
-		if hash1 == hash2 {
-			t.Fatalf("hashing is deterministic - salt is not random")
-		}
-	})
+// TestPassword_Argon2_NonDeterministic verifies that real Argon2 hashing uses random salt.
+// Single call, not rapid — this is an Argon2-specific property, not an interface contract.
+func TestPassword_Argon2_NonDeterministic(t *testing.T) {
+	hash1, err := HashPassword("test-password")
+	if err != nil {
+		t.Fatalf("first HashPassword failed: %v", err)
+	}
+	hash2, err := HashPassword("test-password")
+	if err != nil {
+		t.Fatalf("second HashPassword failed: %v", err)
+	}
+	if hash1 == hash2 {
+		t.Fatalf("hashing is deterministic - salt is not random")
+	}
 }
 
 // TestPassword_Validation tests password strength validation.

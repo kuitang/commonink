@@ -16,19 +16,34 @@ import (
 	"pgregory.net/rapid"
 )
 
-// TestMain runs before all tests and cleans up after
+// closeOnCleanup registers a cleanup function on rapid.T that closes a UserDB.
+// rapid.T does not have Cleanup(), so we use a pattern where the caller defers this.
+func mustCloseUserDB(t *rapid.T, db *UserDB) {
+	if err := db.Close(); err != nil {
+		t.Fatalf("Failed to close UserDB: %v", err)
+	}
+}
+
+func mustCloseSessionsDB(t *rapid.T, db *SessionsDB) {
+	if err := db.Close(); err != nil {
+		t.Fatalf("Failed to close SessionsDB: %v", err)
+	}
+}
+
+// TestMain runs before all tests and cleans up after.
+// Only file-based tests (singleton, wiring, InitSchemas, CloseAll) use ./testdata.
 func TestMain(m *testing.M) {
-	// Run tests
 	code := m.Run()
 
-	// Cleanup
+	// Cleanup file-based test artifacts
 	CloseAll()
 	os.RemoveAll("./testdata")
 
 	os.Exit(code)
 }
 
-// setupTestDir creates a clean test directory for a specific test
+// setupTestDir creates a clean test directory for non-rapid (testing.TB) tests.
+// Used by integration_test.go for file-based tests.
 func setupTestDir(t testing.TB) string {
 	// Close all databases to prevent caching issues between tests
 	CloseAll()
@@ -129,12 +144,11 @@ func FuzzSessionsDB_Singleton_Properties(f *testing.F) {
 // =============================================================================
 
 func testSessionsDB_Schema_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
-
-	sessDB, err := OpenSessionsDB()
+	sessDB, err := NewSessionsDBInMemory()
 	if err != nil {
-		t.Fatalf("OpenSessionsDB failed: %v", err)
+		t.Fatalf("NewSessionsDBInMemory failed: %v", err)
 	}
+	defer mustCloseSessionsDB(t, sessDB)
 
 	db := sessDB.DB()
 
@@ -251,13 +265,12 @@ func FuzzUserDB_EmptyUserID_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_Schema_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
-
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := NewUserDBInMemory(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
 	}
+	defer mustCloseUserDB(t, userDB)
 
 	db := userDB.DB()
 
@@ -306,7 +319,6 @@ func FuzzUserDB_Schema_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
 	// Generate 2-5 unique user IDs
@@ -318,12 +330,13 @@ func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
 		userIDs[i] = testutil.ValidUserID().Draw(t, "userID")
 	}
 
-	// Open databases for all users
+	// Open in-memory databases for all users (each is an independent :memory: DB)
 	for _, userID := range userIDs {
-		userDB, err := OpenUserDB(userID)
+		userDB, err := NewUserDBInMemory(userID)
 		if err != nil {
-			t.Fatalf("Failed to open database for %s: %v", userID, err)
+			t.Fatalf("Failed to open in-memory database for %s: %v", userID, err)
 		}
+		defer mustCloseUserDB(t, userDB)
 		dbs[userID] = userDB
 	}
 
@@ -386,14 +399,14 @@ func FuzzUserDB_MultipleUsers_Isolation_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := NewUserDBInMemory(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
 	}
+	defer mustCloseUserDB(t, userDB)
 
 	now := time.Now().Unix()
 
@@ -483,14 +496,14 @@ func FuzzUserDB_FTS5_Sync_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_ContentSizeLimit_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := NewUserDBInMemory(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
 	}
+	defer mustCloseUserDB(t, userDB)
 
 	now := time.Now().Unix()
 
@@ -674,14 +687,14 @@ func FuzzGetHardcodedDEK_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_Encryption_Roundtrip_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := NewUserDBInMemory(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
 	}
+	defer mustCloseUserDB(t, userDB)
 
 	// Generate random sensitive content
 	sensitiveContent := rapid.StringMatching("[A-Za-z0-9 ]{10,100}").Draw(t, "sensitiveContent")
@@ -736,13 +749,13 @@ func FuzzUserDB_Encryption_Roundtrip_Properties(f *testing.F) {
 // =============================================================================
 
 func testSessionsDB_CRUD_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
-	sessDB, err := OpenSessionsDB()
+	sessDB, err := NewSessionsDBInMemory()
 	if err != nil {
-		t.Fatalf("OpenSessionsDB failed: %v", err)
+		t.Fatalf("NewSessionsDBInMemory failed: %v", err)
 	}
+	defer mustCloseSessionsDB(t, sessDB)
 
 	q := sessDB.Queries()
 
@@ -814,14 +827,14 @@ func FuzzSessionsDB_CRUD_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_FTS5_ArbitraryQuery_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := NewUserDBInMemory(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
 	}
+	defer mustCloseUserDB(t, userDB)
 
 	now := time.Now().Unix()
 
@@ -887,14 +900,14 @@ func FuzzUserDB_FTS5_ArbitraryQuery_Properties(f *testing.F) {
 // =============================================================================
 
 func testUserDB_FTS5_ArbitraryQueryCount_Properties(t *rapid.T) {
-	setupTestDirRapid(t)
 	ctx := context.Background()
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := NewUserDBInMemory(userID)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed: %v", err)
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
 	}
+	defer mustCloseUserDB(t, userDB)
 
 	// Property: SearchNotesCount should NEVER panic for ANY query string
 	query := testutil.ArbitrarySearchQuery().Draw(t, "query")

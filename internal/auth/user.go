@@ -33,6 +33,24 @@ var (
 	ErrEmailNotVerified   = errors.New("email not verified")
 )
 
+// PasswordHasher abstracts password hashing for dependency injection.
+// Production uses Argon2Hasher; tests use FakeInsecureHasher.
+type PasswordHasher interface {
+	HashPassword(password string) (string, error)
+	VerifyPassword(password, encodedHash string) bool
+}
+
+// Argon2Hasher implements PasswordHasher using Argon2id.
+type Argon2Hasher struct{}
+
+func (Argon2Hasher) HashPassword(password string) (string, error) {
+	return HashPassword(password)
+}
+
+func (Argon2Hasher) VerifyPassword(password, encodedHash string) bool {
+	return VerifyPassword(password, encodedHash)
+}
+
 // Argon2id parameters (OWASP second recommendation: m=19456, t=2, p=1)
 // Reduced from 64 MiB to ~19 MiB to avoid OOM on 256 MB Fly.io VMs.
 // Parameters are embedded in each hash string, so existing 64 MiB hashes
@@ -74,19 +92,26 @@ type UserService struct {
 	db           *db.SessionsDB
 	keyManager   *crypto.KeyManager
 	emailService email.EmailService
+	hasher       PasswordHasher
 	baseURL      string // Base URL for magic link generation
 	clock        Clock  // Clock for time operations (defaults to real time)
 }
 
 // NewUserService creates a new user service.
-func NewUserService(sessionsDB *db.SessionsDB, keyManager *crypto.KeyManager, emailSvc email.EmailService, baseURL string) *UserService {
+func NewUserService(sessionsDB *db.SessionsDB, keyManager *crypto.KeyManager, emailSvc email.EmailService, baseURL string, hasher PasswordHasher) *UserService {
 	return &UserService{
 		db:           sessionsDB,
 		keyManager:   keyManager,
 		emailService: emailSvc,
+		hasher:       hasher,
 		baseURL:      baseURL,
 		clock:        realClock{},
 	}
+}
+
+// VerifyPasswordHash delegates to the injected hasher.
+func (s *UserService) VerifyPasswordHash(password, encodedHash string) bool {
+	return s.hasher.VerifyPassword(password, encodedHash)
 }
 
 // SetClock replaces the clock used by the service. Intended for testing.
@@ -127,7 +152,7 @@ func (s *UserService) RegisterWithPassword(ctx context.Context, emailAddr, passw
 	}
 
 	// Hash password
-	passwordHash, err := HashPassword(password)
+	passwordHash, err := s.hasher.HashPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
@@ -193,7 +218,7 @@ func (s *UserService) VerifyLogin(ctx context.Context, emailAddr, password strin
 	}
 
 	// Verify password
-	if !VerifyPassword(password, account.PasswordHash.String) {
+	if !s.hasher.VerifyPassword(password, account.PasswordHash.String) {
 		return nil, ErrInvalidCredentials
 	}
 
@@ -483,7 +508,7 @@ func (s *UserService) ResetPassword(ctx context.Context, token, newPassword stri
 	}
 
 	// Hash the new password
-	passwordHash, err := HashPassword(newPassword)
+	passwordHash, err := s.hasher.HashPassword(newPassword)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -512,7 +537,7 @@ func (s *UserService) ResetPassword(ctx context.Context, token, newPassword stri
 	if verifyErr != nil {
 		return fmt.Errorf("password reset failed: no account record for user %s (orphaned DEK)", user.ID)
 	}
-	if !VerifyPassword(newPassword, account.PasswordHash.String) {
+	if !s.hasher.VerifyPassword(newPassword, account.PasswordHash.String) {
 		return fmt.Errorf("password reset verification failed: hash mismatch after update")
 	}
 

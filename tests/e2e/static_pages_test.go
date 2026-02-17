@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -17,15 +18,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	_ "github.com/mutecomm/go-sqlcipher/v4"
 
 	"github.com/kuitang/agent-notes/internal/auth"
@@ -35,7 +31,6 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/oauth"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
-	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/web"
 )
 
@@ -46,40 +41,58 @@ import (
 // staticPageServer wraps httptest.Server for testing static pages and render helpers.
 type staticPageServer struct {
 	*httptest.Server
+	tempDir        string
 	s3Server       *httptest.Server
 	rateLimiter    *ratelimit.RateLimiter
+	sessionsDB     *db.SessionsDB
+	emailService   *emailpkg.MockEmailService
+	oidcClient     *auth.MockOIDCClient
 	userService    *auth.UserService
 	sessionService *auth.SessionService
+	shared         bool
 }
+
+var staticPageSharedMu sync.Mutex
+var staticPageSharedFixture *staticPageServer
 
 func setupStaticPageServer(t testing.TB) *staticPageServer {
 	t.Helper()
 	webFormTestMutex.Lock()
+	t.Cleanup(webFormTestMutex.Unlock)
 
-	tempDir := t.TempDir()
+	ts, err := getOrCreateSharedStaticPageServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared static page fixture: %v", err)
+	}
+	if err := resetStaticPageServerState(ts); err != nil {
+		t.Fatalf("Failed to reset shared static page fixture: %v", err)
+	}
+	return ts
+}
 
+func createStaticPageServer(tempDir string) *staticPageServer {
 	// Reset database singleton
 	db.ResetForTesting()
 	db.DataDirectory = tempDir
 
 	sessionsDB, err := db.OpenSessionsDB()
 	if err != nil {
-		t.Fatalf("Failed to open sessions database: %v", err)
+		panic("Failed to open sessions database: " + err.Error())
 	}
 
 	masterKey := make([]byte, 32)
 	if _, err := crand.Read(masterKey); err != nil {
-		t.Fatalf("Failed to generate master key: %v", err)
+		panic("Failed to generate master key: " + err.Error())
 	}
 
 	_, signingKey, err := ed25519.GenerateKey(crand.Reader)
 	if err != nil {
-		t.Fatalf("Failed to generate signing key: %v", err)
+		panic("Failed to generate signing key: " + err.Error())
 	}
 
 	hmacSecret := make([]byte, 32)
 	if _, err := crand.Read(hmacSecret); err != nil {
-		t.Fatalf("Failed to generate HMAC secret: %v", err)
+		panic("Failed to generate HMAC secret: " + err.Error())
 	}
 
 	// Create initial server to get a URL
@@ -88,7 +101,7 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	emailService := emailpkg.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -100,13 +113,13 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 		SigningKey: signingKey,
 	})
 	if err != nil {
-		t.Fatalf("Failed to create OAuth provider: %v", err)
+		panic("Failed to create OAuth provider: " + err.Error())
 	}
 
 	templatesDir := findWebFormTemplatesDir()
 	renderer, err := web.NewRenderer(templatesDir)
 	if err != nil {
-		t.Fatalf("Failed to create renderer: %v", err)
+		panic("Failed to create renderer: " + err.Error())
 	}
 
 	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
@@ -125,38 +138,10 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 	server = httptest.NewServer(mux)
 
 	// Re-create userService with correct base URL
-	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 
-	// Mock S3
-	s3Backend := s3mem.New()
-	s3Faker := gofakes3.New(s3Backend)
-	s3Server := httptest.NewServer(s3Faker.Server())
-
-	ctx := context.Background()
-	sdkConfig, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
-		),
-	)
-	if err != nil {
-		t.Fatalf("Failed to load AWS config: %v", err)
-	}
-
-	s3SDK := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(s3Server.URL)
-		o.UsePathStyle = true
-	})
-
-	bucketName := "test-bucket-static"
-	_, err = s3SDK.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucketName),
-	})
-	if err != nil {
-		t.Fatalf("Failed to create mock S3 bucket: %v", err)
-	}
-
-	mockS3Client := s3client.NewFromS3Client(s3SDK, bucketName, s3Server.URL+"/"+bucketName)
+	// Mock S3 (shared in-memory fixture)
+	s3Server, mockS3Client := createMockS3ServerWithBucket("test-bucket-static")
 
 	// Web handler (includes notes CRUD, auth pages, etc.)
 	webHandler := web.NewWebHandler(
@@ -172,10 +157,9 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)
 
-	// Static page handler (privacy, terms, about, api-docs)
-	staticGenDir := findStaticDir("gen")
+	// Static page handler (privacy, terms, about, api-docs, install)
 	staticSrcDir := findStaticDir("src")
-	staticHandler := web.NewStaticHandler(renderer, staticGenDir, staticSrcDir)
+	staticHandler := web.NewStaticHandler(renderer, staticSrcDir, authMiddleware)
 	staticHandler.RegisterRoutes(mux)
 
 	// Auth API routes
@@ -195,21 +179,81 @@ func setupStaticPageServer(t testing.TB) *staticPageServer {
 
 	return &staticPageServer{
 		Server:         server,
+		tempDir:        tempDir,
 		s3Server:       s3Server,
 		rateLimiter:    rateLimiter,
+		sessionsDB:     sessionsDB,
+		emailService:   emailService,
+		oidcClient:     oidcClient,
 		userService:    userService,
 		sessionService: sessionService,
 	}
 }
 
 func (ts *staticPageServer) cleanup() {
+	if ts.shared {
+		return
+	}
 	ts.Server.Close()
 	if ts.s3Server != nil {
 		ts.s3Server.Close()
 	}
 	ts.rateLimiter.Stop()
 	db.ResetForTesting()
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
 	webFormTestMutex.Unlock()
+}
+
+func getOrCreateSharedStaticPageServer() (*staticPageServer, error) {
+	staticPageSharedMu.Lock()
+	defer staticPageSharedMu.Unlock()
+
+	if staticPageSharedFixture != nil {
+		if err := staticPageSharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return staticPageSharedFixture, nil
+		}
+		staticPageSharedFixture.closeSharedResources()
+		staticPageSharedFixture = nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "static-pages-shared-*")
+	if err != nil {
+		return nil, fmt.Errorf("create shared static page temp dir: %w", err)
+	}
+
+	staticPageSharedFixture = createStaticPageServer(tempDir)
+	staticPageSharedFixture.shared = true
+	return staticPageSharedFixture, nil
+}
+
+func (ts *staticPageServer) closeSharedResources() {
+	if ts.Server != nil {
+		ts.Server.Close()
+	}
+	if ts.s3Server != nil {
+		ts.s3Server.Close()
+	}
+	if ts.rateLimiter != nil {
+		ts.rateLimiter.Stop()
+	}
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
+}
+
+func resetStaticPageServerState(ts *staticPageServer) error {
+	if err := resetSharedDBFixtureState(ts.tempDir, ts.sessionsDB); err != nil {
+		return err
+	}
+	if ts.emailService != nil {
+		ts.emailService.Clear()
+	}
+	if ts.oidcClient != nil {
+		ts.oidcClient.Reset()
+	}
+	return nil
 }
 
 // findStaticDir locates the static/{subdir} directory.
@@ -296,13 +340,7 @@ func TestStaticPages_LandingPage(t *testing.T) {
 	ts := setupStaticPageServer(t)
 	defer ts.cleanup()
 
-	// Use a client that does NOT follow redirects
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := &http.Client{Timeout: 10 * time.Second}
 
 	resp, err := client.Get(ts.URL + "/")
 	if err != nil {
@@ -310,14 +348,15 @@ func TestStaticPages_LandingPage(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Landing page for unauthenticated users should redirect to /login
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("GET /: expected 302, got %d", resp.StatusCode)
+	// Landing page for unauthenticated users should render (200)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /: expected 200, got %d", resp.StatusCode)
 	}
 
-	location := resp.Header.Get("Location")
-	if !strings.Contains(location, "/login") {
-		t.Errorf("GET /: expected redirect to /login, got %q", location)
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	if !strings.Contains(html, "common.ink") {
+		t.Error("GET /: landing page should contain 'common.ink'")
 	}
 }
 

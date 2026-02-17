@@ -28,6 +28,9 @@ import (
 // Global mutex to ensure tests don't run in parallel (database isolation)
 var notesTestMutex sync.Mutex
 var notesTestCounter atomic.Int64
+var notesRapidServerOverride *notesTestServer
+var notesSharedMu sync.Mutex
+var notesSharedFixture *notesTestServer
 
 // notesTestServer holds the server and services for Notes API testing.
 type notesTestServer struct {
@@ -35,23 +38,28 @@ type notesTestServer struct {
 	mux          *http.ServeMux
 	notesService *notes.Service
 	handler      *api.Handler
+	shared       bool
 }
 
 // setupNotesTestServer creates a test server with all Notes API routes.
 func setupNotesTestServer(t testing.TB) *notesTestServer {
 	t.Helper()
-	return createNotesTestServer()
+	notesTestMutex.Lock()
+	t.Cleanup(notesTestMutex.Unlock)
+
+	srv := getOrCreateSharedNotesServer()
+	resetNotesServerState(t, srv)
+	return srv
 }
 
 // setupNotesTestServerRapid creates a test server for rapid.T tests.
 func setupNotesTestServerRapid(t *rapid.T) *notesTestServer {
+	notesTestMutex.Lock()
 	return createNotesTestServer()
 }
 
 // createNotesTestServer creates a test server with an in-memory database.
 func createNotesTestServer() *notesTestServer {
-	notesTestMutex.Lock()
-
 	// Use unique ID for each test to ensure complete isolation
 	testID := notesTestCounter.Add(1)
 	userID := fmt.Sprintf("api-test-user-%d", testID)
@@ -83,8 +91,67 @@ func createNotesTestServer() *notesTestServer {
 
 // cleanup closes the test server and releases the lock.
 func (s *notesTestServer) cleanup() {
+	if s.shared {
+		return
+	}
 	s.server.Close()
 	notesTestMutex.Unlock()
+}
+
+func getOrCreateSharedNotesServer() *notesTestServer {
+	notesSharedMu.Lock()
+	defer notesSharedMu.Unlock()
+	if notesSharedFixture != nil {
+		return notesSharedFixture
+	}
+	notesSharedFixture = createNotesTestServer()
+	notesSharedFixture.shared = true
+	return notesSharedFixture
+}
+
+func resetNotesServerState(t interface {
+	Fatalf(format string, args ...any)
+}, srv *notesTestServer) {
+	for {
+		list, err := srv.notesService.List(500, 0)
+		if err != nil {
+			t.Fatalf("failed to list notes for reset: %v", err)
+		}
+		if len(list.Notes) == 0 {
+			return
+		}
+		for _, n := range list.Notes {
+			if err := srv.notesService.Delete(n.ID); err != nil {
+				t.Fatalf("failed to delete note %s during reset: %v", n.ID, err)
+			}
+		}
+	}
+}
+
+func withNotesRapidServer(srv *notesTestServer, fn func()) {
+	notesRapidServerOverride = srv
+	defer func() {
+		notesRapidServerOverride = nil
+	}()
+	fn()
+}
+
+func getNotesTestServerForRapid(t *rapid.T) (*notesTestServer, func()) {
+	if notesRapidServerOverride != nil {
+		resetNotesServerState(t, notesRapidServerOverride)
+		return notesRapidServerOverride, func() {}
+	}
+	srv := setupNotesTestServerRapid(t)
+	return srv, srv.cleanup
+}
+
+func runNotesRapidCheckWithSharedServer(t *testing.T, prop func(*rapid.T)) {
+	t.Helper()
+	srv := setupNotesTestServer(t)
+	t.Cleanup(srv.cleanup)
+	withNotesRapidServer(srv, func() {
+		rapid.Check(t, prop)
+	})
 }
 
 // =============================================================================
@@ -215,8 +282,8 @@ func (s *notesTestServer) searchNotes(query string) (*http.Response, []byte, err
 // =============================================================================
 
 func testNotesAPI_Create_Roundtrip_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	title := testutil.NoteTitleGenerator().Draw(t, "title")
 	content := testutil.NoteContentGenerator().Draw(t, "content")
@@ -271,7 +338,7 @@ func testNotesAPI_Create_Roundtrip_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Create_Roundtrip_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Create_Roundtrip_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Create_Roundtrip_Properties)
 }
 
 func FuzzNotesAPI_Create_Roundtrip_Properties(f *testing.F) {
@@ -284,8 +351,8 @@ func FuzzNotesAPI_Create_Roundtrip_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Create_RequiresTitle_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	content := testutil.NoteContentGenerator().Draw(t, "content")
 
@@ -308,7 +375,7 @@ func testNotesAPI_Create_RequiresTitle_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Create_RequiresTitle_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Create_RequiresTitle_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Create_RequiresTitle_Properties)
 }
 
 func FuzzNotesAPI_Create_RequiresTitle_Properties(f *testing.F) {
@@ -321,8 +388,8 @@ func FuzzNotesAPI_Create_RequiresTitle_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Get_NonExistent_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
 
@@ -337,7 +404,7 @@ func testNotesAPI_Get_NonExistent_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Get_NonExistent_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Get_NonExistent_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Get_NonExistent_Properties)
 }
 
 func FuzzNotesAPI_Get_NonExistent_Properties(f *testing.F) {
@@ -350,8 +417,8 @@ func FuzzNotesAPI_Get_NonExistent_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Update_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Create initial note
 	title := testutil.NoteTitleGenerator().Draw(t, "title")
@@ -405,7 +472,7 @@ func testNotesAPI_Update_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Update_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Update_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Update_Properties)
 }
 
 func FuzzNotesAPI_Update_Properties(f *testing.F) {
@@ -418,8 +485,8 @@ func FuzzNotesAPI_Update_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Update_NonExistent_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
 	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
@@ -435,7 +502,7 @@ func testNotesAPI_Update_NonExistent_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Update_NonExistent_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Update_NonExistent_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Update_NonExistent_Properties)
 }
 
 func FuzzNotesAPI_Update_NonExistent_Properties(f *testing.F) {
@@ -448,8 +515,8 @@ func FuzzNotesAPI_Update_NonExistent_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Delete_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Create a note
 	title := testutil.NoteTitleGenerator().Draw(t, "title")
@@ -480,7 +547,7 @@ func testNotesAPI_Delete_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Delete_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Delete_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Delete_Properties)
 }
 
 func FuzzNotesAPI_Delete_Properties(f *testing.F) {
@@ -493,8 +560,8 @@ func FuzzNotesAPI_Delete_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Delete_NonExistent_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
 
@@ -509,7 +576,7 @@ func testNotesAPI_Delete_NonExistent_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Delete_NonExistent_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Delete_NonExistent_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Delete_NonExistent_Properties)
 }
 
 func FuzzNotesAPI_Delete_NonExistent_Properties(f *testing.F) {
@@ -522,8 +589,8 @@ func FuzzNotesAPI_Delete_NonExistent_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_List_Pagination_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Create multiple notes with valid non-whitespace titles
 	numNotes := rapid.IntRange(3, 10).Draw(t, "numNotes")
@@ -567,7 +634,7 @@ func testNotesAPI_List_Pagination_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_List_Pagination_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_List_Pagination_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_List_Pagination_Properties)
 }
 
 func FuzzNotesAPI_List_Pagination_Properties(f *testing.F) {
@@ -580,8 +647,8 @@ func FuzzNotesAPI_List_Pagination_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Search_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Generate a unique search term
 	searchTerm := testutil.NoteSearchTermGenerator().Draw(t, "searchTerm")
@@ -626,7 +693,7 @@ func testNotesAPI_Search_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Search_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Search_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Search_Properties)
 }
 
 func FuzzNotesAPI_Search_Properties(f *testing.F) {
@@ -639,8 +706,8 @@ func FuzzNotesAPI_Search_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Search_EmptyQuery_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Property: POST /notes/search with empty query returns 400
 	resp, data, err := srv.searchNotes("")
@@ -653,7 +720,7 @@ func testNotesAPI_Search_EmptyQuery_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Search_EmptyQuery_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Search_EmptyQuery_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Search_EmptyQuery_Properties)
 }
 
 func FuzzNotesAPI_Search_EmptyQuery_Properties(f *testing.F) {
@@ -666,8 +733,8 @@ func FuzzNotesAPI_Search_EmptyQuery_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_CRUD_Workflow_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	title := testutil.NoteTitleGenerator().Draw(t, "title")
 	content := testutil.NoteContentGenerator().Draw(t, "content")
@@ -716,7 +783,7 @@ func testNotesAPI_CRUD_Workflow_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_CRUD_Workflow_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_CRUD_Workflow_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_CRUD_Workflow_Properties)
 }
 
 func FuzzNotesAPI_CRUD_Workflow_Properties(f *testing.F) {
@@ -729,8 +796,8 @@ func FuzzNotesAPI_CRUD_Workflow_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Create_AllowsEmptyContent_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	title := testutil.NoteTitleGenerator().Draw(t, "title")
 
@@ -751,7 +818,7 @@ func testNotesAPI_Create_AllowsEmptyContent_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Create_AllowsEmptyContent_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Create_AllowsEmptyContent_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Create_AllowsEmptyContent_Properties)
 }
 
 func FuzzNotesAPI_Create_AllowsEmptyContent_Properties(f *testing.F) {
@@ -764,8 +831,8 @@ func FuzzNotesAPI_Create_AllowsEmptyContent_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Search_NoMatches_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Create some notes without the search term
 	numNotes := rapid.IntRange(1, 5).Draw(t, "numNotes")
@@ -795,7 +862,7 @@ func testNotesAPI_Search_NoMatches_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Search_NoMatches_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Search_NoMatches_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Search_NoMatches_Properties)
 }
 
 func FuzzNotesAPI_Search_NoMatches_Properties(f *testing.F) {
@@ -808,8 +875,8 @@ func FuzzNotesAPI_Search_NoMatches_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_MultipleNotes_Independence_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	numNotes := rapid.IntRange(2, 10).Draw(t, "numNotes")
 	noteIDs := make([]string, 0, numNotes)
@@ -857,7 +924,7 @@ func testNotesAPI_MultipleNotes_Independence_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_MultipleNotes_Independence_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_MultipleNotes_Independence_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_MultipleNotes_Independence_Properties)
 }
 
 func FuzzNotesAPI_MultipleNotes_Independence_Properties(f *testing.F) {
@@ -870,8 +937,8 @@ func FuzzNotesAPI_MultipleNotes_Independence_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_List_Offset_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Create a set of notes
 	numNotes := rapid.IntRange(5, 15).Draw(t, "numNotes")
@@ -904,7 +971,7 @@ func testNotesAPI_List_Offset_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_List_Offset_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_List_Offset_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_List_Offset_Properties)
 }
 
 func FuzzNotesAPI_List_Offset_Properties(f *testing.F) {
@@ -917,8 +984,8 @@ func FuzzNotesAPI_List_Offset_Properties(f *testing.F) {
 // =============================================================================
 
 func testNotesAPI_Update_PartialUpdate_Properties(t *rapid.T) {
-	srv := setupNotesTestServerRapid(t)
-	defer srv.cleanup()
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
 
 	// Create initial note
 	originalTitle := testutil.NoteTitleGenerator().Draw(t, "originalTitle")
@@ -952,7 +1019,7 @@ func testNotesAPI_Update_PartialUpdate_Properties(t *rapid.T) {
 }
 
 func TestNotesAPI_Update_PartialUpdate_Properties(t *testing.T) {
-	rapid.Check(t, testNotesAPI_Update_PartialUpdate_Properties)
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Update_PartialUpdate_Properties)
 }
 
 func FuzzNotesAPI_Update_PartialUpdate_Properties(f *testing.F) {

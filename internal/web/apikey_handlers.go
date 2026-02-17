@@ -171,7 +171,7 @@ func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) 
 
 	// Verify password if hash exists
 	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
-		if !auth.VerifyPassword(password, account.PasswordHash.String) {
+		if !h.authService.VerifyPasswordHash(password, account.PasswordHash.String) {
 			http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
 			return
 		}

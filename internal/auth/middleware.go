@@ -38,6 +38,7 @@ type Middleware struct {
 	keyManager          *crypto.KeyManager
 	oauthVerifier       OAuthTokenVerifier
 	resourceMetadataURL string
+	clock               Clock
 }
 
 // NewMiddleware creates a new auth middleware.
@@ -45,7 +46,13 @@ func NewMiddleware(sessionService *SessionService, keyManager *crypto.KeyManager
 	return &Middleware{
 		sessionService: sessionService,
 		keyManager:     keyManager,
+		clock:          realClock{},
 	}
+}
+
+// SetClock replaces the clock used by the middleware. Intended for testing.
+func (m *Middleware) SetClock(c Clock) {
+	m.clock = c
 }
 
 // WithOAuthVerifier adds an OAuth token verifier to the middleware.
@@ -236,7 +243,7 @@ func (m *Middleware) authenticateWithAPIKey(ctx context.Context, token string) (
 	}
 
 	// Validate the API Key against the user's database
-	_, err = ValidateAPIKeyWithDB(ctx, userDB, tokenPart)
+	_, err = ValidateAPIKeyWithDB(ctx, userDB, tokenPart, m.clock.Now())
 	if err != nil {
 		return "", nil, err
 	}

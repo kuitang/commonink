@@ -51,6 +51,8 @@ import (
 
 // integrationTestMutex ensures test isolation
 var integrationTestMutex sync.Mutex
+var integrationSharedMu sync.Mutex
+var integrationSharedFixture *fullAppServer
 
 // fullAppServer wraps httptest.Server with all real application components
 type fullAppServer struct {
@@ -75,9 +77,16 @@ type fullAppServer struct {
 func setupFullAppServer(t testing.TB) *fullAppServer {
 	t.Helper()
 	integrationTestMutex.Lock()
+	t.Cleanup(integrationTestMutex.Unlock)
 
-	tempDir := t.TempDir()
-	return createFullAppServer(tempDir)
+	ts, err := getOrCreateSharedFullAppServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared integration fixture: %v", err)
+	}
+	if err := resetFullAppServerState(ts); err != nil {
+		t.Fatalf("Failed to reset shared integration fixture: %v", err)
+	}
+	return ts
 }
 
 // setupFullAppServerRapid creates a test server for rapid.T tests
@@ -135,7 +144,7 @@ func createFullAppServer(tempDir string) *fullAppServer {
 	oidcClient := auth.NewMockOIDCClient()
 	// Configure mock OIDC client with a default success response
 	oidcClient.SetNextSuccess("google-sub-12345", "test@example.com", "Test User", true)
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -241,12 +250,58 @@ func createFullAppServer(tempDir string) *fullAppServer {
 
 // cleanup closes the test server and releases resources
 func (ts *fullAppServer) cleanup() {
+	if ts.tempDir != "" && strings.Contains(ts.tempDir, "integration-shared-") {
+		return
+	}
 	ts.Server.Close()
 	db.ResetForTesting()
 	if ts.tempDir != "" && strings.Contains(ts.tempDir, "integration-test-") {
 		os.RemoveAll(ts.tempDir)
 	}
 	integrationTestMutex.Unlock()
+}
+
+func getOrCreateSharedFullAppServer() (*fullAppServer, error) {
+	integrationSharedMu.Lock()
+	defer integrationSharedMu.Unlock()
+
+	if integrationSharedFixture != nil {
+		if err := integrationSharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return integrationSharedFixture, nil
+		}
+		integrationSharedFixture.closeSharedResources()
+		integrationSharedFixture = nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "integration-shared-*")
+	if err != nil {
+		return nil, fmt.Errorf("create shared integration temp dir: %w", err)
+	}
+	integrationSharedFixture = createFullAppServer(tempDir)
+	return integrationSharedFixture, nil
+}
+
+func (ts *fullAppServer) closeSharedResources() {
+	if ts.Server != nil {
+		ts.Server.Close()
+	}
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
+}
+
+func resetFullAppServerState(ts *fullAppServer) error {
+	if err := resetSharedDBFixtureState(ts.tempDir, ts.sessionsDB); err != nil {
+		return err
+	}
+	if ts.emailService != nil {
+		ts.emailService.Clear()
+	}
+	if ts.oidcClient != nil {
+		ts.oidcClient.Reset()
+		ts.oidcClient.SetNextSuccess("google-sub-12345", "test@example.com", "Test User", true)
+	}
+	return nil
 }
 
 // findIntegrationTemplatesDir locates templates for tests
@@ -517,18 +572,23 @@ func writeIntegrationError(w http.ResponseWriter, status int, message string) {
 	writeIntegrationJSON(w, status, map[string]string{"error": message})
 }
 
+func newIntegrationHTTPClient(ts *fullAppServer) *http.Client {
+	client := ts.Client()
+	clone := *client
+	clone.Jar = nil
+	clone.CheckRedirect = nil
+	return &clone
+}
+
 // =============================================================================
 // TEST 1: Auth API Flow (tests internal/auth/handlers.go)
 // =============================================================================
 
-func testIntegration_AuthAPI_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testIntegration_AuthAPI_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
+	email := uniqueIntegrationEmail(testutil.EmailGenerator().Draw(t, "email"))
 	password := testutil.PasswordGenerator().Draw(t, "password")
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
@@ -615,8 +675,19 @@ func testIntegration_AuthAPI_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_AuthAPI_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_AuthAPI_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_AuthAPI_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_AuthAPI_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_AuthAPI_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_AuthAPI_Properties(f *testing.F) {
@@ -628,11 +699,8 @@ func FuzzIntegration_AuthAPI_Properties(f *testing.F) {
 // TEST 1.5: Auth API Validation Errors (tests error paths in handlers)
 // =============================================================================
 
-func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
-	client := ts.Client()
+func testIntegration_AuthAPIValidation_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
+	client := newIntegrationHTTPClient(ts)
 
 	// Generate valid and invalid inputs
 	validEmail := testutil.EmailGenerator().Draw(t, "validEmail")
@@ -740,8 +808,19 @@ func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_AuthAPIValidation_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_AuthAPIValidation_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_AuthAPIValidation_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_AuthAPIValidation_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_AuthAPIValidation_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_AuthAPIValidation_Properties(f *testing.F) {
@@ -753,18 +832,16 @@ func FuzzIntegration_AuthAPIValidation_Properties(f *testing.F) {
 // TEST 2: Magic Link Flow (tests internal/auth/handlers.go including verify!)
 // =============================================================================
 
-func testIntegration_MagicLink_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
+func testIntegration_MagicLink_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
+	email := uniqueIntegrationEmail(testutil.EmailGenerator().Draw(t, "email"))
 
-	email := testutil.EmailGenerator().Draw(t, "email")
-
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
 	client.Jar = jar
+	emailCountBefore := ts.emailService.Count()
 
 	// Property 1: POST /auth/magic with email -> redirects to login (always succeeds to prevent enumeration)
 	magicResp, err := client.PostForm(ts.URL+"/auth/magic", url.Values{"email": {email}})
@@ -781,7 +858,7 @@ func testIntegration_MagicLink_Properties(t *rapid.T) {
 
 	// Property 2: Email was sent via mock service
 	emailCount := ts.emailService.Count()
-	if emailCount == 0 {
+	if emailCount <= emailCountBefore {
 		t.Fatal("Magic link email should have been sent")
 	}
 
@@ -850,8 +927,19 @@ func testIntegration_MagicLink_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_MagicLink_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_MagicLink_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_MagicLink_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_MagicLink_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_MagicLink_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_MagicLink_Properties(f *testing.F) {
@@ -863,11 +951,8 @@ func FuzzIntegration_MagicLink_Properties(f *testing.F) {
 // TEST 3: Password Reset Flow (tests HandlePasswordResetConfirm!)
 // =============================================================================
 
-func testIntegration_PasswordReset_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testIntegration_PasswordReset_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
+	email := uniqueIntegrationEmail(testutil.EmailGenerator().Draw(t, "email"))
 	password := testutil.PasswordGenerator().Draw(t, "password")
 	newPassword := testutil.PasswordGenerator().Draw(t, "newPassword")
 	// Old and new passwords must differ for Property 6 to be meaningful
@@ -875,7 +960,7 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 		t.Skip("old and new passwords must differ for Property 6")
 	}
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 
 	// First register the user
 	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
@@ -952,7 +1037,7 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	// Property 5: Login with NEW password should succeed
 	// Use a fresh client with fresh cookies but same TLS config as test server
 	freshJar, _ := cookiejar.New(nil)
-	freshClient := ts.Client()
+	freshClient := newIntegrationHTTPClient(ts)
 	freshClient.Jar = freshJar
 	loginResp, err := freshClient.PostForm(ts.URL+"/auth/login", url.Values{"email": {email}, "password": {newPassword}})
 	if err != nil {
@@ -966,7 +1051,7 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 
 	// Property 6: Login with OLD password should fail
 	freshJar2, _ := cookiejar.New(nil)
-	oldPwClient := ts.Client()
+	oldPwClient := newIntegrationHTTPClient(ts)
 	oldPwClient.Jar = freshJar2
 	oldPwClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -1033,8 +1118,19 @@ func testIntegration_PasswordReset_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_PasswordReset_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_PasswordReset_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_PasswordReset_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_PasswordReset_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_PasswordReset_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_PasswordReset_Properties(f *testing.F) {
@@ -1046,15 +1142,12 @@ func FuzzIntegration_PasswordReset_Properties(f *testing.F) {
 // TEST 3.5: Invalid Token Handling (tests error paths with arbitrary strings)
 // =============================================================================
 
-func testIntegration_InvalidTokens_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
+func testIntegration_InvalidTokens_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
 	// Generate arbitrary tokens to test error handling
 	arbitraryToken := rapid.String().Draw(t, "arbitrary_token")
 	arbitraryPassword := rapid.String().Draw(t, "arbitrary_password")
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 
 	// Property 1: Magic link verify with arbitrary token should return 401
 	verifyResp, err := client.Get(ts.URL + "/auth/magic/verify?token=" + url.QueryEscape(arbitraryToken))
@@ -1118,8 +1211,19 @@ func testIntegration_InvalidTokens_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_InvalidTokens_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_InvalidTokens_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_InvalidTokens_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_InvalidTokens_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_InvalidTokens_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_InvalidTokens_Properties(f *testing.F) {
@@ -1131,14 +1235,11 @@ func FuzzIntegration_InvalidTokens_Properties(f *testing.F) {
 // TEST 3.6: Google OAuth Flow (tests HandleGoogleLogin/Callback)
 // =============================================================================
 
-func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
+func testIntegration_GoogleOAuth_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
 	// Generate arbitrary email for this test
-	testEmail := testutil.EmailGenerator().Draw(t, "email")
+	testEmail := uniqueIntegrationEmail(testutil.EmailGenerator().Draw(t, "email"))
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -1185,7 +1286,7 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 
 	// Property 5: Callback with mismatched state should fail
 	jar, _ := cookiejar.New(nil)
-	client2 := ts.Client()
+	client2 := newIntegrationHTTPClient(ts)
 	client2.Jar = jar
 	client2.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -1210,7 +1311,7 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 
 	// Property 6: Callback with error parameter should return unauthorized
 	jar2, _ := cookiejar.New(nil)
-	client3 := ts.Client()
+	client3 := newIntegrationHTTPClient(ts)
 	client3.Jar = jar2
 	client3.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -1238,7 +1339,7 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 
 	// Create a client that preserves cookies through the flow
 	jar3, _ := cookiejar.New(nil)
-	client4 := ts.Client()
+	client4 := newIntegrationHTTPClient(ts)
 	client4.Jar = jar3
 	client4.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -1294,7 +1395,7 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 
 	// Property 9: User should be authenticated after callback
 	// Need a new client that follows redirects
-	client5 := ts.Client()
+	client5 := newIntegrationHTTPClient(ts)
 	client5.Jar = jar3
 
 	whoamiResp, err := client5.Get(ts.URL + "/auth/whoami")
@@ -1314,7 +1415,7 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 
 	// Property 10: Missing code parameter should fail
 	jar4, _ := cookiejar.New(nil)
-	client6 := ts.Client()
+	client6 := newIntegrationHTTPClient(ts)
 	client6.Jar = jar4
 	client6.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -1337,8 +1438,19 @@ func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_GoogleOAuth_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_GoogleOAuth_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_GoogleOAuth_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_GoogleOAuth_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_GoogleOAuth_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_GoogleOAuth_Properties(f *testing.F) {
@@ -1350,15 +1462,12 @@ func FuzzIntegration_GoogleOAuth_Properties(f *testing.F) {
 // TEST 4: OAuth + MCP Flow (tests oauth_middleware)
 // =============================================================================
 
-func testIntegration_OAuthMCP_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
+func testIntegration_OAuthMCP_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
 	noteTitle := testutil.NoteTitleGenerator().Draw(t, "title")
 	noteContent := testutil.NoteContentGenerator().Draw(t, "content")
 	state := testutil.StateGenerator().Draw(t, "state")
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 
 	// Step 1: Register OAuth client
 	dcrReq := map[string]interface{}{
@@ -1417,7 +1526,7 @@ func testIntegration_OAuthMCP_Properties(t *rapid.T) {
 
 	// Create client with session cookie
 	jar, _ := cookiejar.New(nil)
-	authClient := ts.Client()
+	authClient := newIntegrationHTTPClient(ts)
 	authClient.Jar = jar
 
 	// Set session cookie
@@ -1677,6 +1786,12 @@ func testIntegration_OAuthMCP_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_OAuthMCP_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_OAuthMCP_PropertiesWithServer(t, ts)
+}
+
 // parseSSEResponse extracts JSON from an SSE response
 // SSE format is: "event: message\ndata: {json}\n\n"
 func parseSSEResponse(body string) string {
@@ -1696,22 +1811,24 @@ func parseSSEResponse(body string) string {
 }
 
 func TestIntegration_OAuthMCP_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_OAuthMCP_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_OAuthMCP_PropertiesWithServer(rt, ts)
+	})
 }
 
 // =============================================================================
 // TEST 4.5: MCP Full CRUD (tests all MCP note operations)
 // =============================================================================
 
-func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
+func testIntegration_MCPFullCRUD_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
 	noteTitle := testutil.NoteTitleGenerator().Draw(t, "title")
 	noteContent := testutil.NoteContentGenerator().Draw(t, "content")
 	updatedContent := testutil.NoteContentGenerator().Draw(t, "updatedContent")
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 
 	// Create user and get access token directly via provider (bypass OAuth flow for this test)
 	testEmail := "mcp-crud-test-" + generateIntegrationSecureRandom(8) + "@example.com"
@@ -1962,8 +2079,19 @@ func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_MCPFullCRUD_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_MCPFullCRUD_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_MCPFullCRUD_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_MCPFullCRUD_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_MCPFullCRUD_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_MCPFullCRUD_Properties(f *testing.F) {
@@ -1975,11 +2103,8 @@ func FuzzIntegration_MCPFullCRUD_Properties(f *testing.F) {
 // TEST 5: Refresh Token Flow
 // =============================================================================
 
-func testIntegration_RefreshToken_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
-	client := ts.Client()
+func testIntegration_RefreshToken_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
+	client := newIntegrationHTTPClient(ts)
 
 	// Step 1: Register OAuth client
 	dcrReq := map[string]interface{}{
@@ -2068,8 +2193,19 @@ func testIntegration_RefreshToken_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_RefreshToken_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_RefreshToken_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_RefreshToken_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_RefreshToken_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_RefreshToken_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzIntegration_RefreshToken_Properties(f *testing.F) {
@@ -2081,18 +2217,15 @@ func FuzzIntegration_RefreshToken_Properties(f *testing.F) {
 // TEST 6: Full User Journey (end-to-end)
 // =============================================================================
 
-func testIntegration_FullUserJourney_Properties(t *rapid.T) {
-	ts := setupFullAppServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAppServer) {
+	email := uniqueIntegrationEmail(testutil.EmailGenerator().Draw(t, "email"))
 	password := testutil.PasswordGenerator().Draw(t, "password")
 	noteTitle := testutil.NoteTitleGenerator().Draw(t, "title")
 	noteContent := testutil.NoteContentGenerator().Draw(t, "content")
 
 	// Create HTTP client with cookie jar
 	jar, _ := cookiejar.New(nil)
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 	client.Jar = jar
 
 	// ==========================================================
@@ -2253,7 +2386,7 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	}
 
 	// Use a fresh client for token exchange
-	tokenClient := ts.Client()
+	tokenClient := newIntegrationHTTPClient(ts)
 	tokenResp, err := tokenClient.PostForm(ts.URL+"/oauth/token", tokenParams)
 	if err != nil {
 		t.Fatalf("Token exchange failed: %v", err)
@@ -2283,7 +2416,7 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	mcpReq.Header.Set("Accept", "application/json, text/event-stream")
 	mcpReq.Header.Set("Authorization", "Bearer "+accessToken)
 
-	mcpClient := ts.Client()
+	mcpClient := newIntegrationHTTPClient(ts)
 	mcpResp, err := mcpClient.Do(mcpReq)
 	if err != nil {
 		t.Fatalf("MCP list request failed: %v", err)
@@ -2356,8 +2489,19 @@ func testIntegration_FullUserJourney_Properties(t *rapid.T) {
 	}
 }
 
+func testIntegration_FullUserJourney_Properties(t *rapid.T) {
+	ts := setupFullAppServerRapid()
+	defer ts.cleanup()
+	testIntegration_FullUserJourney_PropertiesWithServer(t, ts)
+}
+
 func TestIntegration_FullUserJourney_Properties(t *testing.T) {
-	rapid.Check(t, testIntegration_FullUserJourney_Properties)
+	ts := setupFullAppServer(t)
+	defer ts.cleanup()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		testIntegration_FullUserJourney_PropertiesWithServer(rt, ts)
+	})
 }
 
 // =============================================================================
@@ -2370,6 +2514,15 @@ func generateIntegrationSecureRandom(length int) string {
 		panic(err)
 	}
 	return hex.EncodeToString(bytes)[:length]
+}
+
+func uniqueIntegrationEmail(seed string) string {
+	at := strings.Index(seed, "@")
+	suffix := generateIntegrationSecureRandom(8)
+	if at <= 0 {
+		return "integration-" + suffix + "@example.com"
+	}
+	return seed[:at] + "+" + suffix + seed[at:]
 }
 
 // =============================================================================
@@ -2386,7 +2539,7 @@ func TestIntegration_NotesAPI_CRUD(t *testing.T) {
 	password := "TestPassword123!"
 
 	jar, _ := cookiejar.New(nil)
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 	client.Jar = jar
 
 	// Register (redirects to /notes, final status is 200)
@@ -2426,7 +2579,7 @@ func TestIntegration_OAuthMetadata(t *testing.T) {
 	ts := setupFullAppServer(t)
 	defer ts.cleanup()
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 
 	t.Run("Protected resource metadata", func(t *testing.T) {
 		resp, err := client.Get(ts.URL + "/.well-known/oauth-protected-resource")
@@ -2471,7 +2624,7 @@ func TestIntegration_UnauthenticatedAccess(t *testing.T) {
 	ts := setupFullAppServer(t)
 	defer ts.cleanup()
 
-	client := ts.Client()
+	client := newIntegrationHTTPClient(ts)
 
 	t.Run("Notes API requires auth", func(t *testing.T) {
 		resp, err := client.Get(ts.URL + "/api/notes")

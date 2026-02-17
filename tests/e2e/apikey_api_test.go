@@ -5,8 +5,8 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +20,6 @@ import (
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/db/testutil"
-	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"github.com/kuitang/agent-notes/internal/email"
 	"pgregory.net/rapid"
 )
@@ -32,30 +31,14 @@ import (
 // Global mutex to ensure tests don't run in parallel
 // This prevents issues with global database state
 var apiKeyTestMutex sync.Mutex
+var apiKeySharedMu sync.Mutex
+var apiKeySharedFixture *apiKeyTestServer
 
-// Cached test credentials - hash computed once at init, reused across all iterations.
-// This avoids the expensive Argon2 hash computation (64 MiB, ~500ms) per iteration.
-// Security note: VerifyPassword reads parameters from the stored hash, so this
-// is functionally equivalent to computing fresh hashes - we're testing API Key behavior,
-// not password hashing.
-var (
-	cachedTestPassword      = "TestPassword123!"
-	cachedTestPasswordHash  string // Computed once in init()
-	cachedTestPassword2     = "OtherPassword456!"
-	cachedTestPasswordHash2 string
+// Test passwords — FakeInsecureHasher makes hashing instant, no caching needed.
+const (
+	testPassword  = "TestPassword123!"
+	testPassword2 = "OtherPassword456!"
 )
-
-func init() {
-	var err error
-	cachedTestPasswordHash, err = auth.HashPassword(cachedTestPassword)
-	if err != nil {
-		panic("Failed to compute cached test password hash: " + err.Error())
-	}
-	cachedTestPasswordHash2, err = auth.HashPassword(cachedTestPassword2)
-	if err != nil {
-		panic("Failed to compute cached test password hash 2: " + err.Error())
-	}
-}
 
 // apiKeyTestServer holds the server and services for API Key API testing.
 type apiKeyTestServer struct {
@@ -67,15 +50,26 @@ type apiKeyTestServer struct {
 	authMiddleware *auth.Middleware
 	keyManager     *crypto.KeyManager
 	sessionsDB     *db.SessionsDB
+	emailService   *email.MockEmailService
 	tempDir        string // For cleanup in rapid tests
+	shared         bool
 }
 
 // setupAPIKeyTestServer creates a test server with all API Key-related routes.
 // Returns the server and a cleanup function.
 func setupAPIKeyTestServer(t testing.TB) *apiKeyTestServer {
-	// Use temp directory for test database to ensure isolation
-	tempDir := t.TempDir()
-	return setupAPIKeyTestServerWithDir(tempDir)
+	t.Helper()
+	apiKeyTestMutex.Lock()
+	t.Cleanup(apiKeyTestMutex.Unlock)
+
+	srv, err := getOrCreateSharedAPIKeyServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared API key server: %v", err)
+	}
+	if err := resetAPIKeyServerState(srv); err != nil {
+		t.Fatalf("Failed to reset shared API key server: %v", err)
+	}
+	return srv
 }
 
 // setupAPIKeyTestServerRapid creates a test server for rapid.T tests.
@@ -98,7 +92,10 @@ func setupAPIKeyTestServerRapid(t *rapid.T) *apiKeyTestServer {
 func setupAPIKeyTestServerWithDir(tempDir string) *apiKeyTestServer {
 	// Acquire global lock to ensure clean database state
 	apiKeyTestMutex.Lock()
+	return createAPIKeyTestServerWithDir(tempDir)
+}
 
+func createAPIKeyTestServerWithDir(tempDir string) *apiKeyTestServer {
 	db.DataDirectory = tempDir
 	db.ResetForTesting()
 
@@ -120,7 +117,7 @@ func setupAPIKeyTestServerWithDir(tempDir string) *apiKeyTestServer {
 
 	// Initialize services
 	emailSvc := email.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local")
+	userService := auth.NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local", auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 
 	// Create API Key handler and middleware
@@ -145,11 +142,16 @@ func setupAPIKeyTestServerWithDir(tempDir string) *apiKeyTestServer {
 		authMiddleware: authMiddleware,
 		keyManager:     keyManager,
 		sessionsDB:     sessionsDB,
+		emailService:   emailSvc,
+		tempDir:        tempDir,
 	}
 }
 
 // cleanup closes the test server and cleans up resources.
 func (s *apiKeyTestServer) cleanup() {
+	if s.shared {
+		return
+	}
 	s.server.Close()
 	db.CloseAll()
 	if s.tempDir != "" {
@@ -159,67 +161,71 @@ func (s *apiKeyTestServer) cleanup() {
 	apiKeyTestMutex.Unlock()
 }
 
+func getOrCreateSharedAPIKeyServer() (*apiKeyTestServer, error) {
+	apiKeySharedMu.Lock()
+	defer apiKeySharedMu.Unlock()
+
+	if apiKeySharedFixture != nil {
+		if err := apiKeySharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return apiKeySharedFixture, nil
+		}
+		apiKeySharedFixture.closeSharedResources()
+		apiKeySharedFixture = nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "apikey-shared-*")
+	if err != nil {
+		return nil, fmt.Errorf("create shared API key temp dir: %w", err)
+	}
+
+	apiKeySharedFixture = createAPIKeyTestServerWithDir(tempDir)
+	apiKeySharedFixture.shared = true
+	return apiKeySharedFixture, nil
+}
+
+func (s *apiKeyTestServer) closeSharedResources() {
+	if s.server != nil {
+		s.server.Close()
+	}
+	if s.tempDir != "" {
+		_ = os.RemoveAll(s.tempDir)
+	}
+}
+
+func resetAPIKeyServerState(s *apiKeyTestServer) error {
+	if err := resetSharedDBFixtureState(s.tempDir, s.sessionsDB); err != nil {
+		return err
+	}
+	if s.emailService != nil {
+		s.emailService.Clear()
+	}
+	return nil
+}
+
 // testHelper is a minimal interface that rapid.T and testing.T/B both satisfy
 type testHelper interface {
 	Fatalf(format string, args ...any)
 	Fatal(args ...any)
 }
 
-// createTestUserWithCachedPassword creates a test user using a pre-computed password hash.
-// This is ~100x faster than createTestUserWithSession because it skips Argon2 hashing.
-// Use cachedTestPassword as the password when calling APIs that require re-authentication.
-// For tests that need two users, use userNum=1 or userNum=2 to get different cached credentials.
-func (s *apiKeyTestServer) createTestUserWithCachedPassword(t testHelper, emailAddr string, userNum int) (userID string, password string, sessionCookie *http.Cookie) {
+// createTestUser registers a test user via UserService.RegisterWithPassword
+// (instant with FakeInsecureHasher) and returns a session cookie.
+// For tests needing two users, use userNum=2 for a different password.
+func (s *apiKeyTestServer) createTestUser(t testHelper, emailAddr string, userNum int) (userID string, password string, sessionCookie *http.Cookie) {
 	ctx := context.Background()
 
-	// Select cached credentials
-	var passwordHash string
 	switch userNum {
-	case 1:
-		password = cachedTestPassword
-		passwordHash = cachedTestPasswordHash
 	case 2:
-		password = cachedTestPassword2
-		passwordHash = cachedTestPasswordHash2
+		password = testPassword2
 	default:
-		password = cachedTestPassword
-		passwordHash = cachedTestPasswordHash
+		password = testPassword
 	}
 
-	// Create or find user
-	user, err := s.userService.FindOrCreateByProvider(ctx, emailAddr)
+	user, err := s.userService.RegisterWithPassword(ctx, emailAddr, password)
 	if err != nil {
-		t.Fatalf("Failed to create user: %v", err)
+		t.Fatalf("Failed to register user: %v", err)
 	}
 
-	// Get user's database and set the password hash
-	dek, err := s.keyManager.GetOrCreateUserDEK(user.ID)
-	if err != nil {
-		t.Fatalf("Failed to get user DEK: %v", err)
-	}
-	userDB, err := db.OpenUserDBWithDEK(user.ID, dek)
-	if err != nil {
-		t.Fatalf("Failed to open user DB: %v", err)
-	}
-
-	// Create account with pre-computed hash (no Argon2 call!)
-	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
-		UserID:       user.ID,
-		Email:        emailAddr,
-		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-		CreatedAt:    time.Now().Unix(),
-	})
-	if err != nil {
-		err = userDB.Queries().UpdateAccountPasswordHash(ctx, userdb.UpdateAccountPasswordHashParams{
-			PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-			UserID:       user.ID,
-		})
-		if err != nil {
-			t.Fatalf("Failed to set account password: %v", err)
-		}
-	}
-
-	// Create session
 	sessionID, err := s.sessionService.Create(ctx, user.ID)
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
@@ -381,7 +387,7 @@ func testAPIKeyAPI_Roundtrip_Properties(t *rapid.T, server *apiKeyTestServer) {
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key
 	tokenID, tokenValue := server.createAPIKey(t, sessionCookie, tokenName, "read_write", emailAddr, password)
@@ -421,10 +427,9 @@ func testAPIKeyAPI_Roundtrip_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Roundtrip_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		// Create fresh server for each property test iteration
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Roundtrip_Properties(rt, server)
 	})
 }
@@ -449,7 +454,7 @@ func testAPIKeyAPI_Revocation_Properties(t *rapid.T, server *apiKeyTestServer) {
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key
 	tokenID, tokenValue := server.createAPIKey(t, sessionCookie, tokenName, "read_write", emailAddr, password)
@@ -482,9 +487,9 @@ func testAPIKeyAPI_Revocation_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Revocation_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Revocation_Properties(rt, server)
 	})
 }
@@ -510,12 +515,12 @@ func testAPIKeyAPI_PasswordReAuth_Properties(t *rapid.T, server *apiKeyTestServe
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
 	// Generate a wrong password that's definitely different from cached password
 	wrongPassword := rapid.StringMatching(`[a-zA-Z0-9!@#$%^&*]{8,20}`).Filter(func(s string) bool {
-		return s != cachedTestPassword && s != cachedTestPassword2
+		return s != testPassword && s != testPassword2
 	}).Draw(t, "wrongPassword")
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, correctPassword, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, correctPassword, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Property 1: Creating token without password fails
 	reqNoPassword := auth.CreateAPIKeyRequest{
@@ -574,9 +579,9 @@ func (s *apiKeyTestServer) createAPIKeyExpectError(t testHelper, sessionCookie *
 }
 
 func TestAPIKeyAPI_PasswordReAuth_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_PasswordReAuth_Properties(rt, server)
 	})
 }
@@ -603,7 +608,7 @@ func testAPIKeyAPI_Uniqueness_Properties(t *rapid.T, server *apiKeyTestServer) {
 	numTokens := rapid.IntRange(2, 5).Draw(t, "numTokens")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create multiple tokens
 	type tokenInfo struct {
@@ -654,9 +659,9 @@ func testAPIKeyAPI_Uniqueness_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Uniqueness_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Uniqueness_Properties(rt, server)
 	})
 }
@@ -683,7 +688,7 @@ func testAPIKeyAPI_Format_Properties(t *rapid.T, server *apiKeyTestServer) {
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	userID, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	userID, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key
 	_, tokenValue := server.createAPIKey(t, sessionCookie, tokenName, "read_write", emailAddr, password)
@@ -718,9 +723,9 @@ func testAPIKeyAPI_Format_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Format_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Format_Properties(rt, server)
 	})
 }
@@ -748,8 +753,8 @@ func testAPIKeyAPI_Isolation_Properties(t *rapid.T, server *apiKeyTestServer) {
 	tokenName2 := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName2")
 
 	// Create two users with cached passwords (avoids Argon2 hash per iteration)
-	_, password1, sessionCookie1 := server.createTestUserWithCachedPassword(t, email1, 1)
-	_, password2, sessionCookie2 := server.createTestUserWithCachedPassword(t, email2, 2)
+	_, password1, sessionCookie1 := server.createTestUser(t, email1, 1)
+	_, password2, sessionCookie2 := server.createTestUser(t, email2, 2)
 
 	// Create tokens for each user
 	tokenID1, _ := server.createAPIKey(t, sessionCookie1, tokenName1, "read_write", email1, password1)
@@ -812,9 +817,9 @@ func testAPIKeyAPI_Isolation_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Isolation_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Isolation_Properties(rt, server)
 	})
 }
@@ -880,9 +885,9 @@ func testAPIKeyAPI_InvalidToken_Properties(t *rapid.T, server *apiKeyTestServer)
 }
 
 func TestAPIKeyAPI_InvalidToken_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_InvalidToken_Properties(rt, server)
 	})
 }
@@ -906,7 +911,7 @@ func testAPIKeyAPI_TokenName_EdgeCases_Properties(t *rapid.T, server *apiKeyTest
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Test various edge case token names
 	// Using ArbitraryNonEmptyString from testutil for aggressive edge cases
@@ -941,9 +946,9 @@ func testAPIKeyAPI_TokenName_EdgeCases_Properties(t *rapid.T, server *apiKeyTest
 }
 
 func TestAPIKeyAPI_TokenName_EdgeCases_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_TokenName_EdgeCases_Properties(rt, server)
 	})
 }
@@ -969,7 +974,7 @@ func testAPIKeyAPI_Scope_Properties(t *rapid.T, server *apiKeyTestServer) {
 	scope := rapid.SampledFrom([]string{"read", "write", "read_write", "admin"}).Draw(t, "scope")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key with specific scope
 	tokenID, _ := server.createAPIKey(t, sessionCookie, tokenName, scope, emailAddr, password)
@@ -988,9 +993,9 @@ func testAPIKeyAPI_Scope_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Scope_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Scope_Properties(rt, server)
 	})
 }
@@ -1015,7 +1020,7 @@ func testAPIKeyAPI_Expiration_Properties(t *rapid.T, server *apiKeyTestServer) {
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key (expires in 3600 seconds = 1 hour)
 	now := time.Now()
@@ -1039,9 +1044,9 @@ func testAPIKeyAPI_Expiration_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_Expiration_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_Expiration_Properties(rt, server)
 	})
 }
@@ -1066,7 +1071,7 @@ func testAPIKeyAPI_OneTimeReveal_Properties(t *rapid.T, server *apiKeyTestServer
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key and capture the token value
 	tokenID, tokenValue := server.createAPIKey(t, sessionCookie, tokenName, "read_write", emailAddr, password)
@@ -1098,9 +1103,9 @@ func testAPIKeyAPI_OneTimeReveal_Properties(t *rapid.T, server *apiKeyTestServer
 }
 
 func TestAPIKeyAPI_OneTimeReveal_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_OneTimeReveal_Properties(rt, server)
 	})
 }
@@ -1125,7 +1130,7 @@ func testAPIKeyAPI_DuplicateNames_Properties(t *rapid.T, server *apiKeyTestServe
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create first API Key with the name
 	tokenID1, tokenValue1 := server.createAPIKey(t, sessionCookie, tokenName, "read_write", emailAddr, password)
@@ -1174,9 +1179,9 @@ func testAPIKeyAPI_DuplicateNames_Properties(t *rapid.T, server *apiKeyTestServe
 }
 
 func TestAPIKeyAPI_DuplicateNames_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_DuplicateNames_Properties(rt, server)
 	})
 }
@@ -1236,31 +1241,33 @@ func (s *apiKeyTestServer) createAPIKeyWithExpiry(t testHelper, sessionCookie *h
 }
 
 func testAPIKeyAPI_ExpirationEnforcement_Properties(t *rapid.T, server *apiKeyTestServer) {
-	// Generate random inputs
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
+	expirySeconds := rapid.Int64Range(10, 3600).Draw(t, "expirySeconds")
 
-	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
-	// Create API Key with 2 second expiry (more than 1s to avoid races, but still short enough to test)
-	tokenID, tokenValue := server.createAPIKeyWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, 2)
+	// Inject fake clock into middleware — starts at real time
+	clk := auth.NewFakeClock(time.Now())
+	server.authMiddleware.SetClock(clk)
 
-	// Property 1: Token was created successfully
+	// Create API Key with random expiry
+	tokenID, tokenValue := server.createAPIKeyWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, expirySeconds)
+
 	if tokenID == "" || tokenValue == "" {
 		t.Fatal("Token should be created successfully")
 	}
 
-	// Property 2: Token works immediately after creation
+	// Property 1: Token works before expiry
 	status := server.authenticateWithAPIKey(t, tokenValue)
 	if status != http.StatusOK {
 		t.Fatalf("Fresh token should work: expected 200, got %d", status)
 	}
 
-	// Wait for token to expire (3 seconds to be safe - token expires at 2s, we wait 3s)
-	time.Sleep(3 * time.Second)
+	// Advance clock past expiry — no wall-clock sleep
+	clk.Advance(time.Duration(expirySeconds+1) * time.Second)
 
-	// Property 3: Token is rejected after expiration
+	// Property 2: Token is rejected after expiry
 	status = server.authenticateWithAPIKey(t, tokenValue)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("Expired token should be rejected: expected 401, got %d", status)
@@ -1268,46 +1275,13 @@ func testAPIKeyAPI_ExpirationEnforcement_Properties(t *rapid.T, server *apiKeyTe
 }
 
 func TestAPIKeyAPI_ExpirationEnforcement_Properties(t *testing.T) {
-	// Note: This test uses a deterministic approach because each iteration
-	// requires a 3-second sleep to wait for token expiry, making full
-	// rapid property testing too slow. The expiry enforcement behavior
-	// doesn't benefit from random input variation anyway.
 	server := setupAPIKeyTestServer(t)
 	defer server.cleanup()
 
-	emailAddr := "expiration-test@test.com"
-	tokenName := "expiration-test-token"
-
-	// Create test user with a fresh session
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
-
-	// Create API Key with 2 second expiry
-	tokenID, tokenValue := server.createAPIKeyWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, 2)
-
-	// Property 1: Token was created successfully
-	if tokenID == "" || tokenValue == "" {
-		t.Fatal("Token should be created successfully")
-	}
-
-	// Property 2: Token works immediately after creation
-	status := server.authenticateWithAPIKey(t, tokenValue)
-	if status != http.StatusOK {
-		t.Fatalf("Fresh token should work: expected 200, got %d", status)
-	}
-
-	// Wait for token to expire (3 seconds to be safe - token expires at 2s, we wait 3s)
-	time.Sleep(3 * time.Second)
-
-	// Property 3: Token is rejected after expiration
-	status = server.authenticateWithAPIKey(t, tokenValue)
-	if status != http.StatusUnauthorized {
-		t.Fatalf("Expired token should be rejected: expected 401, got %d", status)
-	}
+	rapid.Check(t, func(rt *rapid.T) {
+		testAPIKeyAPI_ExpirationEnforcement_Properties(rt, server)
+	})
 }
-
-// Note: No fuzz entry point for ExpirationEnforcement because:
-// 1. The test requires a 3-second sleep which makes fuzzing impractical
-// 2. The expiry enforcement behavior is deterministic and doesn't benefit from random inputs
 
 // =============================================================================
 // Property 14: Maximum Expiry Enforcement Property
@@ -1320,7 +1294,7 @@ func testAPIKeyAPI_MaxExpiry_Properties(t *rapid.T, server *apiKeyTestServer) {
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Try to create API Key with expiry exceeding 1 year (366 days in seconds)
 	exceedMaxExpiry := int64(366 * 24 * 60 * 60) // 366 days
@@ -1365,9 +1339,9 @@ func testAPIKeyAPI_MaxExpiry_Properties(t *rapid.T, server *apiKeyTestServer) {
 }
 
 func TestAPIKeyAPI_MaxExpiry_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_MaxExpiry_Properties(rt, server)
 	})
 }
@@ -1391,7 +1365,7 @@ func testAPIKeyAPI_EmptyNameRejection_Properties(t *rapid.T, server *apiKeyTestS
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Property 1: Empty name should be rejected
 	reqEmptyName := auth.CreateAPIKeyRequest{
@@ -1435,9 +1409,9 @@ func testAPIKeyAPI_EmptyNameRejection_Properties(t *rapid.T, server *apiKeyTestS
 }
 
 func TestAPIKeyAPI_EmptyNameRejection_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_EmptyNameRejection_Properties(rt, server)
 	})
 }
@@ -1462,7 +1436,7 @@ func testAPIKeyAPI_DefaultScope_Properties(t *rapid.T, server *apiKeyTestServer)
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key without explicit scope
 	tokenID, _ := server.createAPIKey(t, sessionCookie, tokenName, "", emailAddr, password)
@@ -1481,9 +1455,9 @@ func testAPIKeyAPI_DefaultScope_Properties(t *rapid.T, server *apiKeyTestServer)
 }
 
 func TestAPIKeyAPI_DefaultScope_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_DefaultScope_Properties(rt, server)
 	})
 }
@@ -1509,7 +1483,7 @@ func testAPIKeyAPI_WrongEmailRejection_Properties(t *rapid.T, server *apiKeyTest
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 
 	// Create test user with cached password (avoids Argon2 hash per iteration)
-	_, password, sessionCookie := server.createTestUserWithCachedPassword(t, emailAddr, 1)
+	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Property: Creating API Key with wrong email should fail
 	reqWrongEmail := auth.CreateAPIKeyRequest{
@@ -1526,9 +1500,9 @@ func testAPIKeyAPI_WrongEmailRejection_Properties(t *rapid.T, server *apiKeyTest
 }
 
 func TestAPIKeyAPI_WrongEmailRejection_Properties(t *testing.T) {
+	server := setupAPIKeyTestServer(t)
+	t.Cleanup(server.cleanup)
 	rapid.Check(t, func(rt *rapid.T) {
-		server := setupAPIKeyTestServerRapid(rt)
-		defer server.cleanup()
 		testAPIKeyAPI_WrongEmailRejection_Properties(rt, server)
 	})
 }

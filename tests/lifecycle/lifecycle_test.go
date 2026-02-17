@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,9 +29,16 @@ import (
 // =============================================================================
 
 var (
-	testServer  *serverFixture
-	testOnce    sync.Once
-	testCleanup func()
+	testServer   *serverFixture
+	testOnce     sync.Once
+	testCleanup  func()
+	testStartErr error
+)
+
+const (
+	testMasterKey    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testOAuthHMACKey = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testOAuthSignKey = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
 type serverFixture struct {
@@ -40,70 +46,217 @@ type serverFixture struct {
 	baseURL string
 	port    int
 	logs    *logCapture
+	outbox  *emailOutbox
 	dataDir string
 }
 
 type logCapture struct {
-	mu    sync.RWMutex
-	lines []string
+	mu     sync.Mutex
+	lines  []string
+	notify chan struct{}
+}
+
+func newLogCapture() *logCapture {
+	return &logCapture{
+		lines:  make([]string, 0, 256),
+		notify: make(chan struct{}),
+	}
 }
 
 func (l *logCapture) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	added := false
 	for _, line := range strings.Split(string(p), "\n") {
 		if line != "" {
 			l.lines = append(l.lines, line)
+			added = true
 		}
+	}
+	if added {
+		close(l.notify)
+		l.notify = make(chan struct{})
 	}
 	return len(p), nil
 }
 
 func (l *logCapture) Lines() []string {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	cp := make([]string, len(l.lines))
 	copy(cp, l.lines)
 	return cp
 }
 
-func (l *logCapture) FindEmail(to string) (link string, template string, ok bool) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	toPattern := regexp.MustCompile(`\[EMAIL\] To: ` + regexp.QuoteMeta(to) + ` \| Template: (\w+)`)
-	linkPattern := regexp.MustCompile(`\[EMAIL\] (?:Magic Link|Password Reset Link): (http[^\s]+)`)
-
-	for i, line := range l.lines {
-		if m := toPattern.FindStringSubmatch(line); m != nil {
-			template = m[1]
-			// Next line should have the link
-			if i+1 < len(l.lines) {
-				if lm := linkPattern.FindStringSubmatch(l.lines[i+1]); lm != nil {
-					return lm[1], template, true
-				}
-			}
-		}
-	}
-	return "", "", false
+func (l *logCapture) waitCh() <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.notify
 }
 
-func (l *logCapture) WaitForEmail(to string, timeout time.Duration) (link, template string, err error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if link, template, ok := l.FindEmail(to); ok {
+func (l *logCapture) Cursor() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.lines)
+}
+
+func (l *logCapture) waitForSubstringSince(ctx context.Context, substr string, start int) error {
+	cursor := start
+
+	for {
+		l.mu.Lock()
+		if cursor < 0 {
+			cursor = 0
+		}
+		for i := cursor; i < len(l.lines); i++ {
+			if strings.Contains(l.lines[i], substr) {
+				l.mu.Unlock()
+				return nil
+			}
+		}
+		cursor = len(l.lines)
+		waitCh := l.notify
+		l.mu.Unlock()
+
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for log line containing %q: %w", substr, ctx.Err())
+		}
+	}
+}
+
+type emailOutbox struct {
+	dir string
+}
+
+type outboxEmailEvent struct {
+	Sequence uint64 `json:"sequence"`
+	To       string `json:"to"`
+	Template string `json:"template"`
+	Link     string `json:"link"`
+}
+
+func newEmailOutbox(dir string) *emailOutbox {
+	return &emailOutbox{dir: dir}
+}
+
+func (o *emailOutbox) Cursor() uint64 {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		return 0
+	}
+
+	var maxSeq uint64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		seq, ok := parseOutboxSequence(entry.Name())
+		if ok && seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq
+}
+
+func (o *emailOutbox) WaitForEmailSince(
+	to string,
+	startSeq uint64,
+	ctx context.Context,
+	logs *logCapture,
+) (link, template string, err error) {
+	cursor := startSeq
+
+	for {
+		var ok bool
+		link, template, cursor, ok, err = o.findEmailSince(to, cursor)
+		if err != nil {
+			return "", "", err
+		}
+		if ok {
 			return link, template, nil
 		}
-		time.Sleep(50 * time.Millisecond)
+
+		waitCh := logs.waitCh()
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("timeout waiting for email to %s: %w", to, ctx.Err())
+		}
 	}
-	return "", "", fmt.Errorf("timeout waiting for email to %s", to)
+}
+
+func (o *emailOutbox) findEmailSince(to string, startSeq uint64) (link, template string, next uint64, ok bool, err error) {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", startSeq, false, nil
+		}
+		return "", "", startSeq, false, fmt.Errorf("read outbox: %w", err)
+	}
+
+	maxSeq := startSeq
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		seq, seqOK := parseOutboxSequence(entry.Name())
+		if !seqOK {
+			continue
+		}
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+		if seq <= startSeq {
+			continue
+		}
+
+		path := filepath.Join(o.dir, entry.Name())
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+
+		var event outboxEmailEvent
+		if unmarshalErr := json.Unmarshal(raw, &event); unmarshalErr != nil {
+			continue
+		}
+		if strings.EqualFold(event.To, to) {
+			return event.Link, event.Template, maxSeq, true, nil
+		}
+	}
+
+	return "", "", maxSeq, false, nil
+}
+
+func parseOutboxSequence(fileName string) (uint64, bool) {
+	parts := strings.SplitN(fileName, "-", 2)
+	if len(parts) < 2 {
+		return 0, false
+	}
+	var seq uint64
+	if _, err := fmt.Sscanf(parts[0], "%d", &seq); err != nil {
+		return 0, false
+	}
+	return seq, true
 }
 
 // getServer returns the shared server fixture, starting it if needed.
 func getServer(t *testing.T) *serverFixture {
+	t.Helper()
+
 	testOnce.Do(func() {
-		testServer, testCleanup = startServer(t)
+		testServer, testCleanup, testStartErr = startServer(t)
 	})
+	if testStartErr != nil {
+		t.Fatalf("Failed to start lifecycle server fixture: %v", testStartErr)
+	}
+	if testServer == nil {
+		t.Fatalf("Lifecycle server fixture is nil")
+	}
 	t.Cleanup(func() {
 		// Don't stop server after each test - reuse it
 		// Server stops when all tests complete via TestMain
@@ -119,14 +272,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func startServer(t *testing.T) (*serverFixture, func()) {
+func startServer(t *testing.T) (*serverFixture, func(), error) {
 	// Find project root
 	projectRoot := findProjectRoot()
 
 	// Create temp data dir
 	dataDir, err := os.MkdirTemp("", "lifecycle-test-*")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		return nil, nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
 	// Build server
@@ -139,14 +292,19 @@ func startServer(t *testing.T) (*serverFixture, func()) {
 		"CGO_LDFLAGS=-lm",
 	)
 	if out, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("Build failed: %v\n%s", err, out)
+		return nil, nil, fmt.Errorf("build failed: %w\n%s", err, out)
 	}
 
 	// Find free port
 	port := findFreePort()
+	outboxDir := filepath.Join(dataDir, "email-outbox")
+	if err := os.MkdirAll(outboxDir, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("failed to create mock email outbox dir: %w", err)
+	}
 
 	// Start server
-	logs := &logCapture{}
+	logs := newLogCapture()
+	outbox := newEmailOutbox(outboxDir)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, binary, "--test")
 	cmd.Dir = dataDir
@@ -155,6 +313,10 @@ func startServer(t *testing.T) (*serverFixture, func()) {
 		fmt.Sprintf("DATABASE_PATH=%s", dataDir),
 		fmt.Sprintf("BASE_URL=http://localhost:%d", port),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
+		fmt.Sprintf("MASTER_KEY=%s", testMasterKey),
+		fmt.Sprintf("OAUTH_HMAC_SECRET=%s", testOAuthHMACKey),
+		fmt.Sprintf("OAUTH_SIGNING_KEY=%s", testOAuthSignKey),
+		fmt.Sprintf("MOCK_EMAIL_OUTBOX_DIR=%s", outboxDir),
 	)
 
 	stdout, _ := cmd.StdoutPipe()
@@ -162,7 +324,7 @@ func startServer(t *testing.T) (*serverFixture, func()) {
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("Failed to start server: %v", err)
+		return nil, nil, fmt.Errorf("failed to start server: %w", err)
 	}
 
 	// Capture logs from both stdout and stderr
@@ -185,44 +347,32 @@ func startServer(t *testing.T) (*serverFixture, func()) {
 
 	baseURL := fmt.Sprintf("http://localhost:%d", port)
 
-	// Wait for server ready (short timeout - server should start quickly)
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	deadline := time.Now().Add(5 * time.Second)
-	ready := false
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(baseURL + "/health")
-		if err == nil && resp.StatusCode == 200 {
-			resp.Body.Close()
-			t.Logf("Server started on port %d", port)
-			ready = true
-			break
-		}
-		if resp != nil {
-			resp.Body.Close()
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !ready {
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
+	readyCursor := logs.Cursor()
+	if err := logs.waitForSubstringSince(waitCtx, "Server ready to accept connections", readyCursor); err != nil {
 		cancel()
-		t.Fatalf("Server did not become ready within 5s. Logs:\n%s", strings.Join(logs.Lines(), "\n"))
+		_ = stopProcess(cmd)
+		return nil, nil, fmt.Errorf("%w. logs:\n%s", err, strings.Join(logs.Lines(), "\n"))
 	}
+	t.Logf("Server started on port %d", port)
 
 	fixture := &serverFixture{
 		cmd:     cmd,
 		baseURL: baseURL,
 		port:    port,
 		logs:    logs,
+		outbox:  outbox,
 		dataDir: dataDir,
 	}
 
 	cleanup := func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		time.Sleep(500 * time.Millisecond)
 		cancel()
-		os.RemoveAll(dataDir)
+		_ = stopProcess(cmd)
+		_ = os.RemoveAll(dataDir)
 	}
 
-	return fixture, cleanup
+	return fixture, cleanup, nil
 }
 
 func findProjectRoot() string {
@@ -243,6 +393,29 @@ func findFreePort() int {
 	l, _ := net.Listen("tcp", ":0")
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+func waitContext(t testing.TB) (context.Context, context.CancelFunc) {
+	if tbWithDeadline, ok := any(t).(interface{ Deadline() (time.Time, bool) }); ok {
+		if deadline, ok := tbWithDeadline.Deadline(); ok {
+			return context.WithDeadline(context.Background(), deadline)
+		}
+	}
+	return context.WithCancel(context.Background())
+}
+
+func stopProcess(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	return <-done
 }
 
 // =============================================================================
@@ -311,10 +484,13 @@ func TestLifecycle_MagicLink_Properties(t *testing.T) {
 		t.Skip("Skipping lifecycle test")
 	}
 	srv := getServer(t)
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
 
 	rapid.Check(t, func(rt *rapid.T) {
 		email := genValidEmail().Draw(rt, "email")
 		client := newClient(srv.baseURL)
+		emailCursor := srv.outbox.Cursor()
 
 		// Request magic link - returns redirect to login page
 		resp, err := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {email}})
@@ -327,8 +503,8 @@ func TestLifecycle_MagicLink_Properties(t *testing.T) {
 			rt.Fatalf("Expected 303, got %d", resp.StatusCode)
 		}
 
-		// Extract from logs
-		link, template, err := srv.logs.WaitForEmail(email, 5*time.Second)
+		// Extract from outbox (mock still logs for humans).
+		link, template, err := srv.outbox.WaitForEmailSince(email, emailCursor, waitCtx, srv.logs)
 		if err != nil {
 			rt.Fatalf("Email not found: %v", err)
 		}
@@ -352,17 +528,20 @@ func TestLifecycle_MagicLink_EdgeCases_Properties(t *testing.T) {
 		t.Skip("Skipping lifecycle test")
 	}
 	srv := getServer(t)
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
 
 	rapid.Check(t, func(rt *rapid.T) {
 		email := genEdgeCaseEmail().Draw(rt, "email")
 		client := newClient(srv.baseURL)
+		emailCursor := srv.outbox.Cursor()
 
 		resp, _ := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {email}})
 		if resp != nil {
 			resp.Body.Close()
 		}
 
-		link, _, err := srv.logs.WaitForEmail(email, 5*time.Second)
+		link, _, err := srv.outbox.WaitForEmailSince(email, emailCursor, waitCtx, srv.logs)
 		if err != nil {
 			rt.Fatalf("Email not found for edge case %q: %v", email, err)
 		}
@@ -377,10 +556,13 @@ func TestLifecycle_MagicLink_FullFlow_Properties(t *testing.T) {
 		t.Skip("Skipping lifecycle test")
 	}
 	srv := getServer(t)
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
 
 	rapid.Check(t, func(rt *rapid.T) {
 		email := genValidEmail().Draw(rt, "email")
 		client := newClient(srv.baseURL)
+		emailCursor := srv.outbox.Cursor()
 
 		// 1. Request magic link
 		resp, _ := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {email}})
@@ -388,8 +570,8 @@ func TestLifecycle_MagicLink_FullFlow_Properties(t *testing.T) {
 			resp.Body.Close()
 		}
 
-		// 2. Get link from logs
-		link, _, err := srv.logs.WaitForEmail(email, 5*time.Second)
+		// 2. Get link from outbox
+		link, _, err := srv.outbox.WaitForEmailSince(email, emailCursor, waitCtx, srv.logs)
 		if err != nil {
 			rt.Fatalf("Email not found: %v", err)
 		}
@@ -421,16 +603,19 @@ func TestLifecycle_JSONAPI_CRUD_Properties(t *testing.T) {
 		t.Skip("Skipping lifecycle test")
 	}
 	srv := getServer(t)
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
 
 	// Auth once for all iterations
 	client := newClient(srv.baseURL)
 	authEmail := "jsontest-" + fmt.Sprintf("%d", time.Now().UnixNano()) + "@example.com"
+	authCursor := srv.outbox.Cursor()
 
 	resp, _ := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {authEmail}})
 	if resp != nil {
 		resp.Body.Close()
 	}
-	link, _, _ := srv.logs.WaitForEmail(authEmail, 5*time.Second)
+	link, _, _ := srv.outbox.WaitForEmailSince(authEmail, authCursor, waitCtx, srv.logs)
 	resp, _ = client.Get(link)
 	if resp != nil {
 		resp.Body.Close()
@@ -492,7 +677,7 @@ func TestLifecycle_Unauthenticated_Redirects(t *testing.T) {
 	client := newClient(srv.baseURL)
 
 	// HTML pages should redirect to login
-	pages := []string{"/notes", "/notes/new", "/settings/tokens"}
+	pages := []string{"/notes", "/notes/new", "/settings/api-keys"}
 	for _, page := range pages {
 		resp, err := client.Get(srv.baseURL + page)
 		if err != nil {
@@ -526,6 +711,8 @@ func TestLifecycle_PasswordReset_Properties(t *testing.T) {
 		t.Skip("Skipping lifecycle test")
 	}
 	srv := getServer(t)
+	waitCtx, cancelWait := waitContext(t)
+	defer cancelWait()
 
 	rapid.Check(t, func(rt *rapid.T) {
 		email := genValidEmail().Draw(rt, "email")
@@ -543,13 +730,14 @@ func TestLifecycle_PasswordReset_Properties(t *testing.T) {
 		}
 
 		// Request password reset
+		emailCursor := srv.outbox.Cursor()
 		resp, _ = client.PostForm(srv.baseURL+"/auth/password-reset", url.Values{"email": {email}})
 		if resp != nil {
 			resp.Body.Close()
 		}
 
-		// Check logs for reset email
-		link, template, err := srv.logs.WaitForEmail(email, 5*time.Second)
+		// Check outbox for reset email
+		link, template, err := srv.outbox.WaitForEmailSince(email, emailCursor, waitCtx, srv.logs)
 		if err != nil {
 			rt.Fatalf("Password reset email not found: %v", err)
 		}

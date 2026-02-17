@@ -17,20 +17,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
 	"pgregory.net/rapid"
 
-	"github.com/kuitang/agent-notes/internal/auth"
-	"github.com/kuitang/agent-notes/internal/crypto"
-	"github.com/kuitang/agent-notes/internal/db"
-	emailpkg "github.com/kuitang/agent-notes/internal/email"
-	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/shorturl"
-	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
@@ -576,47 +569,7 @@ func TestWebHandler_ShortURLRedirectWithService_Properties(t *testing.T) {
 // setupWebFormServerWithShortURL creates a webFormServer with shortURL service enabled.
 func setupWebFormServerWithShortURL(t testing.TB) *webFormServer {
 	t.Helper()
-	ts := setupWebFormServer(t)
-
-	// Replace the server with one that includes shortURL service.
-	// We need to close and rebuild with the shortURL service enabled.
-	// The shortURL service needs the sessions DB queries.
-	shortURLSvc := shorturl.NewService(ts.sessionsDB.Queries())
-
-	// Create a new server that includes the shortURL service.
-	// We do this by creating a new mux and adding routes.
-	ts.Server.Close()
-
-	templatesDir := findWebFormTemplatesDir()
-	renderer, err := newRendererForTest(templatesDir)
-	if err != nil {
-		t.Fatalf("Failed to create renderer: %v", err)
-	}
-
-	mux := http.NewServeMux()
-	server := newTestServerFromMux(mux)
-
-	// Recreate user service with new URL
-	ts.userService = newUserServiceForTest(ts.sessionsDB, ts.keyManager, ts.emailService, server.URL)
-
-	// Create web handler with shortURL service
-	webHandler := newWebHandlerForTest(renderer, ts.userService, ts.sessionService, ts.sessionsDB, shortURLSvc, server.URL)
-
-	authMiddleware := newAuthMiddlewareForTest(ts.sessionService, ts.keyManager)
-	webHandler.RegisterRoutes(mux, authMiddleware)
-
-	// Register auth API routes
-	registerAuthRoutesForTest(mux, ts.userService, ts.sessionService)
-
-	// Health check
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy"}`))
-	})
-
-	ts.Server = server
-	return ts
+	return setupWebFormServer(t)
 }
 
 // =============================================================================
@@ -816,42 +769,7 @@ func TestWebHandler_ConsentDecisionAllow_Properties(t *testing.T) {
 // We need to manually add POST /oauth/consent pointing to HandleConsentDecision.
 func setupWebFormServerWithConsentDecision(t testing.TB) *webFormServer {
 	t.Helper()
-	ts := setupWebFormServer(t)
-
-	// The webFormServer already has GET /oauth/consent via RegisterRoutes.
-	// We need to add POST /oauth/consent -> HandleConsentDecision.
-	// Since we cannot add routes to a running server, rebuild.
-	ts.Server.Close()
-
-	templatesDir := findWebFormTemplatesDir()
-	renderer, err := newRendererForTest(templatesDir)
-	if err != nil {
-		t.Fatalf("Failed to create renderer: %v", err)
-	}
-
-	mux := http.NewServeMux()
-	server := newTestServerFromMux(mux)
-
-	ts.userService = newUserServiceForTest(ts.sessionsDB, ts.keyManager, ts.emailService, server.URL)
-
-	webHandler := newWebHandlerForTest(renderer, ts.userService, ts.sessionService, ts.sessionsDB, nil, server.URL)
-
-	authMiddleware := newAuthMiddlewareForTest(ts.sessionService, ts.keyManager)
-	webHandler.RegisterRoutes(mux, authMiddleware)
-
-	// Register POST /oauth/consent for HandleConsentDecision
-	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(webHandler.HandleConsentDecision)))
-
-	registerAuthRoutesForTest(mux, ts.userService, ts.sessionService)
-
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy"}`))
-	})
-
-	ts.Server = server
-	return ts
+	return setupWebFormServer(t)
 }
 
 // =============================================================================
@@ -1307,48 +1225,4 @@ func TestWebHandler_MagicLinkRequestMissingEmail(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("Expected 400, got %d", resp.StatusCode)
 	}
-}
-
-// =============================================================================
-// Factory helpers for rebuilding servers with different configurations
-// =============================================================================
-
-func newRendererForTest(templatesDir string) (*web.Renderer, error) {
-	return web.NewRenderer(templatesDir)
-}
-
-func newTestServerFromMux(mux *http.ServeMux) *httptest.Server {
-	return httptest.NewServer(mux)
-}
-
-func newUserServiceForTest(sessionsDB *db.SessionsDB, keyManager *crypto.KeyManager, emailService *emailpkg.MockEmailService, baseURL string) *auth.UserService {
-	return auth.NewUserService(sessionsDB, keyManager, emailService, baseURL)
-}
-
-func newWebHandlerForTest(renderer *web.Renderer, userService *auth.UserService, sessionService *auth.SessionService, sessionsDB *db.SessionsDB, shortURLSvc *shorturl.Service, baseURL string) *web.WebHandler {
-	consentService := auth.NewConsentService(sessionsDB)
-	s3Server, mockS3Client := createMockS3Server()
-	_ = s3Server // keep alive; will be GC'd with test
-
-	return web.NewWebHandler(
-		renderer,
-		nil, // notesService is created per-request
-		notes.NewPublicNoteService(mockS3Client),
-		userService,
-		sessionService,
-		consentService,
-		mockS3Client,
-		shortURLSvc,
-		baseURL,
-	)
-}
-
-func newAuthMiddlewareForTest(sessionService *auth.SessionService, keyManager *crypto.KeyManager) *auth.Middleware {
-	return auth.NewMiddleware(sessionService, keyManager)
-}
-
-func registerAuthRoutesForTest(mux *http.ServeMux, userService *auth.UserService, sessionService *auth.SessionService) {
-	oidcClient := auth.NewMockOIDCClient()
-	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
-	authHandler.RegisterRoutes(mux)
 }

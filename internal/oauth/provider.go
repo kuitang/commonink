@@ -97,7 +97,6 @@ func NewProvider(cfg Config) (*Provider, error) {
 	if len(cfg.HMACSecret) < 32 {
 		return nil, errors.New("oauth: HMACSecret must be at least 32 bytes")
 	}
-
 	signingKey := cfg.SigningKey
 	var publicKey ed25519.PublicKey
 	if signingKey == nil {

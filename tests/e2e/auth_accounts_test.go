@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 
@@ -21,27 +20,9 @@ import (
 // AUTH ACCOUNT PROPERTY TESTS
 // =============================================================================
 
-// setupAuthTestServer creates a webFormServer for auth tests running under rapid.T.
-// rapid.T doesn't have TempDir(), so we use os.MkdirTemp and clean up manually.
-// Returns the server and a cleanup function.
-func setupAuthTestServer(rt *rapid.T) (*webFormServer, func()) {
-	tempDir, err := os.MkdirTemp("", "auth-accounts-*")
-	if err != nil {
-		rt.Fatalf("Failed to create temp dir: %v", err)
-	}
-	webFormTestMutex.Lock()
-	ts := createWebFormServer(tempDir)
-	return ts, func() {
-		ts.cleanup()
-		os.RemoveAll(tempDir)
-	}
-}
-
 // --- Property 1: register → login roundtrip ---
 
-func testAuthAccounts_RegisterLoginRoundtrip(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_RegisterLoginRoundtrip(rt *rapid.T, ts *webFormServer) {
 
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := testutil.PasswordGenerator().Draw(rt, "password")
@@ -120,19 +101,25 @@ func testAuthAccounts_RegisterLoginRoundtrip(rt *rapid.T) {
 }
 
 func TestAuthAccounts_RegisterLoginRoundtrip(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_RegisterLoginRoundtrip)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_RegisterLoginRoundtrip(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_RegisterLoginRoundtrip(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_RegisterLoginRoundtrip))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_RegisterLoginRoundtrip(rt, ts)
+	}))
 }
 
 // --- Property 2: login rejects unregistered email ---
 
-func testAuthAccounts_LoginRejectsUnregistered(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_LoginRejectsUnregistered(rt *rapid.T, ts *webFormServer) {
 
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := testutil.PasswordGenerator().Draw(rt, "password")
@@ -167,19 +154,25 @@ func testAuthAccounts_LoginRejectsUnregistered(rt *rapid.T) {
 }
 
 func TestAuthAccounts_LoginRejectsUnregistered(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_LoginRejectsUnregistered)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_LoginRejectsUnregistered(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_LoginRejectsUnregistered(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_LoginRejectsUnregistered))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_LoginRejectsUnregistered(rt, ts)
+	}))
 }
 
 // --- Property 3: register rejects duplicate email ---
 
-func testAuthAccounts_RegisterRejectsDuplicate(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_RegisterRejectsDuplicate(rt *rapid.T, ts *webFormServer) {
 
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := testutil.PasswordGenerator().Draw(rt, "password")
@@ -228,19 +221,25 @@ func testAuthAccounts_RegisterRejectsDuplicate(rt *rapid.T) {
 }
 
 func TestAuthAccounts_RegisterRejectsDuplicate(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_RegisterRejectsDuplicate)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_RegisterRejectsDuplicate(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_RegisterRejectsDuplicate(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_RegisterRejectsDuplicate))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_RegisterRejectsDuplicate(rt, ts)
+	}))
 }
 
 // --- Property 4: login rejects wrong password ---
 
-func testAuthAccounts_LoginRejectsWrongPassword(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_LoginRejectsWrongPassword(rt *rapid.T, ts *webFormServer) {
 
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := testutil.PasswordGenerator().Draw(rt, "password")
@@ -298,19 +297,25 @@ func testAuthAccounts_LoginRejectsWrongPassword(rt *rapid.T) {
 }
 
 func TestAuthAccounts_LoginRejectsWrongPassword(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_LoginRejectsWrongPassword)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_LoginRejectsWrongPassword(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_LoginRejectsWrongPassword(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_LoginRejectsWrongPassword))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_LoginRejectsWrongPassword(rt, ts)
+	}))
 }
 
 // --- Property 5: return_to roundtrip through login ---
 
-func testAuthAccounts_ReturnToRoundtrip(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_ReturnToRoundtrip(rt *rapid.T, ts *webFormServer) {
 
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := testutil.PasswordGenerator().Draw(rt, "password")
@@ -362,19 +367,25 @@ func testAuthAccounts_ReturnToRoundtrip(rt *rapid.T) {
 }
 
 func TestAuthAccounts_ReturnToRoundtrip(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_ReturnToRoundtrip)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_ReturnToRoundtrip(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_ReturnToRoundtrip(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_ReturnToRoundtrip))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_ReturnToRoundtrip(rt, ts)
+	}))
 }
 
 // --- Property 6: return_to rejects external URLs ---
 
-func testAuthAccounts_ReturnToRejectsExternal(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_ReturnToRejectsExternal(rt *rapid.T, ts *webFormServer) {
 
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := testutil.PasswordGenerator().Draw(rt, "password")
@@ -432,19 +443,25 @@ func testAuthAccounts_ReturnToRejectsExternal(rt *rapid.T) {
 }
 
 func TestAuthAccounts_ReturnToRejectsExternal(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_ReturnToRejectsExternal)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_ReturnToRejectsExternal(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_ReturnToRejectsExternal(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_ReturnToRejectsExternal))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_ReturnToRejectsExternal(rt, ts)
+	}))
 }
 
 // --- Property 7: return_to propagates through register link ---
 
-func testAuthAccounts_ReturnToPropagatesThroughRegister(rt *rapid.T) {
-	ts, cleanup := setupAuthTestServer(rt)
-	defer cleanup()
+func testAuthAccounts_ReturnToPropagatesThroughRegister(rt *rapid.T, ts *webFormServer) {
 
 	client := ts.Client()
 
@@ -502,10 +519,18 @@ func testAuthAccounts_ReturnToPropagatesThroughRegister(rt *rapid.T) {
 }
 
 func TestAuthAccounts_ReturnToPropagatesThroughRegister(t *testing.T) {
-	rapid.Check(t, testAuthAccounts_ReturnToPropagatesThroughRegister)
+	ts := setupWebFormServer(t)
+	t.Cleanup(ts.cleanup)
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuthAccounts_ReturnToPropagatesThroughRegister(rt, ts)
+	})
 }
 
 func FuzzAuthAccounts_ReturnToPropagatesThroughRegister(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testAuthAccounts_ReturnToPropagatesThroughRegister))
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts := createWebFormServerForRapid(rt)
+		defer ts.cleanupForRapid()
+		testAuthAccounts_ReturnToPropagatesThroughRegister(rt, ts)
+	}))
 }

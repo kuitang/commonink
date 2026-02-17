@@ -58,7 +58,7 @@ run-email: build
 
 ## test: Quick tests (rapid property tests, excludes e2e conformance + browser)
 test:
-	go test $(BUILD_TAGS) -v -parallel $$(nproc 2>/dev/null || echo 4) \
+	go test $(BUILD_TAGS) -v -timeout 120s -parallel $$(nproc 2>/dev/null || echo 4) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
 		-run 'Test' -rapid.checks=10
 

@@ -22,12 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"pgregory.net/rapid"
 
@@ -37,7 +31,6 @@ import (
 	emailpkg "github.com/kuitang/agent-notes/internal/email"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
-	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
@@ -48,6 +41,8 @@ import (
 // =============================================================================
 
 var shortURLWebTestMutex sync.Mutex
+var shortURLWebSharedMu sync.Mutex
+var shortURLWebSharedFixture *shortURLWebServer
 
 // shortURLWebServer wraps httptest.Server for testing short URL web flows
 type shortURLWebServer struct {
@@ -55,6 +50,7 @@ type shortURLWebServer struct {
 	tempDir    string
 	s3Server   *httptest.Server
 	sessionsDB *db.SessionsDB
+	shared     bool
 
 	// Services (exposed for tests)
 	keyManager     *crypto.KeyManager
@@ -71,9 +67,16 @@ type shortURLWebServer struct {
 func setupShortURLWebServer(t testing.TB) *shortURLWebServer {
 	t.Helper()
 	shortURLWebTestMutex.Lock()
+	t.Cleanup(shortURLWebTestMutex.Unlock)
 
-	tempDir := t.TempDir()
-	return createShortURLWebServer(tempDir)
+	ts, err := getOrCreateSharedShortURLWebServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared short URL web fixture: %v", err)
+	}
+	if err := resetShortURLWebServerState(ts); err != nil {
+		t.Fatalf("Failed to reset shared short URL web fixture: %v", err)
+	}
+	return ts
 }
 
 func createShortURLWebServer(tempDir string) *shortURLWebServer {
@@ -111,7 +114,7 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 	// Initialize services
 	emailService := emailpkg.NewMockEmailService()
 	oidcClient := auth.NewMockOIDCClient()
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
 
@@ -140,10 +143,10 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 	server = httptest.NewServer(mux)
 
 	// Update userService baseURL
-	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 
-	// Create mock S3 server and client
-	s3Server, mockS3Client := createShortURLWebMockS3Server()
+	// Create mock S3 server and client (shared helper from web_forms_test.go)
+	s3Server, mockS3Client := createMockS3ServerWithBucket("test-bucket-shorturl-web")
 
 	// Create short URL service with real sessions DB
 	shortURLSvc := shorturl.NewService(sessionsDB.Queries())
@@ -195,6 +198,9 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 }
 
 func (ts *shortURLWebServer) cleanup() {
+	if ts.shared {
+		return
+	}
 	ts.Server.Close()
 	if ts.s3Server != nil {
 		ts.s3Server.Close()
@@ -204,37 +210,54 @@ func (ts *shortURLWebServer) cleanup() {
 	shortURLWebTestMutex.Unlock()
 }
 
-func createShortURLWebMockS3Server() (*httptest.Server, *s3client.Client) {
-	backend := s3mem.New()
-	faker := gofakes3.New(backend)
-	s3Server := httptest.NewServer(faker.Server())
+func getOrCreateSharedShortURLWebServer() (*shortURLWebServer, error) {
+	shortURLWebSharedMu.Lock()
+	defer shortURLWebSharedMu.Unlock()
 
-	ctx := context.Background()
-	sdkConfig, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
-		),
-	)
-	if err != nil {
-		panic("Failed to load AWS config: " + err.Error())
+	if shortURLWebSharedFixture != nil {
+		if err := shortURLWebSharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return shortURLWebSharedFixture, nil
+		}
+		shortURLWebSharedFixture.closeSharedResources()
+		shortURLWebSharedFixture = nil
 	}
 
-	s3c := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(s3Server.URL)
-		o.UsePathStyle = true
-	})
-
-	bucketName := "test-bucket-shorturl-web"
-	_, err = s3c.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucketName),
-	})
+	tempDir, err := os.MkdirTemp("", "shorturl-web-shared-*")
 	if err != nil {
-		panic("Failed to create mock S3 bucket: " + err.Error())
+		return nil, fmt.Errorf("create shared short URL temp dir: %w", err)
 	}
 
-	client := s3client.NewFromS3Client(s3c, bucketName, s3Server.URL+"/"+bucketName)
-	return s3Server, client
+	shortURLWebSharedFixture = createShortURLWebServer(tempDir)
+	shortURLWebSharedFixture.shared = true
+	return shortURLWebSharedFixture, nil
+}
+
+func (ts *shortURLWebServer) closeSharedResources() {
+	if ts.Server != nil {
+		ts.Server.Close()
+	}
+	if ts.s3Server != nil {
+		ts.s3Server.Close()
+	}
+	if ts.rateLimiter != nil {
+		ts.rateLimiter.Stop()
+	}
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
+}
+
+func resetShortURLWebServerState(ts *shortURLWebServer) error {
+	if err := resetSharedDBFixtureState(ts.tempDir, ts.sessionsDB); err != nil {
+		return err
+	}
+	if ts.emailService != nil {
+		ts.emailService.Clear()
+	}
+	if ts.oidcClient != nil {
+		ts.oidcClient.Reset()
+	}
+	return nil
 }
 
 func findShortURLWebTemplatesDir() string {

@@ -51,6 +51,8 @@ import (
 // Global mutex for OAuth tests to ensure test isolation
 var oauthTestMutex sync.Mutex
 var oauthTestCounter atomic.Int64
+var oauthSharedMu sync.Mutex
+var oauthSharedFixture *oauthTestServer
 
 // oauthTestServer wraps httptest.Server with additional test helpers for OAuth
 type oauthTestServer struct {
@@ -67,12 +69,22 @@ type oauthTestServer struct {
 // setupOAuthTestServer creates a fully configured test server with all OAuth routes
 func setupOAuthTestServer(t testing.TB) *oauthTestServer {
 	t.Helper()
-	ts := createOAuthTestServer(t.TempDir())
+	oauthTestMutex.Lock()
+	t.Cleanup(oauthTestMutex.Unlock)
+
+	ts, err := getOrCreateSharedOAuthTestServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared OAuth fixture: %v", err)
+	}
+	if err := resetOAuthTestServerState(ts); err != nil {
+		t.Fatalf("Failed to reset shared OAuth fixture: %v", err)
+	}
 	return ts
 }
 
 // setupOAuthTestServerRapid creates a test server for rapid.T tests
 func setupOAuthTestServerRapid() *oauthTestServer {
+	oauthTestMutex.Lock()
 	// Use os.MkdirTemp for rapid tests since rapid.T doesn't have TempDir
 	tempDir, err := os.MkdirTemp("", "oauth-test-*")
 	if err != nil {
@@ -83,8 +95,6 @@ func setupOAuthTestServerRapid() *oauthTestServer {
 
 // createOAuthTestServer creates a test server with the given temp directory
 func createOAuthTestServer(tempDir string) *oauthTestServer {
-	oauthTestMutex.Lock()
-
 	// Reset database singleton and set fresh data directory for test isolation
 	db.ResetForTesting()
 	db.DataDirectory = tempDir
@@ -131,7 +141,7 @@ func createOAuthTestServer(tempDir string) *oauthTestServer {
 	emailService := email.NewMockEmailService()
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 
 	// Find templates directory for renderer
 	templatesDir := findTemplatesDir()
@@ -200,6 +210,9 @@ func createOAuthTestServer(tempDir string) *oauthTestServer {
 
 // cleanup closes the test server and releases the lock
 func (ts *oauthTestServer) cleanup() {
+	if ts.tempDir != "" && strings.Contains(ts.tempDir, "oauth-shared-") {
+		return
+	}
 	ts.Server.Close()
 	db.ResetForTesting()
 	// Clean up temp dir if we created it (for rapid tests)
@@ -207,6 +220,46 @@ func (ts *oauthTestServer) cleanup() {
 		os.RemoveAll(ts.tempDir)
 	}
 	oauthTestMutex.Unlock()
+}
+
+func getOrCreateSharedOAuthTestServer() (*oauthTestServer, error) {
+	oauthSharedMu.Lock()
+	defer oauthSharedMu.Unlock()
+
+	if oauthSharedFixture != nil {
+		if err := oauthSharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return oauthSharedFixture, nil
+		}
+		oauthSharedFixture.closeSharedResources()
+		oauthSharedFixture = nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "oauth-shared-*")
+	if err != nil {
+		return nil, fmt.Errorf("create shared OAuth temp dir: %w", err)
+	}
+
+	oauthSharedFixture = createOAuthTestServer(tempDir)
+	return oauthSharedFixture, nil
+}
+
+func (ts *oauthTestServer) closeSharedResources() {
+	if ts.Server != nil {
+		ts.Server.Close()
+	}
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
+}
+
+func resetOAuthTestServerState(ts *oauthTestServer) error {
+	if err := resetSharedDBFixtureState(ts.tempDir, ts.sessionsDB); err != nil {
+		return err
+	}
+	if ts.emailService != nil {
+		ts.emailService.Clear()
+	}
+	return nil
 }
 
 // findTemplatesDir locates the templates directory for tests
@@ -359,7 +412,7 @@ func NewOAuthConformanceTest(t testing.TB, ts *oauthTestServer, config ClientCon
 	return &OAuthConformanceTest{
 		t:         t,
 		serverURL: ts.URL,
-		client:    ts.Client(), // Use TLS-capable client
+		client:    newOAuthHTTPClient(ts), // Use TLS-capable client
 		config:    config,
 	}
 }
@@ -708,6 +761,23 @@ func generateSecureRandom(length int) string {
 	return hex.EncodeToString(bytes)[:length]
 }
 
+func uniqueOAuthEmail(seed string) string {
+	at := strings.Index(seed, "@")
+	suffix := generateSecureRandom(8)
+	if at <= 0 {
+		return "oauth-" + suffix + "@example.com"
+	}
+	return seed[:at] + "+" + suffix + seed[at:]
+}
+
+func newOAuthHTTPClient(ts *oauthTestServer) *http.Client {
+	client := ts.Client()
+	clone := *client
+	clone.Jar = nil
+	clone.CheckRedirect = nil
+	return &clone
+}
+
 // createTestUser creates a user and returns their credentials
 func createTestUser(t testing.TB, ts *oauthTestServer, userEmail string) string {
 	t.Helper()
@@ -737,7 +807,7 @@ func loginUser(t testing.TB, ts *oauthTestServer, userEmail string) *http.Client
 	require.NoError(t, err, "Failed to create cookie jar")
 
 	// Use the test server's HTTP client which trusts its TLS certificate
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 	client.Jar = jar
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -766,7 +836,7 @@ func loginUserRapid(ts *oauthTestServer, userEmail string) *http.Client {
 	}
 
 	// Use the test server's HTTP client which trusts its TLS certificate
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 	client.Jar = jar
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -1027,7 +1097,7 @@ func handleTestRegister(w http.ResponseWriter, r *http.Request, userService *aut
 		return
 	}
 
-	_, err = auth.HashPassword(password)
+	_, err = auth.FakeInsecureHasher{}.HashPassword(password)
 	if err != nil {
 		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 		return
@@ -1461,10 +1531,7 @@ func FuzzOAuth_PKCE_Properties(f *testing.F) {
 }
 
 // testOAuth_RefreshToken_Properties tests token refresh flow
-func testOAuth_RefreshToken_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
+func testOAuth_RefreshToken_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
 	// Setup: Register client and get initial tokens
 	clientName := testutil.ClientNameGenerator().Draw(t, "clientName")
 
@@ -1537,8 +1604,18 @@ func testOAuth_RefreshToken_Properties(t *rapid.T) {
 	}
 }
 
+func testOAuth_RefreshToken_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testOAuth_RefreshToken_PropertiesWithServer(t, ts)
+}
+
 func TestOAuth_RefreshToken_Properties(t *testing.T) {
-	rapid.Check(t, testOAuth_RefreshToken_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOAuth_RefreshToken_PropertiesWithServer(rt, ts)
+	})
 }
 
 // =============================================================================
@@ -1546,15 +1623,12 @@ func TestOAuth_RefreshToken_Properties(t *testing.T) {
 // =============================================================================
 
 // testAuth_Registration_Properties tests registration with random emails/passwords
-func testAuth_Registration_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testAuth_Registration_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	email := uniqueOAuthEmail(testutil.EmailGenerator().Draw(t, "email"))
 	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	// Use the test server's TLS-capable client
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 
 	// Property: Valid registration should succeed
 	resp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
@@ -1592,8 +1666,18 @@ func testAuth_Registration_Properties(t *rapid.T) {
 	}
 }
 
+func testAuth_Registration_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testAuth_Registration_PropertiesWithServer(t, ts)
+}
+
 func TestAuth_Registration_Properties(t *testing.T) {
-	rapid.Check(t, testAuth_Registration_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuth_Registration_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzAuth_Registration_Properties(f *testing.F) {
@@ -1602,15 +1686,12 @@ func FuzzAuth_Registration_Properties(f *testing.F) {
 }
 
 // testAuth_Registration_WeakPassword_Properties tests weak passwords are rejected
-func testAuth_Registration_WeakPassword_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testAuth_Registration_WeakPassword_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	email := uniqueOAuthEmail(testutil.EmailGenerator().Draw(t, "email"))
 	weakPassword := testutil.WeakPasswordGenerator().Draw(t, "weakPassword")
 
 	// Use the test server's TLS-capable client
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 
 	// Property: Weak password should be rejected
 	resp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {weakPassword}})
@@ -1625,20 +1706,27 @@ func testAuth_Registration_WeakPassword_Properties(t *rapid.T) {
 	}
 }
 
+func testAuth_Registration_WeakPassword_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testAuth_Registration_WeakPassword_PropertiesWithServer(t, ts)
+}
+
 func TestAuth_Registration_WeakPassword_Properties(t *testing.T) {
-	rapid.Check(t, testAuth_Registration_WeakPassword_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuth_Registration_WeakPassword_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testAuth_Login_Properties tests login flow
-func testAuth_Login_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testAuth_Login_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	email := uniqueOAuthEmail(testutil.EmailGenerator().Draw(t, "email"))
 	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	// Use the test server's TLS-capable client
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 
 	// First register the user
 	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
@@ -1672,8 +1760,18 @@ func testAuth_Login_Properties(t *rapid.T) {
 	}
 }
 
+func testAuth_Login_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testAuth_Login_PropertiesWithServer(t, ts)
+}
+
 func TestAuth_Login_Properties(t *testing.T) {
-	rapid.Check(t, testAuth_Login_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuth_Login_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzAuth_Login_Properties(f *testing.F) {
@@ -1682,14 +1780,11 @@ func FuzzAuth_Login_Properties(f *testing.F) {
 }
 
 // testAuth_MagicLink_Properties tests magic link request/verify
-func testAuth_MagicLink_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testAuth_MagicLink_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	email := uniqueOAuthEmail(testutil.EmailGenerator().Draw(t, "email"))
 
 	// Use the test server's TLS-capable client
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 
 	// Property: Magic link request should always succeed (to prevent enumeration)
 	resp, err := client.PostForm(ts.URL+"/auth/magic", url.Values{"email": {email}})
@@ -1718,8 +1813,18 @@ func testAuth_MagicLink_Properties(t *rapid.T) {
 	}
 }
 
+func testAuth_MagicLink_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testAuth_MagicLink_PropertiesWithServer(t, ts)
+}
+
 func TestAuth_MagicLink_Properties(t *testing.T) {
-	rapid.Check(t, testAuth_MagicLink_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuth_MagicLink_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzAuth_MagicLink_Properties(f *testing.F) {
@@ -1728,14 +1833,11 @@ func FuzzAuth_MagicLink_Properties(f *testing.F) {
 }
 
 // testAuth_PasswordReset_Properties tests password reset flow
-func testAuth_PasswordReset_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testAuth_PasswordReset_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	email := uniqueOAuthEmail(testutil.EmailGenerator().Draw(t, "email"))
 
 	// Use the test server's TLS-capable client
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 
 	// Property: Password reset request should always succeed (to prevent enumeration)
 	resp, err := client.PostForm(ts.URL+"/auth/password-reset", url.Values{"email": {email}})
@@ -1759,8 +1861,18 @@ func testAuth_PasswordReset_Properties(t *rapid.T) {
 	}
 }
 
+func testAuth_PasswordReset_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testAuth_PasswordReset_PropertiesWithServer(t, ts)
+}
+
 func TestAuth_PasswordReset_Properties(t *testing.T) {
-	rapid.Check(t, testAuth_PasswordReset_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuth_PasswordReset_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzAuth_PasswordReset_Properties(f *testing.F) {
@@ -1769,11 +1881,8 @@ func FuzzAuth_PasswordReset_Properties(f *testing.F) {
 }
 
 // testAuth_Session_Properties tests logout and whoami
-func testAuth_Session_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
-	email := testutil.EmailGenerator().Draw(t, "email")
+func testAuth_Session_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	email := uniqueOAuthEmail(testutil.EmailGenerator().Draw(t, "email"))
 	password := testutil.PasswordGenerator().Draw(t, "password")
 
 	// Use the test server's TLS-capable client with cookie jar
@@ -1781,7 +1890,7 @@ func testAuth_Session_Properties(t *rapid.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
-	client := ts.Client()
+	client := newOAuthHTTPClient(ts)
 	client.Jar = jar
 
 	// Register user
@@ -1835,8 +1944,18 @@ func testAuth_Session_Properties(t *rapid.T) {
 	}
 }
 
+func testAuth_Session_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testAuth_Session_PropertiesWithServer(t, ts)
+}
+
 func TestAuth_Session_Properties(t *testing.T) {
-	rapid.Check(t, testAuth_Session_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testAuth_Session_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzAuth_Session_Properties(f *testing.F) {
@@ -1849,10 +1968,7 @@ func FuzzAuth_Session_Properties(f *testing.F) {
 // =============================================================================
 
 // testOAuth_StatePreservation_Properties tests state is preserved through OAuth flow
-func testOAuth_StatePreservation_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
+func testOAuth_StatePreservation_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
 	// Generate random state
 	state := testutil.StateGenerator().Draw(t, "state")
 
@@ -1943,7 +2059,7 @@ func testOAuth_StatePreservation_Properties(t *rapid.T) {
 			}
 
 			// Use the test server's TLS-capable client for token exchange
-			tokenClient := ts.Client()
+			tokenClient := newOAuthHTTPClient(ts)
 			tokenResp, err := tokenClient.PostForm(ts.URL+"/oauth/token", tokenParams)
 			if err != nil {
 				t.Fatalf("Token exchange failed: %v", err)
@@ -1957,15 +2073,22 @@ func testOAuth_StatePreservation_Properties(t *rapid.T) {
 	}
 }
 
+func testOAuth_StatePreservation_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testOAuth_StatePreservation_PropertiesWithServer(t, ts)
+}
+
 func TestOAuth_StatePreservation_Properties(t *testing.T) {
-	rapid.Check(t, testOAuth_StatePreservation_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOAuth_StatePreservation_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOAuth_TokenFormat_Properties tests tokens are valid JWT format
-func testOAuth_TokenFormat_Properties(t *rapid.T) {
-	ts := setupOAuthTestServerRapid()
-	defer ts.cleanup()
-
+func testOAuth_TokenFormat_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
 	// Create tokens
 	tokens, err := ts.oauthProvider.CreateTokens(context.Background(), oauth.TokenParams{
 		ClientID:            "test-client",
@@ -2018,8 +2141,18 @@ func testOAuth_TokenFormat_Properties(t *rapid.T) {
 	}
 }
 
+func testOAuth_TokenFormat_Properties(t *rapid.T) {
+	ts := setupOAuthTestServerRapid()
+	defer ts.cleanup()
+	testOAuth_TokenFormat_PropertiesWithServer(t, ts)
+}
+
 func TestOAuth_TokenFormat_Properties(t *testing.T) {
-	rapid.Check(t, testOAuth_TokenFormat_Properties)
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOAuth_TokenFormat_PropertiesWithServer(rt, ts)
+	})
 }
 
 func FuzzOAuth_TokenFormat_Properties(f *testing.F) {

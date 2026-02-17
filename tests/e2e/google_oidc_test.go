@@ -38,6 +38,8 @@ import (
 // =============================================================================
 
 var oidcTestMutex sync.Mutex
+var oidcSharedMu sync.Mutex
+var oidcSharedFixture *mockOIDCTestServer
 
 // mockOIDCTestServer wraps an httptest.Server with mockoidc for OIDC testing
 type mockOIDCTestServer struct {
@@ -139,9 +141,16 @@ func (a *MockOIDCClientAdapter) ExchangeCode(ctx context.Context, code string) (
 func setupMockOIDCTestServer(t testing.TB) *mockOIDCTestServer {
 	t.Helper()
 	oidcTestMutex.Lock()
+	t.Cleanup(oidcTestMutex.Unlock)
 
-	tempDir := t.TempDir()
-	return createMockOIDCTestServer(tempDir)
+	ts, err := getOrCreateSharedMockOIDCTestServer()
+	if err != nil {
+		t.Fatalf("Failed to initialize shared OIDC fixture: %v", err)
+	}
+	if err := resetOIDCTestServerState(ts); err != nil {
+		t.Fatalf("Failed to reset shared OIDC fixture: %v", err)
+	}
+	return ts
 }
 
 // setupMockOIDCTestServerRapid creates a test server for rapid.T tests
@@ -190,7 +199,7 @@ func createMockOIDCTestServer(tempDir string) *mockOIDCTestServer {
 	masterKey := make([]byte, 32)
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	emailService := email.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 
 	// Create auth handler with the mockoidc-backed client
@@ -219,6 +228,9 @@ func createMockOIDCTestServer(tempDir string) *mockOIDCTestServer {
 
 // cleanup closes the test server and releases resources
 func (ts *mockOIDCTestServer) cleanup() {
+	if ts.tempDir != "" && strings.Contains(ts.tempDir, "oidc-shared-") {
+		return
+	}
 	ts.Server.Close()
 	if err := ts.mockOIDC.Shutdown(); err != nil {
 		// Log but don't fail
@@ -228,6 +240,50 @@ func (ts *mockOIDCTestServer) cleanup() {
 		os.RemoveAll(ts.tempDir)
 	}
 	oidcTestMutex.Unlock()
+}
+
+func getOrCreateSharedMockOIDCTestServer() (*mockOIDCTestServer, error) {
+	oidcSharedMu.Lock()
+	defer oidcSharedMu.Unlock()
+
+	if oidcSharedFixture != nil {
+		if err := oidcSharedFixture.sessionsDB.DB().Ping(); err == nil {
+			return oidcSharedFixture, nil
+		}
+		oidcSharedFixture.closeSharedResources()
+		oidcSharedFixture = nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "oidc-shared-*")
+	if err != nil {
+		return nil, fmt.Errorf("create shared OIDC temp dir: %w", err)
+	}
+
+	oidcSharedFixture = createMockOIDCTestServer(tempDir)
+	return oidcSharedFixture, nil
+}
+
+func (ts *mockOIDCTestServer) closeSharedResources() {
+	if ts.Server != nil {
+		ts.Server.Close()
+	}
+	if ts.mockOIDC != nil {
+		_ = ts.mockOIDC.Shutdown()
+	}
+	if ts.tempDir != "" {
+		_ = os.RemoveAll(ts.tempDir)
+	}
+}
+
+func resetOIDCTestServerState(ts *mockOIDCTestServer) error {
+	if err := resetSharedDBFixtureState(ts.tempDir, ts.sessionsDB); err != nil {
+		return err
+	}
+	if ts.emailService != nil {
+		ts.emailService.Clear()
+	}
+	resetMockOIDCState(ts)
+	return nil
 }
 
 // queueUser queues a user to be returned by the mock OIDC server
@@ -241,14 +297,44 @@ func (ts *mockOIDCTestServer) queueUser(sub, email, name string, emailVerified b
 	ts.mockOIDC.QueueUser(user)
 }
 
+func cloneHTTPClient(base *http.Client) *http.Client {
+	clone := *base
+	clone.Jar = nil
+	clone.CheckRedirect = nil
+	return &clone
+}
+
+func newOIDCHTTPClient(ts *mockOIDCTestServer) *http.Client {
+	return cloneHTTPClient(ts.Client())
+}
+
+func newOIDCProviderHTTPClient(ts *mockOIDCTestServer) *http.Client {
+	return cloneHTTPClient(ts.Server.Client())
+}
+
+func resetMockOIDCState(ts *mockOIDCTestServer) {
+	ts.mockOIDC.UserQueue.Lock()
+	ts.mockOIDC.UserQueue.Queue = nil
+	ts.mockOIDC.UserQueue.Unlock()
+
+	ts.mockOIDC.ErrorQueue.Lock()
+	ts.mockOIDC.ErrorQueue.Queue = nil
+	ts.mockOIDC.ErrorQueue.Unlock()
+
+	ts.mockOIDC.SessionStore.CodeQueue.Lock()
+	ts.mockOIDC.SessionStore.CodeQueue.Queue = nil
+	ts.mockOIDC.SessionStore.CodeQueue.Unlock()
+
+	ts.mockOIDC.SessionStore.Store = make(map[string]*mockoidc.Session)
+}
+
 // =============================================================================
 // OIDC PROPERTY TESTS
 // =============================================================================
 
 // testOIDC_AuthURL_Properties tests that the auth URL is correctly generated
-func testOIDC_AuthURL_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_AuthURL_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Generate random state
 	state := testutil.StateGenerator().Draw(t, "state")
@@ -297,14 +383,23 @@ func testOIDC_AuthURL_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_AuthURL_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_AuthURL_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_AuthURL_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_AuthURL_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_AuthURL_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOIDC_FullFlow_Properties tests the complete OIDC authorization flow
-func testOIDC_FullFlow_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_FullFlow_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Generate random user claims
 	sub := "google-" + testutil.StateGenerator().Draw(t, "sub")
@@ -320,7 +415,7 @@ func testOIDC_FullFlow_Properties(t *rapid.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
-	client := ts.Client()
+	client := newOIDCHTTPClient(ts)
 	client.Jar = jar
 
 	// Step 1: Start OAuth flow by visiting /auth/google
@@ -373,7 +468,7 @@ func testOIDC_FullFlow_Properties(t *rapid.T) {
 
 	// Follow the OIDC flow - make request to mock OIDC authorize endpoint
 	// mockoidc will redirect back with a code
-	oidcClient := ts.Server.Client()
+	oidcClient := newOIDCProviderHTTPClient(ts)
 	oidcClient.Jar = jar
 	oidcClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		// Stop at the callback URL
@@ -418,7 +513,7 @@ func testOIDC_FullFlow_Properties(t *rapid.T) {
 
 	// Step 3: Complete the flow by visiting the callback URL
 	// Use our test server's client for the callback
-	callbackClient := ts.Client()
+	callbackClient := newOIDCHTTPClient(ts)
 	callbackClient.Jar = jar
 	callbackClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -460,14 +555,23 @@ func testOIDC_FullFlow_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_FullFlow_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_FullFlow_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_FullFlow_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_FullFlow_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_FullFlow_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOIDC_ClaimsExtraction_Properties tests that claims are correctly extracted
-func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_ClaimsExtraction_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Generate random claims
 	sub := "google-sub-" + testutil.StateGenerator().Draw(t, "sub")
@@ -483,7 +587,7 @@ func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
-	client := ts.Client()
+	client := newOIDCHTTPClient(ts)
 	client.Jar = jar
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -506,7 +610,7 @@ func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
 	}
 
 	// Follow OIDC flow
-	oidcClient := ts.Server.Client()
+	oidcClient := newOIDCProviderHTTPClient(ts)
 	oidcClient.Jar = jar
 	oidcClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if strings.Contains(req.URL.String(), "/auth/google/callback") {
@@ -525,7 +629,7 @@ func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
 	parsedCallback, _ := url.Parse(callbackURL)
 
 	// Complete callback
-	callbackClient := ts.Client()
+	callbackClient := newOIDCHTTPClient(ts)
 	callbackClient.Jar = jar
 	callbackClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -544,7 +648,7 @@ func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
 
 	// Verify user was created with correct email
 	// Check whoami endpoint
-	whoamiClient := ts.Client()
+	whoamiClient := newOIDCHTTPClient(ts)
 	whoamiClient.Jar = jar
 
 	whoamiResp, err := whoamiClient.Get(ts.URL + "/auth/whoami")
@@ -574,14 +678,23 @@ func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_ClaimsExtraction_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_ClaimsExtraction_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_ClaimsExtraction_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_ClaimsExtraction_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_ClaimsExtraction_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOIDC_InvalidCode_Properties tests that invalid codes are rejected
-func testOIDC_InvalidCode_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_InvalidCode_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Generate a fake code
 	fakeCode := testutil.StateGenerator().Draw(t, "fakeCode")
@@ -591,7 +704,7 @@ func testOIDC_InvalidCode_Properties(t *rapid.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
-	client := ts.Client()
+	client := newOIDCHTTPClient(ts)
 	client.Jar = jar
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -639,14 +752,23 @@ func testOIDC_InvalidCode_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_InvalidCode_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_InvalidCode_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_InvalidCode_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_InvalidCode_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_InvalidCode_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOIDC_StateMismatch_Properties tests that state mismatches are detected
-func testOIDC_StateMismatch_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_StateMismatch_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Queue a user
 	ts.queueUser("test-sub", "test@example.com", "Test", true)
@@ -656,7 +778,7 @@ func testOIDC_StateMismatch_Properties(t *rapid.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
-	client := ts.Client()
+	client := newOIDCHTTPClient(ts)
 	client.Jar = jar
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -681,7 +803,7 @@ func testOIDC_StateMismatch_Properties(t *rapid.T) {
 	}
 
 	// Follow OIDC flow to get a real code
-	oidcClient := ts.Server.Client()
+	oidcClient := newOIDCProviderHTTPClient(ts)
 	oidcClient.Jar = jar
 	oidcClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if strings.Contains(req.URL.String(), "/auth/google/callback") {
@@ -723,21 +845,30 @@ func testOIDC_StateMismatch_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_StateMismatch_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_StateMismatch_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_StateMismatch_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_StateMismatch_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_StateMismatch_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOIDC_MissingStateCookie_Properties tests that missing state cookie is rejected
-func testOIDC_MissingStateCookie_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_MissingStateCookie_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Generate random code and state
 	code := testutil.StateGenerator().Draw(t, "code")
 	state := testutil.StateGenerator().Draw(t, "state")
 
 	// Create client WITHOUT cookie jar (no state cookie)
-	client := ts.Client()
+	client := newOIDCHTTPClient(ts)
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -758,14 +889,23 @@ func testOIDC_MissingStateCookie_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_MissingStateCookie_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_MissingStateCookie_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_MissingStateCookie_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_MissingStateCookie_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_MissingStateCookie_PropertiesWithServer(rt, ts)
+	})
 }
 
 // testOIDC_ProviderError_Properties tests handling of errors from the OIDC provider
-func testOIDC_ProviderError_Properties(t *rapid.T) {
-	ts := setupMockOIDCTestServerRapid()
-	defer ts.cleanup()
+func testOIDC_ProviderError_PropertiesWithServer(t *rapid.T, ts *mockOIDCTestServer) {
+	resetMockOIDCState(ts)
 
 	// Generate random error parameters
 	errorCode := rapid.SampledFrom([]string{
@@ -782,7 +922,7 @@ func testOIDC_ProviderError_Properties(t *rapid.T) {
 	if err != nil {
 		t.Fatalf("Failed to create cookie jar: %v", err)
 	}
-	client := ts.Client()
+	client := newOIDCHTTPClient(ts)
 	client.Jar = jar
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -820,8 +960,18 @@ func testOIDC_ProviderError_Properties(t *rapid.T) {
 	}
 }
 
+func testOIDC_ProviderError_Properties(t *rapid.T) {
+	ts := setupMockOIDCTestServerRapid()
+	defer ts.cleanup()
+	testOIDC_ProviderError_PropertiesWithServer(t, ts)
+}
+
 func TestOIDC_ProviderError_Properties(t *testing.T) {
-	rapid.Check(t, testOIDC_ProviderError_Properties)
+	ts := setupMockOIDCTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOIDC_ProviderError_PropertiesWithServer(rt, ts)
+	})
 }
 
 // =============================================================================
@@ -1151,7 +1301,7 @@ func setupLocalMockOIDCTestServer(t testing.TB) *localMockOIDCTestServer {
 
 	mockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
 
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
+	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 
 	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
