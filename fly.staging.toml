@@ -10,7 +10,7 @@ primary_region = "ewr"
   BASE_URL = ""
 
 [[mounts]]
-  source = "commonink-staging_data"
+  source = "ci_stage_data"
   destination = "/data"
 
 [http_service]
