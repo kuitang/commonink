@@ -30,7 +30,7 @@ jobs:
   deploy-preview:
     name: deploy-preview
     needs: test
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,11 +48,11 @@ jobs:
           echo "name=$APP" >> "$GITHUB_OUTPUT"
       - name: Deploy preview
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
         run: |
           APP_NAME="${{ steps.app.outputs.name }}"
           if [ -z "${FLY_API_TOKEN}" ]; then
-            echo "Missing FLY_API_TOKEN secret"
+            echo "Missing FLY_API_TOKEN_STAGING secret"
             exit 1
           fi
 

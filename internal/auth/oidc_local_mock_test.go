@@ -62,12 +62,21 @@ func TestLocalMockOIDC_CallbackFallsBackToRequestOrigin(t *testing.T) {
 
 		state := rapid.StringMatching(`[a-zA-Z0-9_-]{16,24}`).Draw(rt, "state")
 		host := rapid.StringMatching(`[a-z]{3,12}`).Draw(rt, "host") + ".fly.dev"
+		schemeRaw := rapid.SampledFrom([]string{
+			"https",
+			"http",
+			"https, http",
+			"wss, https",
+			"",
+		}).Draw(rt, "scheme")
 
 		body := strings.NewReader(url.Values{"state": {state}, "email": {"test@example.com"}}.Encode())
 		req := httptest.NewRequest(http.MethodPost, "/auth/mock-oidc/authorize", body)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Host = host
-		req.Header.Set("X-Forwarded-Proto", "https")
+		if schemeRaw != "" {
+			req.Header.Set("X-Forwarded-Proto", schemeRaw)
+		}
 		rr := httptest.NewRecorder()
 
 		provider.handleConsent(rr, req)
@@ -80,8 +89,14 @@ func TestLocalMockOIDC_CallbackFallsBackToRequestOrigin(t *testing.T) {
 		if err != nil {
 			rt.Fatalf("failed to parse callback location: %v", err)
 		}
-		if parsed.Scheme != "https" {
-			rt.Fatalf("expected https callback scheme, got %s", parsed.Scheme)
+		expectedScheme := "http"
+		if first := strings.TrimSpace(strings.SplitN(schemeRaw, ",", 2)[0]); first != "" {
+			if first == "http" || first == "https" {
+				expectedScheme = first
+			}
+		}
+		if parsed.Scheme != expectedScheme {
+			rt.Fatalf("expected %s callback scheme, got %s", expectedScheme, parsed.Scheme)
 		}
 		if parsed.Host != host {
 			rt.Fatalf("expected callback host %s, got %s", host, parsed.Host)
@@ -144,4 +159,3 @@ func TestLocalMockOIDC_CallbackOriginIsConsumedAfterUse(t *testing.T) {
 		t.Fatalf("expected fallback callback host %s, got %s", hostB, parsedB.Host)
 	}
 }
-
