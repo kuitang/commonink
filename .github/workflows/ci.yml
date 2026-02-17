@@ -56,7 +56,7 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
-          FLY_ORG: ${{ vars.FLY_ORG }}
+          FLY_ORG: ${{ vars.FLY_ORG || 'commonink-staging' }}
         run: |
           set -euo pipefail
 
@@ -64,7 +64,12 @@ jobs:
           BUCKET_NAME="commonink-staging-public"
           BASE_URL="${{ steps.app.outputs.base_url }}"
           GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
-          ORG="${FLY_ORG:?FLY_ORG is required and must match the Fly org for preview apps}"
+          ORG="${FLY_ORG}"
+          if [ -z "${ORG}" ]; then
+            echo "FLY_ORG is required for preview deployments."
+            echo "Set vars.FLY_ORG = commonink-staging (or rename in this file)."
+            exit 1
+          fi
 
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
