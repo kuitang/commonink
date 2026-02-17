@@ -72,8 +72,7 @@ jobs:
           fi
 
           TMP_APPS_JSON="$(mktemp)"
-          TMP_SECRETS="$(mktemp)"
-          trap 'rm -f "$TMP_APPS_JSON" "$TMP_SECRETS"' EXIT
+          trap 'rm -f "$TMP_APPS_JSON"' EXIT
 
           if ! flyctl apps list --json --org "$ORG" > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
             echo "Failed to list apps in org '${ORG}'."
@@ -91,12 +90,12 @@ jobs:
             exit 1
           fi
 
-          if ! flyctl secrets list --org "$ORG" --app "$APP_NAME" > "$TMP_SECRETS" 2>/tmp/fly_secret_err.txt; then
+          if ! SECRET_LIST="$(flyctl secrets list --org "$ORG" --app "$APP_NAME" 2>&1)"; then
             echo "Failed to read secrets for app '${APP_NAME}'."
-            cat /tmp/fly_secret_err.txt
+            echo "${SECRET_LIST}"
             exit 1
           fi
-          if ! grep -q "GOOGLE_CLIENT_ID" "$TMP_SECRETS"; then
+          if ! printf '%s\n' "${SECRET_LIST}" | grep -q "GOOGLE_CLIENT_ID"; then
             echo "Missing GOOGLE_CLIENT_ID secret in ${APP_NAME}. Set once with flyctl."
             exit 1
           fi
