@@ -56,7 +56,6 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
-          FLY_ORG: commonink-staging
         run: |
           set -euo pipefail
 
@@ -64,7 +63,7 @@ jobs:
           BUCKET_NAME="commonink-staging-public"
           BASE_URL="${{ steps.app.outputs.base_url }}"
           GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
-          ORG="${FLY_ORG}"
+          ORG="commonink-staging"
 
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
