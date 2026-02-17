@@ -48,32 +48,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          APP_ORG="${FLY_ORG}"
           BUCKET_NAME="commonink-staging-public"
           PR_NUMBER="${{ github.event.number }}"
           SLOT=$(( (PR_NUMBER - 1) % 3 + 1 ))
           APP_NAME="staging-${SLOT}-commonink"
           BASE_URL="https://${APP_NAME}.fly.dev"
           GOOGLE_REDIRECT_URL="${BASE_URL}/auth/google/callback"
-          FLY_ARGS=(--org "${APP_ORG}")
 
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
             exit 1
           fi
 
-          if ! flyctl apps list --json "${FLY_ARGS[@]}" | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
+          if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
             echo "Preview app '${APP_NAME}' does not exist. Creating it."
-            flyctl apps create "${APP_NAME}" "${FLY_ARGS[@]}" --yes
+            flyctl apps create "${APP_NAME}" --org "${FLY_ORG}" --yes
           fi
 
-          if ! flyctl secrets list "${FLY_ARGS[@]}" --app "$APP_NAME" | grep -q "GOOGLE_CLIENT_ID"; then
+          if ! flyctl secrets list --app "$APP_NAME" --org "${FLY_ORG}" | grep -q "GOOGLE_CLIENT_ID"; then
             echo "Missing GOOGLE_CLIENT_ID secret in ${APP_NAME}."
-            if [ -n "${APP_ORG}" ]; then
-              echo "Run: flyctl secrets set --org ${APP_ORG} --app ${APP_NAME} GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=..."
-            else
-              echo "Run: flyctl secrets set --app ${APP_NAME} GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=..."
-            fi
+            echo "Run: flyctl secrets set --org ${FLY_ORG} --app ${APP_NAME} GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=..."
             exit 1
           fi
 
@@ -82,10 +76,10 @@ jobs:
             "GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}" \
             "BUCKET_NAME=${BUCKET_NAME}" \
             --app "${APP_NAME}" \
-            "${FLY_ARGS[@]}"
+            --org "${FLY_ORG}"
 
           flyctl deploy \
             --remote-only \
             --config fly.staging.toml \
             --app "${APP_NAME}" \
-            "${FLY_ARGS[@]}"
+            --org "${FLY_ORG}"
