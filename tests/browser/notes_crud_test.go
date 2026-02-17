@@ -17,7 +17,7 @@ import (
 )
 
 // =============================================================================
-// Test: Create Note
+// Test: Create
 // =============================================================================
 
 func TestBrowser_NotesCRUD_CreateNote(t *testing.T) {
@@ -57,7 +57,7 @@ func TestBrowser_NotesCRUD_CreateNote(t *testing.T) {
 	}
 
 	// Click the submit button
-	submitButton := page.Locator("button[type='submit']:has-text('Create Note')")
+	submitButton := page.Locator("button[type='submit']:has-text('Create')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
@@ -65,7 +65,7 @@ func TestBrowser_NotesCRUD_CreateNote(t *testing.T) {
 
 	// Wait for redirect to the note view page
 	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for redirect after create: %v", err)
@@ -121,7 +121,7 @@ func TestBrowser_NotesCRUD_ReadNote(t *testing.T) {
 		t.Fatalf("Failed to fill content: %v", err)
 	}
 
-	submitButton := page.Locator("button[type='submit']:has-text('Create Note')")
+	submitButton := page.Locator("button[type='submit']:has-text('Create')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit: %v", err)
@@ -129,7 +129,7 @@ func TestBrowser_NotesCRUD_ReadNote(t *testing.T) {
 
 	// Wait for redirect to note view
 	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for redirect: %v", err)
@@ -150,7 +150,7 @@ func TestBrowser_NotesCRUD_ReadNote(t *testing.T) {
 
 	// Wait for the note view page
 	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for note view: %v", err)
@@ -217,7 +217,7 @@ func TestBrowser_NotesCRUD_EditNote(t *testing.T) {
 		t.Fatalf("Failed to fill content: %v", err)
 	}
 
-	submitButton := page.Locator("button[type='submit']:has-text('Create Note')")
+	submitButton := page.Locator("button[type='submit']:has-text('Create')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit: %v", err)
@@ -225,7 +225,7 @@ func TestBrowser_NotesCRUD_EditNote(t *testing.T) {
 
 	// Wait for redirect to note view
 	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for redirect: %v", err)
@@ -240,7 +240,7 @@ func TestBrowser_NotesCRUD_EditNote(t *testing.T) {
 
 	// Wait for edit page to load
 	err = page.WaitForURL("**/edit", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for edit page: %v", err)
@@ -268,8 +268,8 @@ func TestBrowser_NotesCRUD_EditNote(t *testing.T) {
 		t.Fatalf("Failed to fill new content: %v", err)
 	}
 
-	// Click Save Changes
-	saveButton := page.Locator("button[type='submit']:has-text('Save Changes')")
+	// Click Save
+	saveButton := page.Locator("button[type='submit']:has-text('Save')")
 	err = saveButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click save button: %v", err)
@@ -277,7 +277,7 @@ func TestBrowser_NotesCRUD_EditNote(t *testing.T) {
 
 	// Wait for redirect back to note view
 	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for redirect after save: %v", err)
@@ -334,7 +334,7 @@ func TestBrowser_NotesCRUD_DeleteNote(t *testing.T) {
 		t.Fatalf("Failed to fill content: %v", err)
 	}
 
-	submitButton := page.Locator("button[type='submit']:has-text('Create Note')")
+	submitButton := page.Locator("button[type='submit']:has-text('Create')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit: %v", err)
@@ -342,7 +342,7 @@ func TestBrowser_NotesCRUD_DeleteNote(t *testing.T) {
 
 	// Wait for redirect to note view
 	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for redirect: %v", err)
@@ -362,7 +362,7 @@ func TestBrowser_NotesCRUD_DeleteNote(t *testing.T) {
 
 	// Wait for redirect to notes list
 	err = page.WaitForURL("**/notes", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for redirect after delete: %v", err)
@@ -419,7 +419,7 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 			t.Fatalf("Failed to fill content for note %d: %v", i, err)
 		}
 
-		submitButton := page.Locator("button[type='submit']:has-text('Create Note')")
+		submitButton := page.Locator("button[type='submit']:has-text('Create')")
 		err = submitButton.Click()
 		if err != nil {
 			t.Fatalf("Failed to click submit for note %d: %v", i, err)
@@ -427,7 +427,7 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 
 		// Wait for redirect
 		err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-			Timeout: playwright.Float(5000),
+			Timeout: playwright.Float(browserMaxTimeoutMS),
 		})
 		if err != nil {
 			t.Fatalf("Failed to wait for redirect for note %d: %v", i, err)
@@ -447,7 +447,7 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 	paginationNav := page.Locator("nav[aria-label='Pagination']")
 	err = paginationNav.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		// Debug: show page content
@@ -470,7 +470,7 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 	prevButton := page.Locator("nav[aria-label='Pagination'] nav a[href*='page=1']")
 	err = prevButton.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		currentURL := page.URL()
@@ -543,7 +543,7 @@ func TestBrowser_NotesCRUD_EmptyState(t *testing.T) {
 
 	// Verify redirect to /notes/new
 	err = page.WaitForURL("**/notes/new", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to new note page: %v", err)
@@ -591,7 +591,7 @@ func TestBrowser_NotesCRUD_NewNoteButton(t *testing.T) {
 
 	// Verify redirect to /notes/new
 	err = page.WaitForURL("**/notes/new", playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to new note page: %v", err)

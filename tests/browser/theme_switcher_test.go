@@ -298,7 +298,7 @@ func TestBrowser_Appearance_DefaultState(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	Navigate(t, page, env.BaseURL, "/login")
 
@@ -518,7 +518,7 @@ func TestBrowser_ThemeVisual_NeonfizzAttributes(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	Navigate(t, page, env.BaseURL, "/login")
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'neonfizz'); localStorage.removeItem('ci_darkmode'); }`)

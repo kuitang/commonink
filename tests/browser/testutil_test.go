@@ -34,6 +34,11 @@ import (
 const (
 	browserTestBucketName = "browser-test-bucket"
 	browserTestMasterKey  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 64 hex chars = 32 bytes
+
+	// CODING AGENT RULE: Always use these timeout constants for browser tests.
+	// Never introduce a larger timeout value anywhere in tests/browser.
+	browserMaxTimeoutMS = 5000
+	browserMaxTimeout   = 5 * time.Second
 )
 
 // BrowserTestEnv is the unified test environment for all browser tests.
@@ -112,7 +117,7 @@ func SetupBrowserTestEnv(t *testing.T) *BrowserTestEnv {
 	// Public notes service with short URL support — needs server URL, set after server created
 	publicNotes := notes.NewPublicNoteService(s3Client)
 
-	// Create mux + server first to get URL for services that need it
+	// Create mux + server once so all dependent services share a stable base URL.
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
 
@@ -135,10 +140,6 @@ func SetupBrowserTestEnv(t *testing.T) *BrowserTestEnv {
 		shortURLSvc,
 		server.URL,
 	)
-
-	// Close initial server, rebuild mux with all routes
-	server.Close()
-	mux = http.NewServeMux()
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -171,10 +172,6 @@ func SetupBrowserTestEnv(t *testing.T) *BrowserTestEnv {
 	mux.Handle("GET /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesGetHandler))))
 	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesPutHandler))))
 	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesDeleteHandler))))
-
-	// Final server
-	server = httptest.NewServer(mux)
-	localMockOIDC.SetBaseURL(server.URL)
 
 	env := &BrowserTestEnv{
 		Server:         server,
@@ -346,7 +343,7 @@ func (env *BrowserTestEnv) InitBrowser(t *testing.T) {
 	env.browser = browser
 }
 
-// NewPage creates a new browser page with default 10s timeout.
+// NewPage creates a new browser page with default 5s timeout.
 func (env *BrowserTestEnv) NewPage(t *testing.T) playwright.Page {
 	t.Helper()
 
@@ -354,7 +351,8 @@ func (env *BrowserTestEnv) NewPage(t *testing.T) playwright.Page {
 	if err != nil {
 		t.Fatalf("could not create page: %v", err)
 	}
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
 	return page
 }
 
@@ -366,6 +364,8 @@ func (env *BrowserTestEnv) NewContext(t *testing.T) playwright.BrowserContext {
 	if err != nil {
 		t.Fatalf("could not create browser context: %v", err)
 	}
+	ctx.SetDefaultTimeout(browserMaxTimeoutMS)
+	ctx.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
 	return ctx
 }
 
@@ -379,7 +379,7 @@ func Navigate(t *testing.T, page playwright.Page, baseURL, path string) {
 
 	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(10000),
+		Timeout:   playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to %s: %v", path, err)
@@ -394,7 +394,7 @@ func WaitForSelector(t *testing.T, page playwright.Page, selector string) playwr
 	first := locator.First()
 	err := first.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		currentURL := page.URL()
@@ -497,7 +497,7 @@ func CreateNoteViaUI(t *testing.T, page playwright.Page, baseURL, title, content
 	}
 
 	err := page.WaitForURL(fmt.Sprintf("%s/notes/**", baseURL), playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for note view page after create: %v", err)

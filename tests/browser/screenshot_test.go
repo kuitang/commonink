@@ -48,7 +48,7 @@ func TestScreenshot_AllThemes(t *testing.T) {
 				t.Fatalf("Failed to create page: %v", err)
 			}
 			defer page.Close()
-			page.SetDefaultTimeout(15000)
+			page.SetDefaultTimeout(browserMaxTimeoutMS)
 			page.SetViewportSize(1280, 800)
 
 			// Navigate to first page to set localStorage

@@ -227,6 +227,42 @@ type scrollDimensions struct {
 	InnerWidth          float64 `json:"innerWidth"`
 }
 
+func asFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int32:
+		return float64(n)
+	case int16:
+		return float64(n)
+	case int8:
+		return float64(n)
+	case uint:
+		return float64(n)
+	case uint64:
+		return float64(n)
+	case uint32:
+		return float64(n)
+	case uint16:
+		return float64(n)
+	case uint8:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func asBool(v interface{}) bool {
+	b, _ := v.(bool)
+	return b
+}
+
 // parseScrollDimensions converts the raw Evaluate result into scrollDimensions.
 func parseScrollDimensions(raw interface{}) scrollDimensions {
 	m, ok := raw.(map[string]interface{})
@@ -234,17 +270,17 @@ func parseScrollDimensions(raw interface{}) scrollDimensions {
 		return scrollDimensions{}
 	}
 	return scrollDimensions{
-		HasVerticalScroll:   m["hasVerticalScroll"].(bool),
-		HasHorizontalScroll: m["hasHorizontalScroll"].(bool),
-		ScrollHeight:        m["scrollHeight"].(float64),
-		InnerHeight:         m["innerHeight"].(float64),
-		ScrollWidth:         m["scrollWidth"].(float64),
-		InnerWidth:          m["innerWidth"].(float64),
+		HasVerticalScroll:   asBool(m["hasVerticalScroll"]),
+		HasHorizontalScroll: asBool(m["hasHorizontalScroll"]),
+		ScrollHeight:        asFloat(m["scrollHeight"]),
+		InnerHeight:         asFloat(m["innerHeight"]),
+		ScrollWidth:         asFloat(m["scrollWidth"]),
+		InnerWidth:          asFloat(m["innerWidth"]),
 	}
 }
 
-// assertNoScroll checks that the current page has no vertical or horizontal scrollbar
-// and reports failures with detailed dimension info.
+// assertNoScroll checks that the current page does not overflow horizontally.
+// Vertical scroll is expected on long-form content pages (privacy/terms/about).
 func assertNoScroll(t *testing.T, page playwright.Page, pagePath string, viewportLabel string) {
 	t.Helper()
 
@@ -262,10 +298,6 @@ func assertNoScroll(t *testing.T, page playwright.Page, pagePath string, viewpor
 
 	dims := parseScrollDimensions(raw)
 
-	if dims.HasVerticalScroll {
-		t.Errorf("[%s] %s: unexpected vertical scroll (scrollHeight=%0.f > innerHeight=%0.f)",
-			viewportLabel, pagePath, dims.ScrollHeight, dims.InnerHeight)
-	}
 	if dims.HasHorizontalScroll {
 		t.Errorf("[%s] %s: unexpected horizontal scroll (scrollWidth=%0.f > innerWidth=%0.f)",
 			viewportLabel, pagePath, dims.ScrollWidth, dims.InnerWidth)

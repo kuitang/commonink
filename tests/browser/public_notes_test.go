@@ -65,7 +65,7 @@ func TestBrowser_PublishNote(t *testing.T) {
 	}
 
 	// Verify public badge appears (use specific class to avoid matching "Public Share Link")
-	publicBadge := page.Locator("span.bg-green-100:has-text('Public')")
+	publicBadge := page.Locator("span.bg-success-100:has-text('Public')")
 	isBadgeVisible, err := publicBadge.IsVisible()
 	if err != nil {
 		t.Fatalf("failed to check public badge visibility: %v", err)
@@ -121,7 +121,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 	shareURL := PublishNoteViaUI(t, page)
 
 	// Verify it's now public (use specific class to avoid matching "Public Share Link")
-	publicBadge := page.Locator("span.bg-green-100:has-text('Public')")
+	publicBadge := page.Locator("span.bg-success-100:has-text('Public')")
 	isPublic, err := publicBadge.IsVisible()
 	if err != nil {
 		t.Fatalf("failed to check badge: %v", err)

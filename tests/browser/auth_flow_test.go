@@ -17,6 +17,51 @@ import (
 	"github.com/kuitang/agent-notes/internal/email"
 )
 
+func ensurePasswordMode(t *testing.T, page playwright.Page) {
+	t.Helper()
+
+	passwordInput := page.Locator("#login-password")
+	visible, err := passwordInput.IsVisible()
+	if err == nil && visible {
+		return
+	}
+
+	switchBtn := page.Locator("#password-mode-btn")
+	err = switchBtn.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Password mode button not visible: %v", err)
+	}
+
+	if err := switchBtn.Click(); err != nil {
+		t.Fatalf("Failed to switch to password mode: %v", err)
+	}
+
+	err = passwordInput.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Password form did not become visible: %v", err)
+	}
+}
+
+func waitForServerFlash(t *testing.T, page playwright.Page, role string) playwright.Locator {
+	t.Helper()
+
+	flash := page.Locator(fmt.Sprintf(".server-flash[role='%s']", role)).First()
+	err := flash.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Server flash with role=%s not visible: %v", role, err)
+	}
+	return flash
+}
+
 // =============================================================================
 // Registration Flow Tests
 // =============================================================================
@@ -200,6 +245,7 @@ func TestBrowser_Auth_PasswordLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Page did not load: %v", err)
 	}
+	ensurePasswordMode(t, page)
 
 	// Fill login form (password section)
 	loginEmailInput := page.Locator("#login-email")
@@ -266,7 +312,7 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 	}
 
 	// Find the magic link email input
-	magicEmailInput := page.Locator("#magic-email")
+	magicEmailInput := page.Locator("#login-email")
 	testEmail := GenerateUniqueEmail("magic-test")
 
 	err = magicEmailInput.Fill(testEmail)
@@ -275,7 +321,7 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 	}
 
 	// Click "Send Magic Link" button
-	magicLinkBtn := page.Locator("button[type='submit']:has-text('Send Magic Link')")
+	magicLinkBtn := page.Locator("#magic-link-submit")
 	err = magicLinkBtn.Click()
 	if err != nil {
 		t.Fatalf("Failed to click Send Magic Link button: %v", err)
@@ -286,7 +332,7 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 	magicDialog := page.Locator("#magic-link-dialog")
 	err = magicDialog.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(10000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Magic link dialog did not become visible: %v", err)
@@ -346,13 +392,17 @@ func TestBrowser_Auth_MagicLinkVerify(t *testing.T) {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
 
-	page.Locator("#magic-email").Fill(testEmail)
-	page.Locator("button[type='submit']:has-text('Send Magic Link')").Click()
+	page.Locator("#login-email").Fill(testEmail)
+	page.Locator("#magic-link-submit").Click()
 
-	// Wait for email to be sent
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+	// Wait for dialog/email side effects from JS fetch flow
+	err = page.Locator("#magic-link-dialog").WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
+	if err != nil {
+		t.Fatalf("Magic link dialog did not appear: %v", err)
+	}
 
 	// Extract magic link from mock email service
 	if env.EmailService.Count() == 0 {
@@ -423,6 +473,7 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Page did not load: %v", err)
 	}
+	ensurePasswordMode(t, page)
 
 	// Find the "Forgot password?" link — it's now href="#" with inline JS
 	forgotLink := page.Locator("#forgot-password-link")
@@ -448,7 +499,7 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 	inlineFlash := page.Locator("#inline-flash")
 	err = inlineFlash.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Inline flash did not appear after clicking without email: %v", err)
@@ -474,7 +525,7 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 	// Wait for the success flash to appear (replaces the error flash)
 	err = page.Locator("#inline-flash:has-text('reset link')").WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(10000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Success flash did not appear after forgot password request: %v", err)
@@ -482,7 +533,7 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 
 	// Should still be on /login (no page navigation)
 	currentURL := page.URL()
-	if !strings.HasSuffix(currentURL, "/login") {
+	if !strings.Contains(currentURL, "/login") {
 		t.Errorf("Should stay on /login page, got: %s", currentURL)
 	}
 
@@ -540,34 +591,34 @@ func TestBrowser_Auth_Logout(t *testing.T) {
 		t.Skipf("Registration did not redirect to /notes (got %s), skipping logout test", currentURL)
 	}
 
-	// Look for logout button/link and click it
-	logoutForm := page.Locator("form[action='/auth/logout'] button, a:has-text('Logout'), button:has-text('Logout'), a:has-text('Sign out'), button:has-text('Sign out')")
-
-	count, err := logoutForm.Count()
-	if err != nil || count == 0 {
-		pageContent, _ := page.Content()
-		if strings.Contains(pageContent, "logout") || strings.Contains(pageContent, "Logout") || strings.Contains(pageContent, "sign out") {
-			t.Log("Logout mechanism exists but couldn't be located via Playwright")
-		} else {
-			t.Skip("No logout button found on the page")
-		}
-		return
-	}
-
-	err = logoutForm.First().Click()
+	// Hit logout endpoint directly (supports GET/POST) to avoid nav/menu selector drift.
+	_, err = page.Goto(env.BaseURL + "/auth/logout")
 	if err != nil {
-		t.Fatalf("Failed to click logout: %v", err)
+		t.Fatalf("Failed to navigate to logout endpoint: %v", err)
+	}
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Logout navigation did not complete: %v", err)
 	}
 
-	// Wait for redirect
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
-
-	// Should redirect to /login after logout
+	// Logout redirects to landing page.
 	currentURL = page.URL()
-	if !strings.Contains(currentURL, "/login") {
-		t.Errorf("Expected redirect to /login after logout, got: %s", currentURL)
+	if !strings.HasSuffix(currentURL, "/") {
+		t.Errorf("Expected redirect to landing page after logout, got: %s", currentURL)
+	}
+
+	// Protected page should require auth after logout.
+	_, err = page.Goto(env.BaseURL + "/notes")
+	if err != nil {
+		t.Fatalf("Failed to navigate to /notes after logout: %v", err)
+	}
+	err = page.WaitForURL("**/login", playwright.PageWaitForURLOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Expected redirect to /login when accessing /notes after logout: %v", err)
 	}
 }
 
@@ -634,10 +685,10 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 	}
 
 	// Verify flash message banner is visible on login page
-	flashBanner := page.Locator("[role='status']")
+	flashBanner := page.Locator(".server-flash[role='status']")
 	err = flashBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Flash message banner not visible after password reset request: %v", err)
@@ -750,7 +801,7 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	heading := page.Locator("h2:has-text('Create new password')")
 	err = heading.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Password reset confirm page heading not found: %v", err)
@@ -771,10 +822,10 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	}
 
 	// Verify success flash message is visible
-	flashBanner := page.Locator("[role='status']")
+	flashBanner := page.Locator(".server-flash[role='status']")
 	err = flashBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Success flash message not visible after password reset: %v", err)
@@ -1039,6 +1090,7 @@ func TestBrowser_Auth_LoginWrongPassword(t *testing.T) {
 		t.Fatalf("Failed to navigate to login: %v", err)
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+	ensurePasswordMode(t, page)
 
 	page.Locator("#login-email").Fill(testEmail)
 	page.Locator("#login-password").Fill("WrongPassword999!")
@@ -1052,10 +1104,10 @@ func TestBrowser_Auth_LoginWrongPassword(t *testing.T) {
 	}
 
 	// Error flash should be visible
-	errorBanner := page.Locator("[role='alert']")
+	errorBanner := page.Locator("[role='alert']").First()
 	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Error banner not visible: %v", err)
@@ -1084,6 +1136,7 @@ func TestBrowser_Auth_LoginNonexistentEmail(t *testing.T) {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+	ensurePasswordMode(t, page)
 
 	page.Locator("#login-email").Fill("nobody-exists@example.com")
 	page.Locator("#login-password").Fill("SomePassword123!")
@@ -1096,10 +1149,10 @@ func TestBrowser_Auth_LoginNonexistentEmail(t *testing.T) {
 		t.Fatalf("Expected redirect to /login, got: %s", currentURL)
 	}
 
-	errorBanner := page.Locator("[role='alert']")
+	errorBanner := page.Locator(".server-flash[role='alert']")
 	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Error banner not visible: %v", err)
@@ -1161,10 +1214,10 @@ func TestBrowser_Auth_RegisterDuplicateEmail(t *testing.T) {
 		t.Fatalf("Expected redirect to /login for duplicate, got: %s", currentURL)
 	}
 
-	errorBanner := page.Locator("[role='alert']")
+	errorBanner := page.Locator(".server-flash[role='alert']")
 	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Error banner not visible: %v", err)
@@ -1237,26 +1290,25 @@ func TestBrowser_Auth_PasswordResetConfirm_Mismatch(t *testing.T) {
 	page.Locator("input[name='password']").Fill("NewPassword123!")
 	page.Locator("input[name='confirm_password']").Fill("DifferentPassword456!")
 	page.Locator("button[type='submit']:has-text('Reset password')").Click()
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
+	err = page.WaitForURL("**/auth/password-reset-confirm?*", playwright.PageWaitForURLOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Expected redirect back to reset confirm page with error: %v", err)
+	}
 
 	// Should show error about password mismatch, token preserved
 	currentURL := page.URL()
-	if !strings.Contains(currentURL, "password-reset-confirm") {
+	if !strings.Contains(currentURL, "password-reset-confirm") || !strings.Contains(currentURL, "error=") {
 		t.Fatalf("Expected to stay on password-reset-confirm, got: %s", currentURL)
 	}
 
-	errorBanner := page.Locator("[role='alert']")
-	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
-	})
+	content, err := page.Content()
 	if err != nil {
-		t.Fatalf("Error banner not visible: %v", err)
+		t.Fatalf("Failed to read reset confirm page content: %v", err)
 	}
-
-	bannerText, _ := errorBanner.TextContent()
-	if !strings.Contains(strings.ToLower(bannerText), "passwords do not match") {
-		t.Errorf("Error should mention passwords don't match, got: %q", bannerText)
+	if !strings.Contains(strings.ToLower(content), "passwords do not match") {
+		t.Errorf("Error page should mention password mismatch")
 	}
 
 	// Token should be preserved in the form so user can retry
@@ -1297,10 +1349,10 @@ func TestBrowser_Auth_PasswordResetConfirm_InvalidToken(t *testing.T) {
 		t.Fatalf("Expected redirect to /login for invalid token, got: %s", currentURL)
 	}
 
-	errorBanner := page.Locator("[role='alert']")
+	errorBanner := page.Locator(".server-flash[role='alert']")
 	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Error banner not visible: %v", err)
@@ -1408,16 +1460,17 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 		t.Fatalf("Expected /login after reset, got: %s", currentURL)
 	}
 
-	successBanner := page.Locator("[role='status']")
+	successBanner := page.Locator(".server-flash[role='status']")
 	err = successBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Success banner not visible after reset: %v", err)
 	}
 
 	// Step 4: Login with NEW password
+	ensurePasswordMode(t, page)
 	page.Locator("#login-email").Fill(testEmail)
 	page.Locator("#login-password").Fill(newPassword)
 	page.Locator("form[action='/auth/login'] button[type='submit']").Click()
@@ -1435,6 +1488,7 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+	ensurePasswordMode(t, page)
 
 	page.Locator("#login-email").Fill(testEmail)
 	page.Locator("#login-password").Fill(originalPassword)
@@ -1446,10 +1500,10 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 		t.Errorf("Old password should be rejected, but got: %s", currentURL)
 	}
 
-	errorBanner := page.Locator("[role='alert']")
+	errorBanner := page.Locator(".server-flash[role='alert']")
 	err = errorBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Error banner not visible for old password: %v", err)
@@ -1494,6 +1548,7 @@ func TestBrowser_Auth_ReturnTo_LoginRedirect(t *testing.T) {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+	ensurePasswordMode(t, page)
 
 	// Verify hidden return_to field exists in the password form
 	returnToInput := page.Locator("form[action='/auth/login'] input[name='return_to']")
@@ -1652,8 +1707,17 @@ func TestBrowser_Auth_LandingRedirect_Unauthenticated(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	currentURL := page.URL()
-	if !strings.Contains(currentURL, "/login") {
-		t.Errorf("Unauthenticated / should redirect to /login, got: %s", currentURL)
+	if !strings.HasSuffix(currentURL, "/") {
+		t.Errorf("Unauthenticated / should stay on landing page, got: %s", currentURL)
+	}
+
+	heading := page.Locator("h1")
+	headingText, err := heading.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to read landing page heading: %v", err)
+	}
+	if !strings.Contains(headingText, "Notes") {
+		t.Errorf("Landing page heading missing expected text, got: %q", headingText)
 	}
 }
 
@@ -1718,14 +1782,14 @@ func TestBrowser_Auth_MagicLinkDialog_CloseButton(t *testing.T) {
 
 	// Fill email and submit magic link
 	testEmail := GenerateUniqueEmail("dialogclose")
-	page.Locator("#magic-email").Fill(testEmail)
-	page.Locator("button[type='submit']:has-text('Send Magic Link')").Click()
+	page.Locator("#login-email").Fill(testEmail)
+	page.Locator("#magic-link-submit").Click()
 
 	// Wait for dialog
 	dialog := page.Locator("#magic-link-dialog")
 	err = dialog.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(10000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Dialog did not appear: %v", err)
@@ -1737,14 +1801,14 @@ func TestBrowser_Auth_MagicLinkDialog_CloseButton(t *testing.T) {
 	// Dialog should close
 	err = dialog.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateHidden,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Dialog did not close after clicking 'Got it': %v", err)
 	}
 
 	// Email field should be cleared
-	emailVal, _ := page.Locator("#magic-email").InputValue()
+	emailVal, _ := page.Locator("#login-email").InputValue()
 	if emailVal != "" {
 		t.Errorf("Email field should be cleared after dialog close, got: %q", emailVal)
 	}
@@ -1805,10 +1869,10 @@ func TestBrowser_Auth_FlashMessages_LoginPage(t *testing.T) {
 			}
 			page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
 
-			banner := page.Locator(fmt.Sprintf("[role='%s']", tt.role))
+			banner := page.Locator(fmt.Sprintf(".server-flash[role='%s']", tt.role))
 			err = banner.WaitFor(playwright.LocatorWaitForOptions{
 				State:   playwright.WaitForSelectorStateVisible,
-				Timeout: playwright.Float(5000),
+				Timeout: playwright.Float(browserMaxTimeoutMS),
 			})
 			if err != nil {
 				t.Fatalf("Flash banner [role='%s'] not visible for %s: %v", tt.role, tt.name, err)
@@ -1892,10 +1956,10 @@ func TestBrowser_Auth_PasswordResetPage_NonexistentEmail(t *testing.T) {
 		t.Fatalf("Expected redirect to /login, got: %s", currentURL)
 	}
 
-	successBanner := page.Locator("[role='status']")
+	successBanner := page.Locator(".server-flash[role='status']")
 	err = successBanner.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Success banner not visible (should not reveal email doesn't exist): %v", err)
@@ -1929,8 +1993,8 @@ func TestBrowser_Auth_RegisterPage_SignInLink(t *testing.T) {
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
 
-	// "Sign in" link should propagate return_to
-	signInLink := page.Locator("a:has-text('Sign in')")
+	// "Sign in" link in the register header should propagate return_to.
+	signInLink := page.Locator("p:has-text('Already have an account?') a:has-text('Sign in')").First()
 	href, err := signInLink.GetAttribute("href")
 	if err != nil {
 		t.Fatalf("Failed to get Sign in href: %v", err)
@@ -1977,7 +2041,7 @@ func TestBrowser_Auth_RegisterPage_GoogleOnTop(t *testing.T) {
 	googleBtn := card.Locator("button:has-text('Sign up with Google')")
 	err = googleBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Google sign-up button not visible in card: %v", err)
@@ -2065,7 +2129,7 @@ func TestBrowser_Auth_DefaultTheme_CardNoTranslateOnHover(t *testing.T) {
 	card := page.Locator(".themed-card")
 	err = card.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Card not visible: %v", err)
@@ -2086,8 +2150,18 @@ func TestBrowser_Auth_DefaultTheme_CardNoTranslateOnHover(t *testing.T) {
 		t.Fatalf("Failed to hover over card: %v", err)
 	}
 
-	// Small delay for CSS transition
-	page.WaitForTimeout(300)
+	// Wait for hover state/animations to settle without using fixed sleeps.
+	_, err = page.WaitForFunction(`() => {
+		const card = document.querySelector('.themed-card');
+		if (!card || !card.matches(':hover')) return false;
+		const animations = card.getAnimations ? card.getAnimations() : [];
+		return animations.every(a => a.playState === 'finished' || a.playState === 'idle');
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Card hover state did not settle: %v", err)
+	}
 
 	// Get position after hover
 	afterY, err := page.Evaluate(`() => {

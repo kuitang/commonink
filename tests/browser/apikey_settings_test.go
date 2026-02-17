@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/playwright-community/playwright-go"
 
@@ -24,9 +23,8 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
-// loginAPIKeyUser creates a test user with a password hash and account record,
-// then sets a session cookie on the browser context. This is needed because API
-// key creation requires re-authentication with email+password.
+// loginAPIKeyUser creates/fetches a provider account, then sets a password hash
+// so API key re-authentication works for provider-first accounts.
 func loginAPIKeyUser(t *testing.T, env *BrowserTestEnv, ctx playwright.BrowserContext, emailAddr, password string) string {
 	t.Helper()
 
@@ -55,20 +53,14 @@ func loginAPIKeyUser(t *testing.T, env *BrowserTestEnv, ctx playwright.BrowserCo
 		t.Fatalf("Failed to open user DB: %v", err)
 	}
 
-	// Create the account record (required for API Key re-auth to work)
-	err = userDB.Queries().CreateAccount(goCtx, userdb.CreateAccountParams{
-		UserID:             user.ID,
-		Email:              emailAddr,
-		PasswordHash:       sql.NullString{String: passwordHash, Valid: true},
-		GoogleSub:          sql.NullString{},
-		CreatedAt:          time.Now().Unix(),
-		SubscriptionStatus: sql.NullString{String: "free", Valid: true},
-		SubscriptionID:     sql.NullString{},
-		DbSizeBytes:        sql.NullInt64{},
-		LastLogin:          sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+	// FindOrCreateByProvider already creates an account row when absent.
+	// Re-auth requires password_hash, so update that row instead of creating a duplicate.
+	err = userDB.Queries().UpdateAccountPasswordHash(goCtx, userdb.UpdateAccountPasswordHashParams{
+		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
+		UserID:       user.ID,
 	})
 	if err != nil {
-		t.Fatalf("Failed to create account: %v", err)
+		t.Fatalf("Failed to set account password hash: %v", err)
 	}
 
 	// Create session and set cookie
@@ -100,7 +92,7 @@ func TestBrowser_APIKeySettings_PageLoad(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-pageload")
 	testPassword := "SecurePass123!"
@@ -176,7 +168,7 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-create")
 	testPassword := "SecurePass123!"
@@ -237,7 +229,7 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 	tokenElement := page.Locator("code#new-token, code#token-value")
 	err = tokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("API key value element not found: %v", err)
@@ -292,7 +284,7 @@ func TestBrowser_APIKeySettings_ListKeys(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-list")
 	testPassword := "SecurePass123!"
@@ -380,7 +372,7 @@ func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-revoke")
 	testPassword := "SecurePass123!"
@@ -465,7 +457,7 @@ func TestBrowser_APIKeySettings_CopyKey(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-copy")
 	testPassword := "SecurePass123!"
@@ -506,17 +498,14 @@ func TestBrowser_APIKeySettings_CopyKey(t *testing.T) {
 		t.Fatalf("Failed to click copy button: %v", err)
 	}
 
-	// Wait a moment for the copy action
-	time.Sleep(500 * time.Millisecond)
-
 	// Verify the button text changed to "Copied!" (UI feedback)
 	copiedText := page.Locator("span#copy-text:has-text('Copied!')")
-	copiedVisible, err := copiedText.IsVisible()
+	err = copiedText.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
 	if err != nil {
-		// The button might have already reset
-		t.Log("Copy button feedback check inconclusive")
-	} else if !copiedVisible {
-		t.Log("Note: Copy button feedback may have already reset")
+		t.Logf("Copy button feedback not observed before timeout: %v", err)
 	}
 
 	// Note: Actual clipboard verification is not possible in headless mode
@@ -543,7 +532,7 @@ func TestBrowser_APIKeySettings_EmptyState(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-empty")
 	testPassword := "SecurePass123!"
@@ -592,7 +581,7 @@ func TestBrowser_APIKeySettings_InvalidCredentials(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-invalid-creds")
 	testPassword := "SecurePass123!"
@@ -654,7 +643,7 @@ func TestBrowser_APIKeySettings_ExpirationOptions(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-expiry")
 	testPassword := "SecurePass123!"
@@ -708,7 +697,7 @@ func TestBrowser_APIKeySettings_ReadOnlyScope(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-readonly")
 	testPassword := "SecurePass123!"
@@ -764,7 +753,7 @@ func TestBrowser_APIKeySettings_RequiresAuth(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	// Do NOT login - try to access settings page directly
 	Navigate(t, page, env.BaseURL, "/settings/api-keys")
@@ -809,7 +798,7 @@ func TestBrowser_APIKeySettings_UsageInstructions(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-usage")
 	testPassword := "SecurePass123!"
@@ -858,7 +847,7 @@ func TestBrowser_APIKeySettings_UseKeyForAPICall(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-api-call")
 	testPassword := "SecurePass123!"
@@ -901,7 +890,7 @@ func TestBrowser_APIKeySettings_UseKeyForAPICall(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+tokenValue)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: browserMaxTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to make API request: %v", err)
@@ -936,7 +925,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-revoke-api")
 	testPassword := "SecurePass123!"
@@ -993,7 +982,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 	tokenElement := page.Locator("code#new-token, code#token-value")
 	err = tokenElement.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(10000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		// Debug: log page content
@@ -1014,7 +1003,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 	}
 	req1.Header.Set("Authorization", "Bearer "+tokenValue)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: browserMaxTimeout}
 	resp1, err := client.Do(req1)
 	if err != nil {
 		t.Fatalf("Failed to make API request before revocation: %v", err)
@@ -1086,7 +1075,7 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(10000)
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-navigate-mask")
 	testPassword := "SecurePass123!"
@@ -1135,7 +1124,7 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	newTokenElement := page.Locator("code#new-token, code#token-value")
 	err = newTokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(2000),
+		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 
 	// We EXPECT this to timeout/fail because the API key should NOT be visible
