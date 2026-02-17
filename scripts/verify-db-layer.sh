@@ -28,8 +28,7 @@ REQUIRED_FILES=(
     "internal/db/schema.go"
     "internal/db/db_test.go"
     "internal/db/integration_test.go"
-    "internal/db/milestone1_test.go"
-    "internal/db/README.md"
+    "internal/db/example_test.go"
     "Makefile"
 )
 

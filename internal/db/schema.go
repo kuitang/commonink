@@ -1,7 +1,7 @@
 package db
 
 // SQL schema definitions for the database layer.
-// Per spec.md, we have two types of databases:
+// Per docs/SPEC.md, we have two types of databases:
 // 1. sessions.db - Shared, unencrypted bootstrap data
 // 2. {user_id}.db - Per-user, encrypted with SQLCipher
 

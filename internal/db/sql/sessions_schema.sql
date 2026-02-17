@@ -1,5 +1,5 @@
 -- Sessions database schema (unencrypted, shared)
--- Per spec.md: sessions.db contains bootstrap data like sessions, magic tokens, OAuth clients, etc.
+-- Per docs/SPEC.md: sessions.db contains bootstrap data like sessions, magic tokens, OAuth clients, etc.
 
 -- Sessions table: stores active user sessions
 CREATE TABLE IF NOT EXISTS sessions (

@@ -1,5 +1,5 @@
 -- User database schema (encrypted per-user with SQLCipher)
--- Per spec.md: {user_id}.db contains user-specific data
+-- Per docs/SPEC.md: {user_id}.db contains user-specific data
 
 -- Account table: user account information
 CREATE TABLE IF NOT EXISTS account (

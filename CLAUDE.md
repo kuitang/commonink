@@ -10,7 +10,7 @@
 - Expense, complexity, and token limit are of no object. Simply execute what I tell you to and do not simplify it. (However, use tasks to do the heavy lifting, always as parallel as possible.)
 - ALWAYS follow the directives below on property-based testing.
 - ALWAYS use gpt-5-mini! NEVER use a gpt-4 series model
-- Plan  and milestone files should be terse and only contain new and specific information. Follow the format of spec.md. Do NOT include code in plan files. At best, high level pseudocode.
+- Plan  and milestone files should be terse and only contain new and specific information. Follow the format of `docs/SPEC.md`. Do NOT include code in plan files. At best, high level pseudocode.
 
 # Developer Guide - Remote Notes MicroSaaS
 
@@ -417,7 +417,7 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 - **MCP Conformance**: `notes/testing-tools.md` § MCP Protocol Testing
 - **OAuth Testing**: `notes/testing-tools.md` § OAuth 2.1 Provider Testing
 - **Library Docs**: `notes/go-libraries-2026.md`
-- **Full Spec**: `spec.md`
+- **Full Spec**: `docs/SPEC.md`
 
 ## Troubleshooting
 

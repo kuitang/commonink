@@ -7,7 +7,7 @@ import "fmt"
 // the OAuth UI in ChatGPT. This should be returned when a tool requires authentication
 // but no valid token is present.
 //
-// Per the MCP authorization spec (chatgpt-apps/auth.md), this response format
+// Per the MCP authorization flow documented in docs/AUTH.md, this response format
 // triggers the tool-level OAuth flow in ChatGPT when combined with proper
 // securitySchemes declarations.
 //
