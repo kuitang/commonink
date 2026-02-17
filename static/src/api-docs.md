@@ -1,19 +1,12 @@
 # API Documentation
 
-common.ink provides a RESTful API for programmatic access to your notes, along with MCP (Model Context Protocol) support for AI agent integration.
+common.ink provides a RESTful JSON API for programmatic access to your notes.
 
 ## Table of Contents
 
 - [Authentication](#authentication)
-  - [Session Cookies](#session-cookies)
-  - [API Keys](#api-keys)
-  - [OAuth 2.1](#oauth-21)
-- [User Registration & Login](#user-registration--login)
-- [API Keys API](#api-keys-api)
 - [Notes API](#notes-api)
-- [MCP Server](#mcp-model-context-protocol)
-- [Connecting AI Assistants](#connecting-ai-assistants)
-- [OAuth 2.1 Provider](#oauth-21-provider)
+- [API Keys Management](#api-keys-management)
 - [Rate Limits](#rate-limits)
 - [Error Responses](#error-responses)
 
@@ -21,287 +14,43 @@ common.ink provides a RESTful API for programmatic access to your notes, along w
 
 ## Authentication
 
-common.ink supports three authentication methods:
+### Getting an API Key
 
-### Session Cookies
+API Keys are the recommended way to authenticate API requests:
 
-Session cookies are automatically set when you log in via the web interface. They're valid for 30 days and use the `session_id` cookie name with `HttpOnly` and `SameSite=Lax` settings.
+1. [Sign in](/login) to your account
+2. Go to [API Keys](/api-keys/new) to create a new key
+3. Copy the key -- you won't see it again
+4. Include it in all requests via the `Authorization` header:
 
-### API Keys
+```
+Authorization: Bearer $COMMON_INK_API_KEY
+```
 
-API Keys are the recommended way to authenticate API requests programmatically:
-
-1. Go to [API Keys](/api-keys) to create a new key
-2. Include the key in the `Authorization` header:
+**Example:**
 
 ```bash
-curl -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
+curl -H "Authorization: Bearer $COMMON_INK_API_KEY" \
   https://common.ink/api/notes
 ```
 
-**API Key Format**: `agentnotes_key_{user_id}_{random_token}`
+API Key format: `agentnotes_key_{user_id}_{random_token}`
 
 ### OAuth 2.1
 
-For third-party applications, use OAuth 2.1 with PKCE. See the [OAuth 2.1 Provider](#oauth-21-provider) section below.
-
----
-
-## User Registration & Login
-
-### Register with Email/Password
-
-**Endpoint**: `POST /auth/register`
-
-**Content-Type**: `application/x-www-form-urlencoded`
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| email | string | Yes | Email address |
-| password | string | Yes | Password (min 8 characters) |
-
-```bash
-# Register a new account (saves session cookie)
-curl -X POST https://common.ink/auth/register \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "email=user@example.com&password=SecurePass123" \
-  -c cookies.txt
-```
-
-**Response**: 303 redirect to `/notes` with session cookie set in `cookies.txt`.
-
----
-
-### Login with Email/Password
-
-**Endpoint**: `POST /auth/login`
-
-**Content-Type**: `application/x-www-form-urlencoded`
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| email | string | Yes | Email address |
-| password | string | Yes | Password |
-
-```bash
-# Login to existing account (saves session cookie)
-curl -X POST https://common.ink/auth/login \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "email=user@example.com&password=SecurePass123" \
-  -c cookies.txt
-```
-
-**Response**: 303 redirect to `/notes` with session cookie set in `cookies.txt`.
-
----
-
-### Google OIDC Sign-In
-
-**Endpoint**: `GET /auth/google`
-
-```bash
-# Opens Google OAuth flow (use in browser)
-open "https://common.ink/auth/google"
-```
-
-After Google authentication, the callback at `/auth/google/callback` sets the session cookie and redirects to `/notes`.
-
----
-
-### Magic Link (Passwordless)
-
-**Request Magic Link**:
-
-**Endpoint**: `POST /auth/magic`
-
-```bash
-curl -X POST https://common.ink/auth/magic \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "email=user@example.com"
-```
-
-**Response**: 303 redirect to `/login?magic=sent`. A magic link is sent to the email. Clicking it verifies the token at `/auth/magic/verify?token=...` and logs you in.
-
----
-
-### Password Reset
-
-**Request Reset**:
-
-**Endpoint**: `POST /auth/password-reset`
-
-```bash
-curl -X POST https://common.ink/auth/password-reset \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "email=user@example.com"
-```
-
-**Confirm Reset**:
-
-**Endpoint**: `POST /auth/password-reset-confirm`
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| token | string | Yes | Reset token from email |
-| new_password | string | Yes | New password |
-
----
-
-### Check Authentication Status
-
-**Endpoint**: `GET /auth/whoami`
-
-```bash
-# With session cookie
-curl https://common.ink/auth/whoami -b cookies.txt
-```
-
-**Note**: The `/auth/whoami` endpoint only supports session cookie authentication. For programmatic auth status checks, use the Notes API (e.g., `GET /api/notes`) with your API Key or OAuth token -- a `200` response confirms valid authentication.
-
-**Response**:
-```json
-{
-  "user_id": "user-550e8400-e29b-41d4-a716-446655440000",
-  "authenticated": true
-}
-```
-
----
-
-### Logout
-
-**Endpoint**: `POST /auth/logout` or `GET /auth/logout`
-
-```bash
-curl -X POST https://common.ink/auth/logout \
-  -b cookies.txt -c cookies.txt
-```
-
-**Response**: 303 redirect to `/`. The session cookie is cleared in `cookies.txt`.
-
----
-
-## API Keys API
-
-API Keys enable programmatic API access without session cookies. Ideal for:
-
-- CLI tools and scripts
-- CI/CD pipelines
-- AI assistant integrations (Claude Code, ChatGPT)
-- MCP server connections
-
-### Create an API Key
-
-Creates a new API Key. **Requires password re-authentication**.
-
-**Note**: You can also create API Keys through the web UI at [/api-keys/new](/api-keys/new), which is the recommended method.
-
-**Endpoint**: `POST /api/keys`
-
-**Authentication**: Session cookie required
-
-**Content-Type**: `application/json`
-
-```json
-{
-  "name": "CLI Access Token",
-  "scope": "read_write",
-  "expires_in": 2592000,
-  "email": "user@example.com",
-  "password": "SecurePass123"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| name | string | Yes | Descriptive name for the token |
-| scope | string | No | Permission scope (default: `read_write`) |
-| expires_in | integer | No | Seconds until expiry (default/max: 1 year) |
-| email | string | Yes | Your email for re-authentication |
-| password | string | Yes | Your password for re-authentication |
-
-```bash
-# Create an API Key (requires session cookie from login)
-curl -X POST https://common.ink/api/keys \
-  -H "Content-Type: application/json" \
-  -b cookies.txt \
-  -d '{
-    "name": "My CLI Token",
-    "scope": "read_write",
-    "expires_in": 2592000,
-    "email": "user@example.com",
-    "password": "SecurePass123"
-  }'
-```
-
-**Response** (201 Created):
-```json
-{
-  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "name": "My CLI Token",
-  "token": "agentnotes_key_user-550e8400-e29b-41d4-a716-446655440000_YWJjZGVm...",
-  "scope": "read_write",
-  "expires_at": "2026-03-03T12:00:00Z",
-  "created_at": "2026-02-03T12:00:00Z"
-}
-```
-
-**Important**: Save the `token` value securely - it cannot be retrieved later!
-
----
-
-### List API Keys
-
-**Endpoint**: `GET /api/keys`
-
-```bash
-curl https://common.ink/api/keys -b cookies.txt
-```
-
-**Response**:
-```json
-{
-  "tokens": [
-    {
-      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "name": "My CLI Token",
-      "scope": "read_write",
-      "expires_at": "2026-03-03T12:00:00Z",
-      "created_at": "2026-02-03T12:00:00Z",
-      "last_used_at": "2026-02-03T14:30:00Z"
-    }
-  ]
-}
-```
-
----
-
-### Revoke an API Key
-
-**Endpoint**: `DELETE /api/keys/{id}`
-
-```bash
-curl -X DELETE https://common.ink/api/keys/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
-  -b cookies.txt
-```
-
-**Response**: `204 No Content`
+For third-party applications, common.ink supports OAuth 2.1 with PKCE. See the [OAuth 2.1 Provider](#oauth-21-provider) section below.
 
 ---
 
 ## Notes API
 
-All notes endpoints require authentication via session cookie, API Key, or OAuth JWT.
+All endpoints require authentication via API Key or OAuth JWT.
 
-### Base URL
-
-```
-https://common.ink/api
-```
+**Base URL:** `https://common.ink/api`
 
 ### List Notes
 
-**Endpoint**: `GET /api/notes`
+`GET /api/notes`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -309,15 +58,12 @@ https://common.ink/api
 | offset | integer | 0 | Number of notes to skip |
 
 ```bash
-# With session cookie
-curl "https://common.ink/api/notes?limit=10&offset=0" -b cookies.txt
-
-# With API Key
 curl "https://common.ink/api/notes?limit=10&offset=0" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..."
+  -H "Authorization: Bearer $COMMON_INK_API_KEY"
 ```
 
-**Response**:
+**Response:**
+
 ```json
 {
   "notes": [
@@ -340,9 +86,7 @@ curl "https://common.ink/api/notes?limit=10&offset=0" \
 
 ### Create Note
 
-**Endpoint**: `POST /api/notes`
-
-**Content-Type**: `application/json`
+`POST /api/notes`
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -352,14 +96,15 @@ curl "https://common.ink/api/notes?limit=10&offset=0" \
 ```bash
 curl -X POST https://common.ink/api/notes \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
+  -H "Authorization: Bearer $COMMON_INK_API_KEY" \
   -d '{
     "title": "Meeting Notes",
     "content": "## Agenda\n- Item 1\n- Item 2"
   }'
 ```
 
-**Response** (201 Created):
+**Response (201 Created):**
+
 ```json
 {
   "id": "c4e2d1a3-6b7f-8901-2345-abcdef678901",
@@ -375,22 +120,18 @@ curl -X POST https://common.ink/api/notes \
 
 ### Get Note
 
-**Endpoint**: `GET /api/notes/{id}`
+`GET /api/notes/{id}`
 
 ```bash
 curl https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..."
+  -H "Authorization: Bearer $COMMON_INK_API_KEY"
 ```
-
-**Response**: Same format as Create Note response.
 
 ---
 
 ### Update Note
 
-**Endpoint**: `PUT /api/notes/{id}`
-
-**Content-Type**: `application/json`
+`PUT /api/notes/{id}`
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -400,7 +141,7 @@ curl https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
 ```bash
 curl -X PUT https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
+  -H "Authorization: Bearer $COMMON_INK_API_KEY" \
   -d '{
     "title": "Updated Title",
     "content": "Updated content..."
@@ -411,22 +152,20 @@ curl -X PUT https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
 
 ### Delete Note
 
-**Endpoint**: `DELETE /api/notes/{id}`
+`DELETE /api/notes/{id}`
 
 ```bash
 curl -X DELETE https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901 \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..."
+  -H "Authorization: Bearer $COMMON_INK_API_KEY"
 ```
 
-**Response**: `204 No Content`
+**Response:** `204 No Content`
 
 ---
 
 ### Search Notes
 
-**Endpoint**: `POST /api/notes/search`
-
-**Content-Type**: `application/json`
+`POST /api/notes/search`
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -435,11 +174,12 @@ curl -X DELETE https://common.ink/api/notes/c4e2d1a3-6b7f-8901-2345-abcdef678901
 ```bash
 curl -X POST https://common.ink/api/notes/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
+  -H "Authorization: Bearer $COMMON_INK_API_KEY" \
   -d '{"query": "meeting agenda"}'
 ```
 
-**Response**:
+**Response:**
+
 ```json
 {
   "results": [
@@ -460,258 +200,89 @@ curl -X POST https://common.ink/api/notes/search \
 }
 ```
 
-**Note**: Uses FTS5 full-text search. Lower (more negative) rank values indicate better matches. Supports standard SQLite FTS5 query syntax.
+Uses FTS5 full-text search. Lower (more negative) rank values indicate better matches.
 
 ---
 
-## MCP (Model Context Protocol)
+## API Keys Management
 
-common.ink implements the MCP 2025-03-26 specification using Streamable HTTP transport.
+### Create an API Key
 
-### Endpoint
+`POST /api/keys`
 
-```
-POST /mcp
-```
-
-### Headers
-
-| Header | Value | Required |
-|--------|-------|----------|
-| Content-Type | application/json | Yes |
-| Accept | application/json, text/event-stream | Yes |
-| Authorization | Bearer {token} | Yes |
-
-### Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `note_list` | List notes with pagination support |
-| `note_view` | Retrieve a single note by its ID |
-| `note_create` | Create a new note with a title and optional content |
-| `note_update` | Update an existing note's title and/or content |
-| `note_search` | Search notes using full-text search (FTS5) |
-| `note_delete` | Delete a note by its ID |
-
-### List Available Tools
+Requires session cookie authentication (log in via the web first) and password re-authentication.
 
 ```bash
-curl -X POST https://common.ink/mcp \
+curl -X POST https://common.ink/api/keys \
   -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
-  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
-```
-
-**Response**:
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "tools": [
-      {
-        "name": "note_create",
-        "description": "Create a new note with a title and optional content",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "title": {"type": "string", "description": "The title of the note (required)"},
-            "content": {"type": "string", "description": "The content/body of the note (optional)"}
-          },
-          "required": ["title"]
-        }
-      },
-      {
-        "name": "note_delete",
-        "description": "Delete a note by its ID",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {"type": "string", "description": "The unique identifier of the note to delete"}
-          },
-          "required": ["id"]
-        }
-      },
-      {
-        "name": "note_list",
-        "description": "List notes with pagination support",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "limit": {"type": "integer", "description": "Maximum number of notes to return (default: 50, max: 1000)"},
-            "offset": {"type": "integer", "description": "Number of notes to skip for pagination (default: 0)"}
-          }
-        }
-      },
-      {
-        "name": "note_search",
-        "description": "Search notes using full-text search (FTS5)",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": {"type": "string", "description": "The search query to match against note titles and content"}
-          },
-          "required": ["query"]
-        }
-      },
-      {
-        "name": "note_update",
-        "description": "Update an existing note's title and/or content",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {"type": "string", "description": "The unique identifier of the note to update"},
-            "title": {"type": "string", "description": "The new title for the note (optional)"},
-            "content": {"type": "string", "description": "The new content for the note (optional)"}
-          },
-          "required": ["id"]
-        }
-      },
-      {
-        "name": "note_view",
-        "description": "Retrieve a single note by its ID",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "id": {"type": "string", "description": "The unique identifier of the note to retrieve"}
-          },
-          "required": ["id"]
-        }
-      }
-    ]
-  }
-}
-```
-
----
-
-### Create Note via MCP
-
-```bash
-curl -X POST https://common.ink/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
+  -b cookies.txt \
   -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "note_create",
-      "arguments": {
-        "title": "Created via MCP",
-        "content": "This note was created by an AI assistant."
-      }
-    },
-    "id": 2
+    "name": "My CLI Token",
+    "scope": "read_write",
+    "expires_in": 2592000,
+    "email": "user@example.com",
+    "password": "SecurePass123"
   }'
 ```
 
----
-
-### Search Notes via MCP
-
-```bash
-curl -X POST https://common.ink/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "note_search",
-      "arguments": {
-        "query": "meeting"
-      }
-    },
-    "id": 3
-  }'
-```
-
----
-
-### List Notes via MCP
-
-```bash
-curl -X POST https://common.ink/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer agentnotes_key_user-xxx_token..." \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "note_list",
-      "arguments": {
-        "limit": 10,
-        "offset": 0
-      }
-    },
-    "id": 4
-  }'
-```
-
----
-
-## Connecting AI Assistants
-
-### Claude Code
-
-Add to your Claude Code MCP configuration (`~/.claude/mcp.json`):
+**Response (201 Created):**
 
 ```json
 {
-  "mcpServers": {
-    "common-ink": {
-      "url": "https://common.ink/mcp",
-      "transport": "streamable-http",
-      "headers": {
-        "Authorization": "Bearer agentnotes_key_user-xxx_token..."
-      }
-    }
-  }
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "My CLI Token",
+  "token": "agentnotes_key_user-xxx_YWJjZGVm...",
+  "scope": "read_write",
+  "expires_at": "2026-03-03T12:00:00Z",
+  "created_at": "2026-02-03T12:00:00Z"
 }
 ```
 
-### ChatGPT (Custom GPT)
+Save the `token` value -- it cannot be retrieved later.
 
-1. Create an API Key at [API Keys](/api-keys)
-2. In ChatGPT's custom GPT settings, add an action:
-   - **Server URL**: `https://common.ink`
-   - **Authentication**: API Key (Bearer Token)
-   - **API Key**: Your API Key
+The easiest way to create an API key is through the web UI at [/api-keys/new](/api-keys/new).
 
-### Other MCP Clients
+---
 
-Use the official MCP SDK for your language:
-- [TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-- [Python SDK](https://github.com/modelcontextprotocol/python-sdk)
-- [Go SDK](https://github.com/modelcontextprotocol/go-sdk)
+### List API Keys
+
+`GET /api/keys`
+
+```bash
+curl https://common.ink/api/keys \
+  -H "Authorization: Bearer $COMMON_INK_API_KEY"
+```
+
+---
+
+### Revoke an API Key
+
+`DELETE /api/keys/{id}`
+
+```bash
+curl -X DELETE https://common.ink/api/keys/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+  -H "Authorization: Bearer $COMMON_INK_API_KEY"
+```
+
+**Response:** `204 No Content`
 
 ---
 
 ## OAuth 2.1 Provider
 
-common.ink implements an OAuth 2.1 provider for third-party integrations.
+For third-party integrations, common.ink supports OAuth 2.1 with PKCE.
 
-### Well-Known Metadata
+### Discovery Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /.well-known/oauth-authorization-server` | Authorization server metadata |
 | `GET /.well-known/oauth-protected-resource` | Protected resource metadata |
-| `GET /.well-known/jwks.json` | JSON Web Key Set for token verification |
+| `GET /.well-known/jwks.json` | JSON Web Key Set |
 
 ### Dynamic Client Registration
 
-**Endpoint**: `POST /oauth/register`
-
-**Note**: Redirect URIs must be in the server's allowlist. Currently supported redirect URIs:
-- `https://chatgpt.com/connector_platform_oauth_redirect` (ChatGPT)
-- `https://platform.openai.com/apps-manage/oauth` (OpenAI platform)
-- `https://claude.ai/api/mcp/auth_callback` (Claude)
-- `https://claude.com/api/mcp/auth_callback` (Claude)
+`POST /oauth/register`
 
 ```bash
 curl -X POST https://common.ink/oauth/register \
@@ -725,22 +296,9 @@ curl -X POST https://common.ink/oauth/register \
   }'
 ```
 
-### Authorization
-
-```
-GET /oauth/authorize?
-  response_type=code&
-  client_id=CLIENT_ID&
-  redirect_uri=REDIRECT_URI&
-  scope=notes:read%20notes:write&
-  code_challenge=PKCE_CHALLENGE&
-  code_challenge_method=S256&
-  state=RANDOM_STATE
-```
-
 ### Token Exchange
 
-**Endpoint**: `POST /oauth/token`
+`POST /oauth/token`
 
 ```bash
 curl -X POST https://common.ink/oauth/token \
@@ -755,7 +313,6 @@ curl -X POST https://common.ink/oauth/token \
 | Tier | Requests/Minute | Burst |
 |------|-----------------|-------|
 | Free | 60 | 100 |
-| Paid | 6000 | 10000 |
 
 Rate limit headers are included in all responses:
 
@@ -777,8 +334,6 @@ All errors return JSON:
 }
 ```
 
-### HTTP Status Codes
-
 | Code | Description |
 |------|-------------|
 | 200 | Success |
@@ -791,101 +346,14 @@ All errors return JSON:
 | 429 | Too Many Requests (rate limited) |
 | 500 | Internal Server Error |
 
-### 401 Unauthorized Response
-
-When authentication fails, the response includes a `WWW-Authenticate` header:
-
-```
-WWW-Authenticate: Bearer resource_metadata="https://common.ink/.well-known/oauth-protected-resource", error="invalid_token", error_description="Invalid API key"
-```
-
----
-
-## Complete Workflow Example
-
-```bash
-#!/bin/bash
-# Complete API workflow example
-
-# 1. Register (or login if account exists)
-curl -X POST https://common.ink/auth/register \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "email=demo@example.com&password=DemoPass123" \
-  -c cookies.txt -s > /dev/null
-
-# 2. Create an API Key for API access
-API_KEY=$(curl -s -X POST https://common.ink/api/keys \
-  -H "Content-Type: application/json" \
-  -b cookies.txt \
-  -d '{
-    "name": "Demo Token",
-    "email": "demo@example.com",
-    "password": "DemoPass123"
-  }' | jq -r '.token')
-
-echo "Your API Key: $API_KEY"
-
-# 3. Create a note using the API Key
-echo "Creating note..."
-curl -X POST https://common.ink/api/notes \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{
-    "title": "API Test Note",
-    "content": "Created via REST API!"
-  }'
-
-# 4. List all notes
-echo -e "\n\nListing notes..."
-curl https://common.ink/api/notes \
-  -H "Authorization: Bearer $API_KEY"
-
-# 5. Search notes
-echo -e "\n\nSearching notes..."
-curl -X POST https://common.ink/api/notes/search \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"query": "API"}'
-
-# 6. Create note via MCP
-echo -e "\n\nCreating note via MCP..."
-curl -X POST https://common.ink/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "note_create",
-      "arguments": {
-        "title": "MCP Test Note",
-        "content": "Created via MCP!"
-      }
-    },
-    "id": 1
-  }'
-```
-
 ---
 
 ## Health Check
 
-**Endpoint**: `GET /health`
-
-No authentication required.
+`GET /health` (no authentication required)
 
 ```bash
 curl https://common.ink/health
-```
-
-**Response**:
-```json
-{
-  "status": "healthy",
-  "service": "remote-notes",
-  "milestone": 3
-}
 ```
 
 ---

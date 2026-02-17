@@ -1,6 +1,6 @@
 {{define "base_public"}}
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -32,14 +32,7 @@
         }
     </script>
     <style>
-        html, body {
-            height: 100dvh;
-        }
-        @supports not (height: 100dvh) {
-            html, body {
-                height: 100vh;
-            }
-        }
+        /* Let page scroll naturally */
     </style>
     <script>
         if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -55,7 +48,7 @@
     </script>
     {{block "head" .}}{{end}}
 </head>
-<body class="h-full flex flex-col bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+<body class="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
     <!-- Minimal header: wordmark only -->
     <header class="py-4 px-4 sm:px-6 lg:px-8">
         <div class="max-w-4xl mx-auto">

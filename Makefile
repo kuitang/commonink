@@ -49,7 +49,7 @@ run: build
 
 ## run-test: Run with all mocks (deterministic test secrets from Makefile)
 run-test: build
-	$(BINARY_PATH) --test
+	DATABASE_PATH=./data $(BINARY_PATH) --test
 
 ## run-email: Run with real email only (mock OIDC + S3)
 run-email: build

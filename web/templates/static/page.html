@@ -13,7 +13,7 @@
     .prose a:hover { color: #2563eb; }
     .prose code { background-color: #f3f4f6; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-size: 0.875rem; }
     .dark .prose code { background-color: #374151; }
-    .prose pre { background-color: #1f2937; color: #f9fafb; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 1rem; }
+    .prose pre { background-color: #1f2937; color: #f9fafb; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 1rem; position: relative; }
     .prose pre code { background-color: transparent; padding: 0; }
     .prose blockquote { border-left: 4px solid #3b82f6; padding-left: 1rem; margin: 1rem 0; font-style: italic; }
     .prose table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
@@ -24,6 +24,26 @@
     .prose strong { font-weight: 600; }
     .prose hr { border-color: #e5e7eb; margin: 2rem 0; }
     .dark .prose hr { border-color: #374151; }
+    /* Copy button for code blocks */
+    .copy-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.7rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        background-color: rgba(255, 255, 255, 0.1);
+        color: #9ca3af;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        transition: all 150ms ease;
+    }
+    .copy-btn:hover { background-color: rgba(255, 255, 255, 0.2); color: #e5e7eb; }
+    .copy-btn.copied { color: #34d399; border-color: rgba(52, 211, 153, 0.3); }
 </style>
 {{end}}
 
@@ -33,4 +53,27 @@
         {{.Content}}
     </article>
 </div>
+<script>
+(function() {
+    document.querySelectorAll('.prose pre').forEach(function(pre) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'copy-btn';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg><span>Copy</span>';
+        btn.addEventListener('click', function() {
+            var code = pre.querySelector('code');
+            var text = code ? code.textContent : pre.textContent;
+            navigator.clipboard.writeText(text).then(function() {
+                btn.classList.add('copied');
+                btn.querySelector('span').textContent = 'Copied';
+                setTimeout(function() {
+                    btn.classList.remove('copied');
+                    btn.querySelector('span').textContent = 'Copy';
+                }, 2000);
+            });
+        });
+        pre.appendChild(btn);
+    });
+})();
+</script>
 {{end}}

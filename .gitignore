@@ -67,3 +67,6 @@ resend_api_key.txt
 
 # Server logs
 server.log
+
+# Screenshots (Playwright verification)
+screenshots/

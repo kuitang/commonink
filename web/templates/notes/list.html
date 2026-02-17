@@ -10,10 +10,10 @@
         {{end}}
 
         <!-- Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 flex-shrink-0">
-            <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3 sm:mb-0">My Notes</h1>
+        <div class="flex items-center justify-between mb-4 sm:mb-6 flex-shrink-0">
+            <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">My Notes</h1>
             <div class="flex items-center gap-4">
-                {{/* Storage usage indicator */}}
+                {{/* Storage usage indicator (desktop only) */}}
                 {{if .StorageUsage}}
                 <div class="hidden sm:flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27,10 +27,10 @@
                 {{end}}
                 <a href="/notes/new"
                    class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="w-5 h-5 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
-                    New Note
+                    <span class="hidden sm:inline">New Note</span>
                 </a>
             </div>
         </div>

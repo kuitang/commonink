@@ -94,6 +94,9 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("GET /api-keys/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewAPIKeyPage)))
 	mux.Handle("POST /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
 	mux.Handle("POST /api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
+
+	// Documentation pages (no auth required)
+	mux.Handle("GET /docs/install", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleInstallPage)))
 }
 
 // PageData contains common data passed to all templates.
@@ -173,6 +176,8 @@ type ConsentResultData struct {
 type LoginPageData struct {
 	PageData
 	ReturnTo string
+	Mode     string // "" for default email mode, "password" for password mode
+	Email    string // pre-filled email (for password mode)
 }
 
 // RegisterPageData contains data for the register page.
@@ -203,15 +208,51 @@ type AuthErrorData struct {
 	ErrorDescription string
 }
 
+// getUserWithEmail returns a User with ID and Email populated from the user's database.
+func getUserWithEmail(r *http.Request) *auth.User {
+	userID := auth.GetUserID(r.Context())
+	user := &auth.User{ID: userID}
+	userDB := auth.GetUserDB(r.Context())
+	if userDB != nil {
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err == nil {
+			user.Email = account.Email
+		}
+	}
+	return user
+}
+
 // Handler implementations
 
-// HandleLanding handles GET / - redirects to notes if logged in, else shows login.
+// HandleLanding handles GET / - shows landing page, or redirects to notes if logged in.
 func (h *WebHandler) HandleLanding(w http.ResponseWriter, r *http.Request) {
 	if auth.IsAuthenticated(r.Context()) {
 		http.Redirect(w, r, "/notes", http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/login", http.StatusFound)
+
+	data := PageData{
+		Title: "Notes for AI Agents and Humans",
+	}
+
+	if err := h.renderer.Render(w, "landing.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HandleInstallPage handles GET /docs/install - shows the installation/setup page.
+func (h *WebHandler) HandleInstallPage(w http.ResponseWriter, r *http.Request) {
+	data := PageData{
+		Title: "Connect Your AI Assistant",
+	}
+
+	if auth.IsAuthenticated(r.Context()) {
+		data.User = getUserWithEmail(r)
+	}
+
+	if err := h.renderer.Render(w, "install.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
 }
 
 // HandleLoginPage handles GET /login - shows the login page.
@@ -221,6 +262,8 @@ func (h *WebHandler) HandleLoginPage(w http.ResponseWriter, r *http.Request) {
 			Title: "Sign In",
 		},
 		ReturnTo: r.URL.Query().Get("return_to"),
+		Mode:     r.URL.Query().Get("mode"),
+		Email:    r.URL.Query().Get("email"),
 	}
 
 	// Check for error in query params
@@ -369,7 +412,7 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 
 	pageData := PageData{
 		Title: "My Notes",
-		User:  &auth.User{ID: auth.GetUserID(r.Context())},
+		User:  getUserWithEmail(r),
 	}
 	// Check for flash error message from query params
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
@@ -397,7 +440,7 @@ func (h *WebHandler) HandleNewNotePage(w http.ResponseWriter, r *http.Request) {
 	data := NoteEditData{
 		PageData: PageData{
 			Title: "New Note",
-			User:  &auth.User{ID: auth.GetUserID(r.Context())},
+			User:  getUserWithEmail(r),
 		},
 	}
 
@@ -508,7 +551,7 @@ func (h *WebHandler) HandleEditNotePage(w http.ResponseWriter, r *http.Request) 
 	data := NoteEditData{
 		PageData: PageData{
 			Title: "Edit: " + note.Title,
-			User:  &auth.User{ID: auth.GetUserID(r.Context())},
+			User:  getUserWithEmail(r),
 		},
 		Note: note,
 	}
@@ -724,7 +767,7 @@ func (h *WebHandler) HandleConsentPage(w http.ResponseWriter, r *http.Request) {
 	data := ConsentData{
 		PageData: PageData{
 			Title: "Authorize Application",
-			User:  &auth.User{ID: auth.GetUserID(r.Context())},
+			User:  getUserWithEmail(r),
 		},
 		ClientName:  clientID, // In production, look up client name from registry
 		ClientIcon:  "",       // In production, look up client icon
@@ -756,7 +799,7 @@ func (h *WebHandler) HandleConsentDecision(w http.ResponseWriter, r *http.Reques
 		data := ConsentResultData{
 			PageData: PageData{
 				Title: "Access Denied",
-				User:  &auth.User{ID: auth.GetUserID(r.Context())},
+				User:  getUserWithEmail(r),
 			},
 			ClientName:  clientID,
 			RedirectURI: redirectURI,

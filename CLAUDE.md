@@ -1,4 +1,5 @@
 # CRITICAL Principles
+- NEVER add `.gitleaksignore`, `.gitleaks.toml`, or otherwise bypass/override gitleaks. If gitleaks flags a false positive, fix the source: use innocuous placeholder strings (e.g., `$COMMON_INK_API_KEY`, `demo-token-here`) instead of patterns that look like real secrets. This applies to documentation, tests, and any committed files.
 - You MUST use Makefile commands (`make build`, `make run-test`, `make test`, etc.) for ALL build/run/test operations. NEVER invoke `go build`, `go test`, or run the server binary directly — the Makefile handles goenv, CGO flags, secrets, and BASE_URL correctly.
 - In every task/subagent prompt, You MUST tell them to read the entire CLAUDE.md
 - EVERY TASK MUST USE OPUS 4.5.
