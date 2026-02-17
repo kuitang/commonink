@@ -51,9 +51,15 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
         run: |
           APP_NAME="${{ steps.app.outputs.name }}"
+          FLY_ORG="personal"
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
             exit 1
+          fi
+
+          if ! flyctl apps list --json | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
+            echo "Creating new Fly app ${APP_NAME} for PR preview"
+            flyctl apps create "$APP_NAME" --org "$FLY_ORG" --yes
           fi
 
           if [ -f ".env.staging" ]; then
