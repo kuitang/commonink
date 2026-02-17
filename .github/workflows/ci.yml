@@ -60,8 +60,8 @@ jobs:
           fi
 
           if ! flyctl apps list --json | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
-            echo "Preview app '${APP_NAME}' does not exist. Creating it."
-            flyctl apps create "${APP_NAME}" --yes
+            echo "Preview app '${APP_NAME}' does not exist. Run ./scripts/bootstrap-staging-preview.sh ${APP_NAME} first."
+            exit 1
           fi
 
           if ! flyctl secrets list --app "$APP_NAME" | grep -q "GOOGLE_CLIENT_ID"; then
