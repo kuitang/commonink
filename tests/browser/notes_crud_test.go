@@ -402,36 +402,16 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 	testEmail := GenerateUniqueEmail("test-pagination")
 	env.LoginUser(t, ctx, testEmail)
 
-	// Create 15 notes to trigger pagination (default page size is 12)
-	for i := 1; i <= 15; i++ {
-		Navigate(t, page, env.BaseURL, "/notes/new")
-
-		titleInput := WaitForSelector(t, page, "input#title")
-		contentTextarea := WaitForSelector(t, page, "textarea#content")
-
-		err = titleInput.Fill(fmt.Sprintf("Pagination Test Note %02d", i))
-		if err != nil {
-			t.Fatalf("Failed to fill title for note %d: %v", i, err)
-		}
-
-		err = contentTextarea.Fill(fmt.Sprintf("Content for pagination test note %d", i))
-		if err != nil {
-			t.Fatalf("Failed to fill content for note %d: %v", i, err)
-		}
-
-		submitButton := page.Locator("button[type='submit']:has-text('Create')")
-		err = submitButton.Click()
-		if err != nil {
-			t.Fatalf("Failed to click submit for note %d: %v", i, err)
-		}
-
-		// Wait for redirect
-		err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
-			Timeout: playwright.Float(browserMaxTimeoutMS),
-		})
-		if err != nil {
-			t.Fatalf("Failed to wait for redirect for note %d: %v", i, err)
-		}
+	// Use UI-only note creation for pagination coverage.
+	// Notes page size is 12; 13 is the minimum count that produces page 2.
+	for i := 1; i <= 13; i++ {
+		CreateNoteViaUI(
+			t,
+			page,
+			env.BaseURL,
+			fmt.Sprintf("Pagination Test Note %02d", i),
+			fmt.Sprintf("Content for pagination test note %d", i),
+		)
 	}
 
 	// Set desktop viewport to ensure pagination buttons are visible
@@ -455,7 +435,7 @@ func TestBrowser_NotesCRUD_Pagination(t *testing.T) {
 		if len(content) > 1000 {
 			content = content[:1000] + "..."
 		}
-		t.Fatalf("Pagination should be visible with 15 notes. Page content: %s", content)
+		t.Fatalf("Pagination should be visible with 13 notes. Page content: %s", content)
 	}
 
 	// Click "Next" to go to page 2 - target the visible desktop button

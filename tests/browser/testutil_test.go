@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +43,21 @@ const (
 	browserMaxTimeout   = 5 * time.Second
 )
 
+var browserSharedFixtureSessionTables = []string{
+	"sessions",
+	"magic_tokens",
+	"user_keys",
+	"oauth_clients",
+	"oauth_tokens",
+	"oauth_codes",
+	"oauth_consents",
+	"short_urls",
+}
+
+var browserFixtureMu sync.Mutex
+var browserTestMutex sync.Mutex
+var browserSharedFixture *BrowserTestEnv
+
 // BrowserTestEnv is the unified test environment for all browser tests.
 // Every test gets the full mux: auth routes, mock OIDC, static pages, real CRUD, short URLs, API keys.
 type BrowserTestEnv struct {
@@ -59,20 +76,55 @@ type BrowserTestEnv struct {
 	PublicNotes    *notes.PublicNoteService
 	ShortURLSvc    *shorturl.Service
 	LocalMockOIDC  *auth.LocalMockOIDCProvider
+	TempDir        string
 
-	pw      *playwright.Playwright
-	browser playwright.Browser
+	pw        *playwright.Playwright
+	browser   playwright.Browser
+	browserMu sync.Mutex
 
 	fakeS3Server *httptest.Server
 }
 
 // SetupBrowserTestEnv creates a fully wired test server with all services.
-// Uses t.Cleanup for automatic teardown.
 func SetupBrowserTestEnv(t *testing.T) *BrowserTestEnv {
 	t.Helper()
 
+	// Tests in this package mutate global DB state; serialize to keep fixture resets deterministic.
+	browserTestMutex.Lock()
+	t.Cleanup(browserTestMutex.Unlock)
+
+	env := getOrCreateSharedBrowserTestEnv(t)
+	resetSharedBrowserTestEnvState(t, env)
+	return env
+}
+
+func getOrCreateSharedBrowserTestEnv(t *testing.T) *BrowserTestEnv {
+	t.Helper()
+
+	browserFixtureMu.Lock()
+	defer browserFixtureMu.Unlock()
+
+	if browserSharedFixture != nil {
+		if err := browserSharedFixture.SessionsDB.DB().Ping(); err == nil {
+			return browserSharedFixture
+		}
+		cleanupSharedBrowserTestEnvLocked()
+	}
+
+	tempDir, err := os.MkdirTemp("", "browser-shared-*")
+	if err != nil {
+		t.Fatalf("Failed to create shared browser fixture temp dir: %v", err)
+	}
+
+	browserSharedFixture = createBrowserTestEnv(t, tempDir)
+	return browserSharedFixture
+}
+
+func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
+	t.Helper()
+
 	db.ResetForTesting()
-	db.DataDirectory = t.TempDir()
+	db.DataDirectory = tempDir
 
 	sessionsDB, err := db.OpenSessionsDB()
 	if err != nil {
@@ -189,23 +241,110 @@ func SetupBrowserTestEnv(t *testing.T) *BrowserTestEnv {
 		PublicNotes:    publicNotes,
 		ShortURLSvc:    shortURLSvc,
 		LocalMockOIDC:  localMockOIDC,
+		TempDir:        tempDir,
 		fakeS3Server:   fakeS3Server,
 	}
-
-	t.Cleanup(func() {
-		if env.browser != nil {
-			env.browser.Close()
-		}
-		if env.pw != nil {
-			env.pw.Stop()
-		}
-		server.Close()
-		fakeS3Server.Close()
-		rateLimiter.Stop()
-		db.CloseAll()
-	})
-
 	return env
+}
+
+func resetSharedBrowserTestEnvState(t *testing.T, env *BrowserTestEnv) {
+	t.Helper()
+
+	// Ensure shared fixture always points at its pinned temp dir.
+	db.DataDirectory = env.TempDir
+
+	if err := clearSharedBrowserSessionsDB(env.SessionsDB); err != nil {
+		t.Fatalf("Failed to reset shared browser sessions database: %v", err)
+	}
+	if err := removeStaleBrowserUserDBs(env.TempDir); err != nil {
+		t.Fatalf("Failed to reset shared browser user databases: %v", err)
+	}
+	db.ResetUserDBsForTesting()
+	if env.EmailService != nil {
+		env.EmailService.Clear()
+	}
+}
+
+func clearSharedBrowserSessionsDB(sessionsDB *db.SessionsDB) error {
+	tx, err := sessionsDB.DB().Begin()
+	if err != nil {
+		return fmt.Errorf("begin reset transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	for _, table := range browserSharedFixtureSessionTables {
+		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
+			return fmt.Errorf("clear %s: %w", table, err)
+		}
+	}
+
+	// Ignore if sqlite_sequence does not exist.
+	_, _ = tx.Exec("DELETE FROM sqlite_sequence WHERE name = 'short_urls'")
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reset transaction: %w", err)
+	}
+	return nil
+}
+
+func removeStaleBrowserUserDBs(tempDir string) error {
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		return fmt.Errorf("read fixture temp dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".db" || name == db.SessionsDBName {
+			continue
+		}
+		if err := os.Remove(filepath.Join(tempDir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale user db %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func cleanupSharedBrowserTestEnv() {
+	browserFixtureMu.Lock()
+	defer browserFixtureMu.Unlock()
+	cleanupSharedBrowserTestEnvLocked()
+}
+
+func cleanupSharedBrowserTestEnvLocked() {
+	if browserSharedFixture == nil {
+		return
+	}
+	if browserSharedFixture.browser != nil {
+		_ = browserSharedFixture.browser.Close()
+	}
+	if browserSharedFixture.pw != nil {
+		_ = browserSharedFixture.pw.Stop()
+	}
+	if browserSharedFixture.Server != nil {
+		browserSharedFixture.Server.Close()
+	}
+	if browserSharedFixture.fakeS3Server != nil {
+		browserSharedFixture.fakeS3Server.Close()
+	}
+	if browserSharedFixture.RateLimiter != nil {
+		browserSharedFixture.RateLimiter.Stop()
+	}
+	if browserSharedFixture.TempDir != "" {
+		_ = os.RemoveAll(browserSharedFixture.TempDir)
+	}
+	db.ResetForTesting()
+	browserSharedFixture = nil
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	cleanupSharedBrowserTestEnv()
+	os.Exit(code)
 }
 
 // =============================================================================
@@ -327,19 +466,26 @@ func findStaticSrcDir() string {
 func (env *BrowserTestEnv) InitBrowser(t *testing.T) {
 	t.Helper()
 
+	env.browserMu.Lock()
+	defer env.browserMu.Unlock()
+
+	if env.browser != nil {
+		return
+	}
+
 	pw, err := playwright.Run()
 	if err != nil {
 		t.Skip("Playwright not available:", err)
 	}
-	env.pw = pw
 
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(true),
 	})
 	if err != nil {
-		pw.Stop()
+		_ = pw.Stop()
 		t.Skip("Could not launch browser:", err)
 	}
+	env.pw = pw
 	env.browser = browser
 }
 
@@ -464,6 +610,31 @@ func (env *BrowserTestEnv) LoginUser(t *testing.T, ctx playwright.BrowserContext
 	sessionID := env.LoginAs(t, userID)
 	SetSessionCookie(t, ctx, sessionID)
 	return userID
+}
+
+// CreateNoteForUser seeds a note directly in the user's encrypted DB.
+func (env *BrowserTestEnv) CreateNoteForUser(t *testing.T, userID, title, content string) string {
+	t.Helper()
+
+	dek, err := env.KeyManager.GetUserDEK(userID)
+	if err != nil {
+		t.Fatalf("Failed to get DEK for user %s: %v", userID, err)
+	}
+
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		t.Fatalf("Failed to open user DB for %s: %v", userID, err)
+	}
+
+	noteSvc := notes.NewService(userDB)
+	created, err := noteSvc.Create(notes.CreateNoteParams{
+		Title:   title,
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create seeded note for %s: %v", userID, err)
+	}
+	return created.ID
 }
 
 // GenerateUniqueEmail generates a unique email for test isolation.
