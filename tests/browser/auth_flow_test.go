@@ -7,291 +7,15 @@
 package browser
 
 import (
-	"context"
-	"encoding/hex"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/playwright-community/playwright-go"
 
-	"github.com/kuitang/agent-notes/internal/auth"
-	"github.com/kuitang/agent-notes/internal/crypto"
-	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
-	"github.com/kuitang/agent-notes/internal/notes"
-	"github.com/kuitang/agent-notes/internal/ratelimit"
-	"github.com/kuitang/agent-notes/internal/s3client"
-	"github.com/kuitang/agent-notes/internal/web"
 )
-
-// authTestEnv encapsulates the test environment for auth flow tests.
-// This type is separate from the existing testEnv/testServer to avoid conflicts.
-type authTestEnv struct {
-	server       *httptest.Server
-	emailService *email.MockEmailService
-	sessionsDB   *db.SessionsDB
-	s3Server     *httptest.Server
-	pw           *playwright.Playwright
-	browser      playwright.Browser
-	baseURL      string
-}
-
-// setupAuthTestEnv creates a test server for auth flow testing.
-// The caller MUST call cleanup() when done to release resources.
-func setupAuthTestEnv(t *testing.T) (*authTestEnv, func()) {
-	t.Helper()
-
-	// Reset database singleton and set fresh data directory
-	db.ResetForTesting()
-	db.DataDirectory = t.TempDir()
-
-	// Initialize sessions database (now uses fresh directory)
-	sessionsDB, err := db.OpenSessionsDB()
-	if err != nil {
-		t.Fatalf("Failed to open sessions database: %v", err)
-	}
-
-	// Generate a test master key
-	masterKey, err := crypto.GenerateDEK()
-	if err != nil {
-		t.Fatalf("Failed to generate master key: %v", err)
-	}
-
-	// Initialize key manager
-	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
-
-	// Initialize mock email service
-	emailService := email.NewMockEmailService()
-
-	// Create mock S3
-	s3Client, s3Server := createAuthTestS3(t)
-
-	// Initialize template renderer
-	templatesDir := findAuthTestTemplatesDir()
-	renderer, err := web.NewRenderer(templatesDir)
-	if err != nil {
-		t.Fatalf("Failed to create renderer: %v", err)
-	}
-
-	// Create server first to get URL
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-
-	// Initialize services with actual server URL
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
-	sessionService := auth.NewSessionService(sessionsDB)
-	consentService := auth.NewConsentService(sessionsDB)
-
-	// Initialize local mock OIDC provider (serves consent page at /auth/mock-oidc/authorize)
-	var localMockOIDC *auth.LocalMockOIDCProvider
-
-	// Initialize public notes service
-	publicNotes := notes.NewPublicNoteService(s3Client)
-
-	// Initialize auth middleware
-	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
-
-	// Initialize rate limiter (high limits for tests)
-	rateLimiter := ratelimit.NewRateLimiter(ratelimit.Config{
-		FreeRPS:         10000,
-		FreeBurst:       100000,
-		PaidRPS:         100000,
-		PaidBurst:       1000000,
-		CleanupInterval: time.Hour,
-	})
-
-	// Initialize web handler with all services
-	webHandler := web.NewWebHandler(
-		renderer,
-		nil, // notesService is created per-request
-		publicNotes,
-		userService,
-		sessionService,
-		consentService,
-		s3Client,
-		nil, // shortURLSvc not needed for auth tests
-		server.URL,
-	)
-
-	// Close old server and create new mux
-	server.Close()
-
-	// Create new mux with all routes
-	mux = http.NewServeMux()
-
-	// Health check endpoint
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy"}`))
-	})
-
-	// Register web UI routes (GET pages) and auth handler routes (POST form actions)
-	webHandler.RegisterRoutes(mux, authMiddleware)
-	localMockOIDC = auth.NewLocalMockOIDCProvider("PLACEHOLDER")
-	authHandler := auth.NewHandler(localMockOIDC, userService, sessionService)
-	authHandler.RegisterRoutes(mux)
-	localMockOIDC.RegisterRoutes(mux)
-
-	// Rate limiting middleware
-	getUserID := func(r *http.Request) string {
-		return auth.GetUserID(r.Context())
-	}
-	getIsPaid := func(r *http.Request) bool {
-		return false
-	}
-	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
-
-	// Notes API handlers (needed for redirects after auth)
-	notesAPIHandler := &authTestNotesHandler{}
-	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesAPIHandler.ListNotes))))
-	mux.Handle("POST /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesAPIHandler.CreateNote))))
-
-	// Create final test server
-	server = httptest.NewServer(mux)
-	localMockOIDC.SetBaseURL(server.URL)
-
-	env := &authTestEnv{
-		server:       server,
-		emailService: emailService,
-		sessionsDB:   sessionsDB,
-		s3Server:     s3Server,
-		baseURL:      server.URL,
-	}
-
-	cleanup := func() {
-		if env.browser != nil {
-			env.browser.Close()
-		}
-		if env.pw != nil {
-			env.pw.Stop()
-		}
-		env.server.Close()
-		if env.s3Server != nil {
-			env.s3Server.Close()
-		}
-		rateLimiter.Stop()
-		db.CloseAll()
-	}
-
-	return env, cleanup
-}
-
-// createAuthTestS3 creates a mock S3 server for auth tests.
-func createAuthTestS3(t *testing.T) (*s3client.Client, *httptest.Server) {
-	t.Helper()
-
-	backend := s3mem.New()
-	faker := gofakes3.New(backend)
-	ts := httptest.NewServer(faker.Server())
-
-	ctx := context.Background()
-	sdkConfig, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
-		),
-	)
-	if err != nil {
-		t.Fatalf("Failed to load AWS config: %v", err)
-	}
-
-	s3SDK := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(ts.URL)
-		o.UsePathStyle = true
-	})
-
-	bucketName := "auth-test-bucket"
-	_, err = s3SDK.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucketName),
-	})
-	if err != nil {
-		t.Fatalf("Failed to create mock S3 bucket: %v", err)
-	}
-
-	client := s3client.NewFromS3Client(s3SDK, bucketName, ts.URL+"/"+bucketName)
-	return client, ts
-}
-
-// findAuthTestTemplatesDir locates the templates directory.
-func findAuthTestTemplatesDir() string {
-	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
-	}
-
-	for _, dir := range candidates {
-		if _, err := os.Stat(dir); err == nil {
-			return dir
-		}
-	}
-
-	return "/home/kuitang/git/agent-notes/web/templates"
-}
-
-// initAuthTestBrowser initializes Playwright and launches a browser.
-func (env *authTestEnv) initAuthTestBrowser(t *testing.T) error {
-	t.Helper()
-
-	pw, err := playwright.Run()
-	if err != nil {
-		return fmt.Errorf("could not start playwright: %w (run: go run github.com/playwright-community/playwright-go/cmd/playwright install chromium)", err)
-	}
-	env.pw = pw
-
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		pw.Stop()
-		return fmt.Errorf("could not launch browser: %w", err)
-	}
-	env.browser = browser
-
-	return nil
-}
-
-// newAuthTestPage creates a new browser page for testing.
-func (env *authTestEnv) newAuthTestPage(t *testing.T) playwright.Page {
-	t.Helper()
-
-	page, err := env.browser.NewPage()
-	if err != nil {
-		t.Fatalf("could not create page: %v", err)
-	}
-
-	page.SetDefaultTimeout(10000) // 10 seconds
-
-	return page
-}
-
-// authTestNotesHandler provides simple API handlers for testing.
-type authTestNotesHandler struct{}
-
-func (h *authTestNotesHandler) ListNotes(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"notes":[]}`))
-}
-
-func (h *authTestNotesHandler) CreateNote(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(`{"id":"test-note-1","title":"Test","content":""}`))
-}
 
 // =============================================================================
 // Registration Flow Tests
@@ -302,18 +26,14 @@ func TestBrowser_Auth_Registration(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to register page
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate to register page: %v", err)
 	}
@@ -336,7 +56,7 @@ func TestBrowser_Auth_Registration(t *testing.T) {
 	}
 
 	// Fill registration form
-	testEmail := fmt.Sprintf("test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("test")
 	testPassword := "SecurePass123!"
 
 	// Fill email
@@ -394,18 +114,14 @@ func TestBrowser_Auth_Registration_PasswordMismatch(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to register page
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate to register page: %v", err)
 	}
@@ -440,22 +156,18 @@ func TestBrowser_Auth_PasswordLogin(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Pre-create a test user by registering first
-	testEmail := fmt.Sprintf("login-test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("login-test")
 	testPassword := "SecurePass123!"
 
 	// First register the user
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate to register page: %v", err)
 	}
@@ -476,7 +188,7 @@ func TestBrowser_Auth_PasswordLogin(t *testing.T) {
 	browserContext.ClearCookies()
 
 	// Now test login
-	_, err = page.Goto(env.baseURL + "/login")
+	_, err = page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
@@ -533,18 +245,14 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to login page
-	_, err := page.Goto(env.baseURL + "/login")
+	_, err := page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
@@ -559,7 +267,7 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 
 	// Find the magic link email input
 	magicEmailInput := page.Locator("#magic-email")
-	testEmail := fmt.Sprintf("magic-test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("magic-test")
 
 	err = magicEmailInput.Fill(testEmail)
 	if err != nil {
@@ -605,11 +313,11 @@ func TestBrowser_Auth_MagicLinkLogin(t *testing.T) {
 	}
 
 	// Verify email was captured by mock service
-	emailCount := env.emailService.Count()
+	emailCount := env.EmailService.Count()
 	if emailCount == 0 {
 		t.Error("Expected magic link email to be sent, but no emails captured")
 	} else {
-		lastEmail := env.emailService.LastEmail()
+		lastEmail := env.EmailService.LastEmail()
 		if lastEmail.To != testEmail {
 			t.Errorf("Email sent to wrong address: got %s, want %s", lastEmail.To, testEmail)
 		}
@@ -624,20 +332,16 @@ func TestBrowser_Auth_MagicLinkVerify(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// First, request a magic link
-	testEmail := fmt.Sprintf("verify-test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("verify-test")
 
-	_, err := page.Goto(env.baseURL + "/login")
+	_, err := page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
@@ -651,11 +355,11 @@ func TestBrowser_Auth_MagicLinkVerify(t *testing.T) {
 	})
 
 	// Extract magic link from mock email service
-	if env.emailService.Count() == 0 {
+	if env.EmailService.Count() == 0 {
 		t.Fatal("No magic link email was sent")
 	}
 
-	lastEmail := env.emailService.LastEmail()
+	lastEmail := env.EmailService.LastEmail()
 	magicLinkData, ok := lastEmail.Data.(email.MagicLinkData)
 	if !ok {
 		t.Fatalf("Email data is not MagicLinkData type: %T", lastEmail.Data)
@@ -701,18 +405,14 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to login page
-	_, err := page.Goto(env.baseURL + "/login")
+	_, err := page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
@@ -759,7 +459,7 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 	}
 
 	// Test 2: Fill email then click — should show success flash and send email
-	testEmail := fmt.Sprintf("forgot-test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("forgot-test")
 	loginEmailInput := page.Locator("#login-email")
 	err = loginEmailInput.Fill(testEmail)
 	if err != nil {
@@ -787,10 +487,10 @@ func TestBrowser_Auth_ForgotPasswordLink(t *testing.T) {
 	}
 
 	// Verify email was captured by mock service
-	if env.emailService.Count() == 0 {
+	if env.EmailService.Count() == 0 {
 		t.Fatal("No password reset email was captured")
 	}
-	lastEmail := env.emailService.LastEmail()
+	lastEmail := env.EmailService.LastEmail()
 	if lastEmail.To != testEmail {
 		t.Errorf("Email sent to wrong address: got %s, want %s", lastEmail.To, testEmail)
 	}
@@ -808,22 +508,18 @@ func TestBrowser_Auth_Logout(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// First, login
-	testEmail := fmt.Sprintf("logout-test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("logout-test")
 	testPassword := "SecurePass123!"
 
 	// Register and login
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -884,18 +580,14 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to password reset page
-	_, err := page.Goto(env.baseURL + "/password-reset")
+	_, err := page.Goto(env.BaseURL + "/password-reset")
 	if err != nil {
 		t.Fatalf("Failed to navigate to password reset page: %v", err)
 	}
@@ -917,7 +609,7 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 	}
 
 	// Fill email and submit
-	testEmail := fmt.Sprintf("reset-test-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("reset-test")
 	err = page.Locator("input[name='email']").Fill(testEmail)
 	if err != nil {
 		t.Fatalf("Failed to fill email: %v", err)
@@ -960,10 +652,10 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 	}
 
 	// Verify email was captured by mock service
-	if env.emailService.Count() == 0 {
+	if env.EmailService.Count() == 0 {
 		t.Fatal("No password reset email was captured")
 	}
-	lastEmail := env.emailService.LastEmail()
+	lastEmail := env.EmailService.LastEmail()
 	if lastEmail.To != testEmail {
 		t.Errorf("Email sent to wrong address: got %s, want %s", lastEmail.To, testEmail)
 	}
@@ -976,8 +668,8 @@ func TestBrowser_Auth_PasswordReset_RequestForm(t *testing.T) {
 	if !ok {
 		t.Fatalf("Email data is not PasswordResetData: %T", lastEmail.Data)
 	}
-	if !strings.HasPrefix(resetData.Link, env.baseURL) {
-		t.Errorf("Reset link should start with %s, got: %s", env.baseURL, resetData.Link)
+	if !strings.HasPrefix(resetData.Link, env.BaseURL) {
+		t.Errorf("Reset link should start with %s, got: %s", env.BaseURL, resetData.Link)
 	}
 }
 
@@ -986,21 +678,17 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Step 1: Register a user (need an account to reset password for)
-	testEmail := fmt.Sprintf("fullreset-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("fullreset")
 	originalPassword := "OriginalPass123!"
 
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate to register: %v", err)
 	}
@@ -1013,10 +701,10 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 
 	// Clear cookies (logout)
 	page.Context().ClearCookies()
-	env.emailService.Clear()
+	env.EmailService.Clear()
 
 	// Step 2: Request password reset from /password-reset page
-	_, err = page.Goto(env.baseURL + "/password-reset")
+	_, err = page.Goto(env.BaseURL + "/password-reset")
 	if err != nil {
 		t.Fatalf("Failed to navigate to password reset: %v", err)
 	}
@@ -1033,11 +721,11 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	}
 
 	// Step 3: Extract reset link from email
-	if env.emailService.Count() == 0 {
+	if env.EmailService.Count() == 0 {
 		t.Fatal("No password reset email was sent")
 	}
 
-	lastEmail := env.emailService.LastEmail()
+	lastEmail := env.EmailService.LastEmail()
 	resetData, ok := lastEmail.Data.(email.PasswordResetData)
 	if !ok {
 		t.Fatalf("Email data is not PasswordResetData: %T", lastEmail.Data)
@@ -1047,7 +735,7 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 	}
 
 	// Verify link uses correct base URL
-	if !strings.HasPrefix(resetData.Link, env.baseURL) {
+	if !strings.HasPrefix(resetData.Link, env.BaseURL) {
 		t.Errorf("Reset link should use test server URL, got: %s", resetData.Link)
 	}
 
@@ -1106,11 +794,10 @@ func TestBrowser_Auth_PasswordReset_FullFlow(t *testing.T) {
 // =============================================================================
 
 func TestBrowser_Auth_ServerHealth(t *testing.T) {
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
 
 	// Test server health without browser
-	resp, err := http.Get(env.baseURL + "/health")
+	resp, err := http.Get(env.BaseURL + "/health")
 	if err != nil {
 		t.Fatalf("Failed to reach health endpoint: %v", err)
 	}
@@ -1118,61 +805,6 @@ func TestBrowser_Auth_ServerHealth(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Health check failed with status: %d", resp.StatusCode)
-	}
-}
-
-func TestBrowser_Auth_LoginPageLoads(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping browser test in short mode")
-	}
-
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
-
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
-	defer page.Close()
-
-	// Navigate to login page
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate to login page: %v", err)
-	}
-
-	// Wait for page to load
-	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
-	if err != nil {
-		t.Fatalf("Page did not load: %v", err)
-	}
-
-	// Verify key elements are present
-	magicEmail := page.Locator("#magic-email")
-	count, err := magicEmail.Count()
-	if err != nil || count == 0 {
-		t.Error("Magic link email input not found")
-	}
-
-	loginEmail := page.Locator("#login-email")
-	count, err = loginEmail.Count()
-	if err != nil || count == 0 {
-		t.Error("Login email input not found")
-	}
-
-	loginPassword := page.Locator("#login-password")
-	count, err = loginPassword.Count()
-	if err != nil || count == 0 {
-		t.Error("Login password input not found")
-	}
-
-	googleBtn := page.Locator("button:has-text('Google')")
-	count, err = googleBtn.Count()
-	if err != nil || count == 0 {
-		t.Error("Google sign-in button not found")
 	}
 }
 
@@ -1185,17 +817,13 @@ func TestBrowser_Auth_GoogleOIDC_FullFlow(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
+	_, err := page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
@@ -1259,17 +887,13 @@ func TestBrowser_Auth_GoogleOIDC_ReturnTo(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login?return_to=/notes")
+	_, err := page.Goto(env.BaseURL + "/login?return_to=/notes")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login page: %v", err)
 	}
@@ -1328,24 +952,14 @@ func TestBrowser_Auth_SessionIsolation(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
-
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
 	// Create two separate browser contexts (like two users)
-	context1, err := env.browser.NewContext()
-	if err != nil {
-		t.Fatalf("Failed to create context 1: %v", err)
-	}
+	context1 := env.NewContext(t)
 	defer context1.Close()
 
-	context2, err := env.browser.NewContext()
-	if err != nil {
-		t.Fatalf("Failed to create context 2: %v", err)
-	}
+	context2 := env.NewContext(t)
 	defer context2.Close()
 
 	page1, err := context1.NewPage()
@@ -1361,10 +975,10 @@ func TestBrowser_Auth_SessionIsolation(t *testing.T) {
 	defer page2.Close()
 
 	// User 1 registers and logs in
-	user1Email := fmt.Sprintf("user1-%d@example.com", time.Now().UnixNano())
+	user1Email := GenerateUniqueEmail("user1")
 	password := "SecurePass123!"
 
-	page1.Goto(env.baseURL + "/register")
+	page1.Goto(env.BaseURL + "/register")
 	page1.Locator("input[name='email']").Fill(user1Email)
 	page1.Locator("input[name='password']").Fill(password)
 	page1.Locator("input[name='confirm_password']").Fill(password)
@@ -1373,7 +987,7 @@ func TestBrowser_Auth_SessionIsolation(t *testing.T) {
 	page1.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	// User 2 should not be logged in
-	page2.Goto(env.baseURL + "/notes")
+	page2.Goto(env.BaseURL + "/notes")
 	page2.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	// User 2 should be redirected to login (401 or redirect)
@@ -1395,21 +1009,17 @@ func TestBrowser_Auth_LoginWrongPassword(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Register a user first
-	testEmail := fmt.Sprintf("wrongpw-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("wrongpw")
 	testPassword := "SecurePass123!"
 
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1424,7 +1034,7 @@ func TestBrowser_Auth_LoginWrongPassword(t *testing.T) {
 	page.Context().ClearCookies()
 
 	// Try login with wrong password
-	_, err = page.Goto(env.baseURL + "/login")
+	_, err = page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate to login: %v", err)
 	}
@@ -1462,18 +1072,14 @@ func TestBrowser_Auth_LoginNonexistentEmail(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Try login with email that was never registered
-	_, err := page.Goto(env.baseURL + "/login")
+	_, err := page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1514,21 +1120,17 @@ func TestBrowser_Auth_RegisterDuplicateEmail(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	testEmail := fmt.Sprintf("dup-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("dup")
 	testPassword := "SecurePass123!"
 
 	// Register first time
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1542,7 +1144,7 @@ func TestBrowser_Auth_RegisterDuplicateEmail(t *testing.T) {
 	// Clear cookies and try to register again with same email
 	page.Context().ClearCookies()
 
-	_, err = page.Goto(env.baseURL + "/register")
+	_, err = page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1583,19 +1185,15 @@ func TestBrowser_Auth_PasswordResetConfirm_Mismatch(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Register user, request reset, get token
-	testEmail := fmt.Sprintf("mismatch-%d@example.com", time.Now().UnixNano())
-	_, err := page.Goto(env.baseURL + "/register")
+	testEmail := GenerateUniqueEmail("mismatch")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1607,10 +1205,10 @@ func TestBrowser_Auth_PasswordResetConfirm_Mismatch(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	page.Context().ClearCookies()
-	env.emailService.Clear()
+	env.EmailService.Clear()
 
 	// Request password reset
-	_, err = page.Goto(env.baseURL + "/password-reset")
+	_, err = page.Goto(env.BaseURL + "/password-reset")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1619,10 +1217,10 @@ func TestBrowser_Auth_PasswordResetConfirm_Mismatch(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	// Extract token from email
-	if env.emailService.Count() == 0 {
+	if env.EmailService.Count() == 0 {
 		t.Fatal("No reset email sent")
 	}
-	lastEmail := env.emailService.LastEmail()
+	lastEmail := env.EmailService.LastEmail()
 	resetData, ok := lastEmail.Data.(email.PasswordResetData)
 	if !ok {
 		t.Fatalf("Email data is not PasswordResetData: %T", lastEmail.Data)
@@ -1674,18 +1272,14 @@ func TestBrowser_Auth_PasswordResetConfirm_InvalidToken(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to reset confirm page with bogus token
-	_, err := page.Goto(env.baseURL + "/auth/password-reset-confirm?token=bogus-invalid-token")
+	_, err := page.Goto(env.BaseURL + "/auth/password-reset-confirm?token=bogus-invalid-token")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1723,18 +1317,14 @@ func TestBrowser_Auth_PasswordResetConfirm_MissingToken(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to reset confirm page with NO token
-	_, err := page.Goto(env.baseURL + "/auth/password-reset-confirm")
+	_, err := page.Goto(env.BaseURL + "/auth/password-reset-confirm")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1761,22 +1351,18 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Step 1: Register
-	testEmail := fmt.Sprintf("fullreset2-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("fullreset2")
 	originalPassword := "OriginalPass123!"
 	newPassword := "BrandNewPass456!"
 
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1788,10 +1374,10 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	page.Context().ClearCookies()
-	env.emailService.Clear()
+	env.EmailService.Clear()
 
 	// Step 2: Request password reset
-	_, err = page.Goto(env.baseURL + "/password-reset")
+	_, err = page.Goto(env.BaseURL + "/password-reset")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1800,10 +1386,10 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	// Step 3: Use reset link
-	if env.emailService.Count() == 0 {
+	if env.EmailService.Count() == 0 {
 		t.Fatal("No reset email sent")
 	}
-	resetData := env.emailService.LastEmail().Data.(email.PasswordResetData)
+	resetData := env.EmailService.LastEmail().Data.(email.PasswordResetData)
 
 	_, err = page.Goto(resetData.Link)
 	if err != nil {
@@ -1844,7 +1430,7 @@ func TestBrowser_Auth_PasswordReset_ThenLoginWithNewPassword(t *testing.T) {
 
 	// Step 5: Verify old password no longer works
 	page.Context().ClearCookies()
-	_, err = page.Goto(env.baseURL + "/login")
+	_, err = page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1879,21 +1465,17 @@ func TestBrowser_Auth_ReturnTo_LoginRedirect(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Register user
-	testEmail := fmt.Sprintf("returnto-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("returnto")
 	testPassword := "SecurePass123!"
 
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1907,7 +1489,7 @@ func TestBrowser_Auth_ReturnTo_LoginRedirect(t *testing.T) {
 	page.Context().ClearCookies()
 
 	// Visit login page with return_to
-	_, err = page.Goto(env.baseURL + "/login?return_to=/notes")
+	_, err = page.Goto(env.BaseURL + "/login?return_to=/notes")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1942,18 +1524,14 @@ func TestBrowser_Auth_ReturnTo_RegisterPropagation(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Visit login page with return_to, then click "create a new account"
-	_, err := page.Goto(env.baseURL + "/login?return_to=/notes")
+	_, err := page.Goto(env.BaseURL + "/login?return_to=/notes")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -1982,7 +1560,7 @@ func TestBrowser_Auth_ReturnTo_RegisterPropagation(t *testing.T) {
 	}
 
 	// Register and verify redirect goes to return_to
-	testEmail := fmt.Sprintf("regreturn-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("regreturn")
 	page.Locator("input[name='email']").Fill(testEmail)
 	page.Locator("input[name='password']").Fill("SecurePass123!")
 	page.Locator("input[name='confirm_password']").Fill("SecurePass123!")
@@ -2005,21 +1583,17 @@ func TestBrowser_Auth_LogoutThenAccessProtected(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Register and login
-	testEmail := fmt.Sprintf("logoutprot-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("logoutprot")
 	testPassword := "SecurePass123!"
 
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2036,14 +1610,14 @@ func TestBrowser_Auth_LogoutThenAccessProtected(t *testing.T) {
 	}
 
 	// Navigate to logout
-	_, err = page.Goto(env.baseURL + "/auth/logout")
+	_, err = page.Goto(env.BaseURL + "/auth/logout")
 	if err != nil {
 		t.Fatalf("Failed to navigate to logout: %v", err)
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	// Try to access /notes — should redirect to /login
-	_, err = page.Goto(env.baseURL + "/notes")
+	_, err = page.Goto(env.BaseURL + "/notes")
 	if err != nil {
 		t.Fatalf("Failed to navigate to /notes: %v", err)
 	}
@@ -2064,18 +1638,14 @@ func TestBrowser_Auth_LandingRedirect_Unauthenticated(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Visit / without auth
-	_, err := page.Goto(env.baseURL + "/")
+	_, err := page.Goto(env.BaseURL + "/")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2092,20 +1662,16 @@ func TestBrowser_Auth_LandingRedirect_Authenticated(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Register to get authenticated
-	testEmail := fmt.Sprintf("landing-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("landing")
 
-	_, err := page.Goto(env.baseURL + "/register")
+	_, err := page.Goto(env.BaseURL + "/register")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2117,7 +1683,7 @@ func TestBrowser_Auth_LandingRedirect_Authenticated(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateNetworkidle})
 
 	// Now visit / — should redirect to /notes
-	_, err = page.Goto(env.baseURL + "/")
+	_, err = page.Goto(env.BaseURL + "/")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2138,24 +1704,20 @@ func TestBrowser_Auth_MagicLinkDialog_CloseButton(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
+	_, err := page.Goto(env.BaseURL + "/login")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
 
 	// Fill email and submit magic link
-	testEmail := fmt.Sprintf("dialogclose-%d@example.com", time.Now().UnixNano())
+	testEmail := GenerateUniqueEmail("dialogclose")
 	page.Locator("#magic-email").Fill(testEmail)
 	page.Locator("button[type='submit']:has-text('Send Magic Link')").Click()
 
@@ -2197,12 +1759,8 @@ func TestBrowser_Auth_FlashMessages_LoginPage(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
-
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
 	tests := []struct {
 		name     string
@@ -2238,10 +1796,10 @@ func TestBrowser_Auth_FlashMessages_LoginPage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			page := env.newAuthTestPage(t)
+			page := env.NewPage(t)
 			defer page.Close()
 
-			_, err := page.Goto(env.baseURL + "/login" + tt.query)
+			_, err := page.Goto(env.BaseURL + "/login" + tt.query)
 			if err != nil {
 				t.Fatalf("Failed to navigate: %v", err)
 			}
@@ -2273,17 +1831,13 @@ func TestBrowser_Auth_PasswordResetPage_BackToLogin(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/password-reset")
+	_, err := page.Goto(env.BaseURL + "/password-reset")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2315,17 +1869,13 @@ func TestBrowser_Auth_PasswordResetPage_NonexistentEmail(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/password-reset")
+	_, err := page.Goto(env.BaseURL + "/password-reset")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2366,18 +1916,14 @@ func TestBrowser_Auth_RegisterPage_SignInLink(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initAuthTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newAuthTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Visit register page with return_to
-	_, err := page.Goto(env.baseURL + "/register?return_to=/notes")
+	_, err := page.Goto(env.BaseURL + "/register?return_to=/notes")
 	if err != nil {
 		t.Fatalf("Failed to navigate: %v", err)
 	}
@@ -2405,71 +1951,170 @@ func TestBrowser_Auth_RegisterPage_SignInLink(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// Test Utilities
-// =============================================================================
-
-// generateAuthTestMasterKey creates a deterministic master key for testing.
-func generateAuthTestMasterKey() []byte {
-	key, _ := hex.DecodeString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	return key
-}
-
-// parallelAuthBrowserTest runs multiple browser tests concurrently.
-func parallelAuthBrowserTest(t *testing.T, env *authTestEnv, numUsers int, testFunc func(t *testing.T, page playwright.Page, userIndex int)) {
-	var wg sync.WaitGroup
-	errors := make(chan error, numUsers)
-
-	for i := 0; i < numUsers; i++ {
-		wg.Add(1)
-		go func(userIndex int) {
-			defer wg.Done()
-
-			ctx, err := env.browser.NewContext()
-			if err != nil {
-				errors <- fmt.Errorf("user %d: failed to create context: %w", userIndex, err)
-				return
-			}
-			defer ctx.Close()
-
-			page, err := ctx.NewPage()
-			if err != nil {
-				errors <- fmt.Errorf("user %d: failed to create page: %w", userIndex, err)
-				return
-			}
-			defer page.Close()
-
-			testFunc(t, page, userIndex)
-		}(i)
+// TestBrowser_Auth_RegisterPage_GoogleOnTop verifies the register page layout:
+// Google sign-up button on top, "or" divider, password form below.
+func TestBrowser_Auth_RegisterPage_GoogleOnTop(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
 	}
 
-	wg.Wait()
-	close(errors)
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	for err := range errors {
-		if err != nil {
-			t.Error(err)
-		}
+	page := env.NewPage(t)
+	defer page.Close()
+
+	_, err := page.Goto(env.BaseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate to register page: %v", err)
 	}
-}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
 
-// waitForAuthElement waits for an element to be visible with a custom timeout.
-func waitForAuthElement(page playwright.Page, selector string, timeout float64) error {
-	return page.Locator(selector).WaitFor(playwright.LocatorWaitForOptions{
+	// The themed-card should contain: Google button, then divider, then password form.
+	card := page.Locator(".themed-card")
+
+	// Google button should exist and be visible inside the card
+	googleBtn := card.Locator("button:has-text('Sign up with Google')")
+	err = googleBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(timeout),
+		Timeout: playwright.Float(5000),
 	})
+	if err != nil {
+		t.Fatalf("Google sign-up button not visible in card: %v", err)
+	}
+
+	// Divider should say "or" (not "or sign up with")
+	dividerText := card.Locator("span:has-text('or')")
+	text, err := dividerText.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get divider text: %v", err)
+	}
+	if strings.TrimSpace(text) != "or" {
+		t.Errorf("Divider should say 'or', got %q", strings.TrimSpace(text))
+	}
+
+	// Google button should appear BEFORE the email input in DOM order.
+	// Evaluate JS to check relative position.
+	googleAboveEmail, err := page.Evaluate(`() => {
+		const card = document.querySelector('.themed-card');
+		const googleBtn = card.querySelector('button[type="submit"]');
+		const emailInput = card.querySelector('input[name="email"]');
+		if (!googleBtn || !emailInput) return false;
+		const googleRect = googleBtn.getBoundingClientRect();
+		const emailRect = emailInput.getBoundingClientRect();
+		return googleRect.bottom <= emailRect.top;
+	}`)
+	if err != nil {
+		t.Fatalf("Failed to evaluate layout positions: %v", err)
+	}
+	if googleAboveEmail != true {
+		t.Error("Google button should appear above the email input (Google on top, password form below)")
+	}
+
+	// Password form fields should still exist below
+	emailInput := card.Locator("input[name='email']")
+	passwordInput := card.Locator("input[name='password']")
+	confirmInput := card.Locator("input[name='confirm_password']")
+	termsCheckbox := card.Locator("input[name='terms']")
+
+	for _, loc := range []playwright.Locator{emailInput, passwordInput, confirmInput, termsCheckbox} {
+		visible, err := loc.IsVisible()
+		if err != nil {
+			t.Fatalf("Failed to check visibility: %v", err)
+		}
+		if !visible {
+			t.Error("Password form field should be visible below the divider")
+		}
+	}
 }
 
-// extractTokenFromAuthURL extracts a token parameter from a URL.
-func extractTokenFromAuthURL(url string) string {
-	if idx := strings.Index(url, "token="); idx != -1 {
-		start := idx + 6
-		end := strings.IndexAny(url[start:], "&# ")
-		if end == -1 {
-			return url[start:]
-		}
-		return url[start : start+end]
+// TestBrowser_Auth_DefaultTheme_CardNoTranslateOnHover verifies that hovering
+// over a themed-card in the default theme does NOT cause a translateY shift.
+func TestBrowser_Auth_DefaultTheme_CardNoTranslateOnHover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
 	}
-	return ""
+
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
+
+	page := env.NewPage(t)
+	defer page.Close()
+
+	// Use the register page (any page with a themed-card works)
+	_, err := page.Goto(env.BaseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to navigate: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	// Ensure we're in default theme
+	_, err = page.Evaluate(`() => {
+		localStorage.setItem('ci_theme', 'default');
+	}`)
+	if err != nil {
+		t.Fatalf("Failed to set theme: %v", err)
+	}
+	// Reload to apply theme
+	_, err = page.Goto(env.BaseURL + "/register")
+	if err != nil {
+		t.Fatalf("Failed to reload: %v", err)
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: playwright.LoadStateDomcontentloaded})
+
+	card := page.Locator(".themed-card")
+	err = card.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	})
+	if err != nil {
+		t.Fatalf("Card not visible: %v", err)
+	}
+
+	// Get position before hover
+	beforeY, err := page.Evaluate(`() => {
+		const card = document.querySelector('.themed-card');
+		return card.getBoundingClientRect().top;
+	}`)
+	if err != nil {
+		t.Fatalf("Failed to get card position before hover: %v", err)
+	}
+
+	// Hover over the card
+	err = card.Hover()
+	if err != nil {
+		t.Fatalf("Failed to hover over card: %v", err)
+	}
+
+	// Small delay for CSS transition
+	page.WaitForTimeout(300)
+
+	// Get position after hover
+	afterY, err := page.Evaluate(`() => {
+		const card = document.querySelector('.themed-card');
+		return card.getBoundingClientRect().top;
+	}`)
+	if err != nil {
+		t.Fatalf("Failed to get card position after hover: %v", err)
+	}
+
+	// Card should NOT move vertically
+	beforeF, _ := beforeY.(float64)
+	afterF, _ := afterY.(float64)
+	if beforeF != afterF {
+		t.Errorf("Card moved on hover: before Y=%.1f, after Y=%.1f (translateY bug)", beforeF, afterF)
+	}
+
+	// Also verify no translateY in computed style
+	transform, err := page.Evaluate(`() => {
+		const card = document.querySelector('.themed-card');
+		return getComputedStyle(card).transform;
+	}`)
+	if err != nil {
+		t.Fatalf("Failed to get computed transform: %v", err)
+	}
+	transformStr, _ := transform.(string)
+	if transformStr != "none" && transformStr != "" {
+		t.Errorf("Card should have no transform on hover in default theme, got %q", transformStr)
+	}
 }

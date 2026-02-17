@@ -22,24 +22,14 @@ func TestBrowser_DarkMode_ToggleCycles(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to login page (uses base.html with nav bar controls)
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 
 	// Clear any previous localStorage state
 	page.Evaluate(`() => { localStorage.removeItem('ci_darkmode'); localStorage.removeItem('ci_theme'); }`)
@@ -102,36 +92,20 @@ func TestBrowser_DarkMode_PersistsAcrossNavigation(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Navigate to login page
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 
 	// Set dark mode via localStorage directly
 	page.Evaluate(`() => localStorage.setItem('ci_darkmode', 'dark')`)
 
 	// Navigate to a different page
-	_, err = page.Goto(env.baseURL + "/about")
-	if err != nil {
-		t.Fatalf("Failed to navigate to about: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/about")
 
 	// html should have dark class
 	htmlClass, _ := page.Locator("html").GetAttribute("class")
@@ -157,23 +131,13 @@ func TestBrowser_ThemeSwitcher_SwatchesPresent(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 
 	for _, theme := range []string{"default", "academic", "neonfizz"} {
 		swatch := page.Locator("button[data-theme='" + theme + "']")
@@ -191,23 +155,13 @@ func TestBrowser_ThemeSwitcher_DefaultHasRing(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 
 	// Clear localStorage
 	page.Evaluate(`() => localStorage.removeItem('ci_theme')`)
@@ -243,23 +197,13 @@ func TestBrowser_ThemeSwitcher_SetsLocalStorage(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 
 	// Clear localStorage
 	page.Evaluate(`() => localStorage.removeItem('ci_theme')`)
@@ -301,34 +245,18 @@ func TestBrowser_ThemeSwitcher_PersistsAcrossNavigation(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
 	// Set theme via localStorage
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 	page.Evaluate(`() => localStorage.setItem('ci_theme', 'neonfizz')`)
 
 	// Navigate to a different page
-	_, err = page.Goto(env.baseURL + "/about")
-	if err != nil {
-		t.Fatalf("Failed to navigate to about: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/about")
 
 	// Verify localStorage still has the theme
 	storedTheme, err := page.Evaluate(`() => localStorage.getItem('ci_theme')`)
@@ -358,18 +286,11 @@ func TestBrowser_Appearance_DefaultState(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
-
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
 	// Create a fresh context to ensure clean localStorage
-	ctx, err := env.browser.NewContext()
-	if err != nil {
-		t.Fatalf("Failed to create browser context: %v", err)
-	}
+	ctx := env.NewContext(t)
 	defer ctx.Close()
 
 	page, err := ctx.NewPage()
@@ -379,13 +300,7 @@ func TestBrowser_Appearance_DefaultState(t *testing.T) {
 	defer page.Close()
 	page.SetDefaultTimeout(10000)
 
-	_, err = page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 
 	// Default theme swatch should have ring
 	defaultSwatch := page.Locator("button[data-theme='default']")
@@ -413,6 +328,53 @@ func TestBrowser_Appearance_DefaultState(t *testing.T) {
 }
 
 // =============================================================================
+// Appearance Controls Placement Tests
+// =============================================================================
+
+// TestBrowser_AppearanceControls_InFooterNotNav verifies that appearance controls
+// (dark mode toggle + theme swatches) are in the footer, not in the nav bar.
+func TestBrowser_AppearanceControls_InFooterNotNav(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
+
+	page := env.NewPage(t)
+	defer page.Close()
+
+	// Navigate to login page (uses base.html with nav + footer)
+	Navigate(t, page, env.BaseURL, "/login")
+
+	// Appearance controls should be inside the footer
+	footerToggle := page.Locator("footer #darkmode-toggle")
+	count, err := footerToggle.Count()
+	if err != nil || count == 0 {
+		t.Error("Dark mode toggle should be inside <footer>")
+	}
+
+	footerSwatches := page.Locator("footer #theme-swatches")
+	count, err = footerSwatches.Count()
+	if err != nil || count == 0 {
+		t.Error("Theme swatches should be inside <footer>")
+	}
+
+	// Appearance controls should NOT be inside the nav
+	navToggle := page.Locator("nav #darkmode-toggle")
+	count, err = navToggle.Count()
+	if err != nil || count != 0 {
+		t.Error("Dark mode toggle should NOT be inside <nav>")
+	}
+
+	navSwatches := page.Locator("nav #theme-swatches")
+	count, err = navSwatches.Count()
+	if err != nil || count != 0 {
+		t.Error("Theme swatches should NOT be inside <nav>")
+	}
+}
+
+// =============================================================================
 // Per-Theme Visual Assertion Tests
 // =============================================================================
 
@@ -421,20 +383,13 @@ func TestBrowser_ThemeVisual_DefaultAttributes(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
+	Navigate(t, page, env.BaseURL, "/login")
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'default'); localStorage.removeItem('ci_darkmode'); }`)
 	page.Reload()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -481,20 +436,13 @@ func TestBrowser_ThemeVisual_AcademicAttributes(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
-
-	page := env.newStaticTestPage(t)
+	page := env.NewPage(t)
 	defer page.Close()
 
-	_, err := page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
+	Navigate(t, page, env.BaseURL, "/login")
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'academic'); localStorage.removeItem('ci_darkmode'); }`)
 	page.Reload()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -558,18 +506,11 @@ func TestBrowser_ThemeVisual_NeonfizzAttributes(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
-
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
 	// Fresh context for clean localStorage
-	ctx, err := env.browser.NewContext()
-	if err != nil {
-		t.Fatalf("Failed to create browser context: %v", err)
-	}
+	ctx := env.NewContext(t)
 	defer ctx.Close()
 
 	page, err := ctx.NewPage()
@@ -579,13 +520,7 @@ func TestBrowser_ThemeVisual_NeonfizzAttributes(t *testing.T) {
 	defer page.Close()
 	page.SetDefaultTimeout(10000)
 
-	_, err = page.Goto(env.baseURL + "/login")
-	if err != nil {
-		t.Fatalf("Failed to navigate: %v", err)
-	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
+	Navigate(t, page, env.BaseURL, "/login")
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'neonfizz'); localStorage.removeItem('ci_darkmode'); }`)
 	page.Reload()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{

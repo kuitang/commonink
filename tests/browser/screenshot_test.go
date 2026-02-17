@@ -16,12 +16,8 @@ func TestScreenshot_AllThemes(t *testing.T) {
 		t.Skip("Skipping screenshot test in short mode")
 	}
 
-	env, cleanup := setupStaticTestEnv(t)
-	defer cleanup()
-
-	if err := env.initStaticTestBrowser(t); err != nil {
-		t.Skip("Playwright not available:", err)
-	}
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
 	// Create screenshots directory
 	screenshotDir := filepath.Join(os.TempDir(), "agent-notes-screenshots")
@@ -44,10 +40,7 @@ func TestScreenshot_AllThemes(t *testing.T) {
 	for _, theme := range themes {
 		t.Run(theme, func(t *testing.T) {
 			// Fresh context per theme for clean state
-			ctx, err := env.browser.NewContext()
-			if err != nil {
-				t.Fatalf("Failed to create context: %v", err)
-			}
+			ctx := env.NewContext(t)
 			defer ctx.Close()
 
 			page, err := ctx.NewPage()
@@ -59,7 +52,7 @@ func TestScreenshot_AllThemes(t *testing.T) {
 			page.SetViewportSize(1280, 800)
 
 			// Navigate to first page to set localStorage
-			_, err = page.Goto(env.baseURL + "/login")
+			_, err = page.Goto(env.BaseURL + "/login")
 			if err != nil {
 				t.Fatalf("Failed to navigate: %v", err)
 			}
@@ -71,7 +64,7 @@ func TestScreenshot_AllThemes(t *testing.T) {
 			page.Evaluate(`(t) => { localStorage.setItem('ci_theme', t); localStorage.removeItem('ci_darkmode'); }`, theme)
 
 			for _, p := range pages {
-				_, err := page.Goto(env.baseURL + p.path)
+				_, err := page.Goto(env.BaseURL + p.path)
 				if err != nil {
 					t.Errorf("[%s] Failed to navigate to %s: %v", theme, p.path, err)
 					continue

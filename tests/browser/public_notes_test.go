@@ -3,263 +3,12 @@
 package browser
 
 import (
-	"context"
-	"encoding/hex"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/johannesboyne/gofakes3"
-	"github.com/johannesboyne/gofakes3/backend/s3mem"
-	"github.com/kuitang/agent-notes/internal/auth"
-	"github.com/kuitang/agent-notes/internal/crypto"
-	"github.com/kuitang/agent-notes/internal/db"
-	"github.com/kuitang/agent-notes/internal/email"
-	"github.com/kuitang/agent-notes/internal/notes"
-	"github.com/kuitang/agent-notes/internal/ratelimit"
-	"github.com/kuitang/agent-notes/internal/s3client"
-	"github.com/kuitang/agent-notes/internal/shorturl"
-	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/playwright-community/playwright-go"
 )
-
-const (
-	publicNotesTestBucketName = "test-bucket-public-notes"
-	publicNotesTestMasterKey  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 64 hex chars = 32 bytes, deterministic test key
-)
-
-// publicNotesTestServer encapsulates the test server and all its dependencies for public notes tests.
-type publicNotesTestServer struct {
-	server         *httptest.Server
-	sessionsDB     *db.SessionsDB
-	s3Client       *s3client.Client
-	fakeS3Server   *httptest.Server
-	sessionService *auth.SessionService
-	userService    *auth.UserService
-	publicNotes    *notes.PublicNoteService
-	keyManager     *crypto.KeyManager
-	baseURL        string
-}
-
-// close cleans up all test server resources.
-func (ts *publicNotesTestServer) close() {
-	if ts.server != nil {
-		ts.server.Close()
-	}
-	if ts.fakeS3Server != nil {
-		ts.fakeS3Server.Close()
-	}
-	db.CloseAll()
-}
-
-// setupPublicNotesTestServer creates a fully configured test server with mock S3.
-func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
-	t.Helper()
-
-	// Reset database singleton and set fresh data directory
-	db.ResetForTesting()
-	db.DataDirectory = t.TempDir()
-
-	// Create fake S3 server
-	backend := s3mem.New()
-	faker := gofakes3.New(backend)
-	fakeS3Server := httptest.NewServer(faker.Server())
-
-	// Create S3 client configured for fake server
-	ctx := context.Background()
-	sdkConfig, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider("test-key", "test-secret", ""),
-		),
-	)
-	if err != nil {
-		t.Fatalf("failed to load AWS config: %v", err)
-	}
-
-	s3SDK := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(fakeS3Server.URL)
-		o.UsePathStyle = true
-	})
-
-	// Create bucket
-	_, err = s3SDK.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(publicNotesTestBucketName),
-	})
-	if err != nil {
-		t.Fatalf("failed to create test bucket: %v", err)
-	}
-
-	s3Client := s3client.NewFromS3Client(s3SDK, publicNotesTestBucketName, fakeS3Server.URL+"/"+publicNotesTestBucketName)
-
-	// Initialize sessions database
-	sessionsDB, err := db.OpenSessionsDB()
-	if err != nil {
-		t.Fatalf("failed to open sessions DB: %v", err)
-	}
-
-	// Initialize key manager
-	masterKey, err := hex.DecodeString(publicNotesTestMasterKey)
-	if err != nil {
-		t.Fatalf("failed to decode master key: %v", err)
-	}
-	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
-
-	// Initialize template renderer
-	// Try relative path first, then absolute path
-	templatesDir := "./web/templates"
-	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
-		templatesDir = "../../web/templates"
-	}
-	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
-		templatesDir = "/home/kuitang/git/agent-notes/web/templates"
-	}
-
-	renderer, err := web.NewRenderer(templatesDir)
-	if err != nil {
-		t.Fatalf("failed to create renderer: %v", err)
-	}
-
-	// Initialize middleware
-	sessionService := auth.NewSessionService(sessionsDB)
-	authMiddleware := auth.NewMiddleware(sessionService, keyManager)
-
-	// Create mux and server first to get the URL
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-
-	// Now create services that need server.URL
-	emailService := email.NewMockEmailService()
-	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL)
-	consentService := auth.NewConsentService(sessionsDB)
-
-	// Create short URL service
-	shortURLSvc := shorturl.NewService(sessionsDB.Queries())
-
-	// Create public notes service with short URL support
-	publicNotes := notes.NewPublicNoteService(s3Client).
-		WithShortURLService(shortURLSvc, server.URL)
-
-	// Create web handler with short URL service
-	webHandler := web.NewWebHandler(
-		renderer,
-		nil, // notesService created per-request
-		publicNotes,
-		userService,
-		sessionService,
-		consentService,
-		s3Client,
-		shortURLSvc,
-		server.URL,
-	)
-
-	// Register routes on mux (already used by server, but routes are additive)
-	webHandler.RegisterRoutes(mux, authMiddleware)
-
-	// Health check
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// Rate limit middleware for API routes
-	rateLimiter := ratelimit.NewRateLimiter(ratelimit.Config{
-		FreeRPS:         10000,
-		FreeBurst:       10000,
-		PaidRPS:         10000,
-		PaidBurst:       10000,
-		CleanupInterval: time.Hour,
-	})
-	getUserID := func(r *http.Request) string {
-		return auth.GetUserID(r.Context())
-	}
-	getIsPaid := func(r *http.Request) bool {
-		return false
-	}
-	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
-
-	// Notes API (needed for some operations)
-	notesHandler := &publicNotesAPIHandler{}
-	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.listNotes))))
-	mux.Handle("POST /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.createNote))))
-
-	ts := &publicNotesTestServer{
-		server:         server,
-		sessionsDB:     sessionsDB,
-		s3Client:       s3Client,
-		fakeS3Server:   fakeS3Server,
-		sessionService: sessionService,
-		userService:    userService,
-		publicNotes:    publicNotes,
-		keyManager:     keyManager,
-		baseURL:        server.URL,
-	}
-
-	return ts
-}
-
-// publicNotesAPIHandler provides simple API handlers for testing.
-type publicNotesAPIHandler struct{}
-
-func (h *publicNotesAPIHandler) listNotes(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"notes":[]}`))
-}
-
-func (h *publicNotesAPIHandler) createNote(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(`{"id":"test-note-1","title":"Test","content":""}`))
-}
-
-// createTestUser creates a test user and returns the user ID.
-func (ts *publicNotesTestServer) createTestUser(t *testing.T, email string) string {
-	t.Helper()
-	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByProvider(ctx, email)
-	if err != nil {
-		t.Fatalf("failed to create test user: %v", err)
-	}
-	return user.ID
-}
-
-// loginAs creates a session for the given user and returns the session ID.
-func (ts *publicNotesTestServer) loginAs(t *testing.T, userID string) string {
-	t.Helper()
-	ctx := context.Background()
-	sessionID, err := ts.sessionService.Create(ctx, userID)
-	if err != nil {
-		t.Fatalf("failed to create session: %v", err)
-	}
-	return sessionID
-}
-
-// setPublicNotesSessionCookie sets the session cookie on a Playwright browser context.
-func setPublicNotesSessionCookie(t *testing.T, context playwright.BrowserContext, baseURL, sessionID string) {
-	t.Helper()
-	err := context.AddCookies([]playwright.OptionalCookie{
-		{
-			Name:     auth.SessionCookieName,
-			Value:    sessionID,
-			Domain:   playwright.String("127.0.0.1"),
-			Path:     playwright.String("/"),
-			HttpOnly: playwright.Bool(true),
-			Secure:   playwright.Bool(false), // Test server is HTTP
-			SameSite: playwright.SameSiteAttributeLax,
-		},
-	})
-	if err != nil {
-		t.Fatalf("failed to set session cookie: %v", err)
-	}
-}
 
 // TestBrowser_PublishNote tests creating a note and making it public.
 func TestBrowser_PublishNote(t *testing.T) {
@@ -267,75 +16,21 @@ func TestBrowser_PublishNote(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	// Start Playwright
-	pw, err := playwright.Run()
-	if err != nil {
-		t.Fatalf("failed to start playwright: %v", err)
-	}
-	defer pw.Stop()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	// Launch browser
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		t.Fatalf("failed to launch browser: %v", err)
-	}
-	defer browser.Close()
+	authCtx := env.NewContext(t)
+	defer authCtx.Close()
+	env.LoginUser(t, authCtx, "test@example.com")
 
-	// Set up test server
-	ts := setupPublicNotesTestServer(t)
-	defer ts.close()
-
-	// Create test user and session
-	userID := ts.createTestUser(t, "test@example.com")
-	sessionID := ts.loginAs(t, userID)
-
-	// Create browser context with session cookie
-	context, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create browser context: %v", err)
-	}
-	defer context.Close()
-
-	setPublicNotesSessionCookie(t, context, ts.baseURL, sessionID)
-
-	// Create page
-	page, err := context.NewPage()
+	page, err := authCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create page: %v", err)
 	}
+	defer page.Close()
 
-	// Navigate to new note page
-	_, err = page.Goto(ts.baseURL + "/notes/new")
-	if err != nil {
-		t.Fatalf("failed to navigate to new note page: %v", err)
-	}
-
-	// Fill in note form
-	err = page.Locator("input#title").Fill("My Test Note")
-	if err != nil {
-		t.Fatalf("failed to fill title: %v", err)
-	}
-
-	err = page.Locator("textarea#content").Fill("This is the content of my test note.\n\nIt has multiple paragraphs.")
-	if err != nil {
-		t.Fatalf("failed to fill content: %v", err)
-	}
-
-	// Submit the form
-	err = page.Locator("button[type='submit']:has-text('Create')").Click()
-	if err != nil {
-		t.Fatalf("failed to click submit: %v", err)
-	}
-
-	// Wait for navigation to the note view page
-	err = page.WaitForURL(fmt.Sprintf("%s/notes/**", ts.baseURL), playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for note view page: %v", err)
-	}
+	// Create note via UI
+	CreateNoteViaUI(t, page, env.BaseURL, "My Test Note", "This is the content of my test note.\n\nIt has multiple paragraphs.")
 
 	// Verify note title is displayed
 	titleText, err := page.Locator("h1").TextContent()
@@ -402,250 +97,28 @@ func TestBrowser_PublishNote(t *testing.T) {
 	}
 }
 
-// TestBrowser_ViewPublicNoteWithoutAuth tests viewing a public note without authentication.
-func TestBrowser_ViewPublicNoteWithoutAuth(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping browser test in short mode")
-	}
-
-	// Start Playwright
-	pw, err := playwright.Run()
-	if err != nil {
-		t.Fatalf("failed to start playwright: %v", err)
-	}
-	defer pw.Stop()
-
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		t.Fatalf("failed to launch browser: %v", err)
-	}
-	defer browser.Close()
-
-	ts := setupPublicNotesTestServer(t)
-	defer ts.close()
-
-	// Create and login as test user
-	userID := ts.createTestUser(t, "author@example.com")
-	sessionID := ts.loginAs(t, userID)
-
-	// Create authenticated context and page to create the note
-	authContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create auth context: %v", err)
-	}
-	defer authContext.Close()
-
-	setPublicNotesSessionCookie(t, authContext, ts.baseURL, sessionID)
-
-	authPage, err := authContext.NewPage()
-	if err != nil {
-		t.Fatalf("failed to create auth page: %v", err)
-	}
-
-	// Create a note
-	_, err = authPage.Goto(ts.baseURL + "/notes/new")
-	if err != nil {
-		t.Fatalf("failed to navigate to new note page: %v", err)
-	}
-
-	err = authPage.Locator("input#title").Fill("Public Note Title")
-	if err != nil {
-		t.Fatalf("failed to fill title: %v", err)
-	}
-
-	err = authPage.Locator("textarea#content").Fill("This content should be visible to everyone.")
-	if err != nil {
-		t.Fatalf("failed to fill content: %v", err)
-	}
-
-	err = authPage.Locator("button[type='submit']:has-text('Create')").Click()
-	if err != nil {
-		t.Fatalf("failed to submit form: %v", err)
-	}
-
-	// Wait for note page
-	err = authPage.WaitForURL(fmt.Sprintf("%s/notes/**", ts.baseURL), playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for note page: %v", err)
-	}
-
-	// Make it public
-	err = authPage.Locator("button:has-text('Make Public')").Click()
-	if err != nil {
-		t.Fatalf("failed to click Make Public: %v", err)
-	}
-
-	err = authPage.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for page load: %v", err)
-	}
-
-	// Get the share URL
-	shareURLInput := authPage.Locator("input#share-url")
-	shareURL, err := shareURLInput.InputValue()
-	if err != nil {
-		t.Fatalf("failed to get share URL: %v", err)
-	}
-
-	if shareURL == "" {
-		t.Fatal("share URL is empty")
-	}
-
-	// Regression: share URL must be a short URL
-	if !strings.Contains(shareURL, "/pub/") {
-		t.Fatalf("share URL must be a short URL (/pub/...), got: %s", shareURL)
-	}
-
-	// Now create a new browser context WITHOUT authentication (incognito-like)
-	anonContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create anon context: %v", err)
-	}
-	defer anonContext.Close()
-
-	anonPage, err := anonContext.NewPage()
-	if err != nil {
-		t.Fatalf("failed to create anon page: %v", err)
-	}
-
-	// Navigate to the short URL - renders inline at /pub/
-	_, err = anonPage.Goto(shareURL)
-	if err != nil {
-		t.Fatalf("failed to navigate to share URL: %v", err)
-	}
-
-	// URL should stay at /pub/ (no redirect to /public/)
-	finalURL := anonPage.URL()
-	if !strings.Contains(finalURL, "/pub/") {
-		t.Fatalf("expected URL to stay at /pub/..., got: %s", finalURL)
-	}
-
-	// Verify note title is visible
-	titleText, err := anonPage.Locator("h1").TextContent()
-	if err != nil {
-		t.Fatalf("failed to get title: %v", err)
-	}
-
-	if titleText == "" {
-		t.Error("title should not be empty on public note page")
-	}
-
-	// Verify "Public Note" badge is visible
-	publicBadge := anonPage.Locator("span:has-text('Public Note')")
-	isVisible, err := publicBadge.IsVisible()
-	if err != nil {
-		t.Fatalf("failed to check public badge: %v", err)
-	}
-	if !isVisible {
-		t.Error("Public Note badge should be visible")
-	}
-
-	// Verify minimal chrome: wordmark present, no full nav/footer
-	wordmark := anonPage.Locator("header a:has-text('common.ink')")
-	wordmarkVisible, err := wordmark.IsVisible()
-	if err != nil {
-		t.Fatalf("failed to check wordmark: %v", err)
-	}
-	if !wordmarkVisible {
-		t.Error("public note page should show 'common.ink' wordmark")
-	}
-
-	navCount, _ := anonPage.Locator("nav").Count()
-	if navCount > 0 {
-		t.Error("public note page should NOT have a <nav> element")
-	}
-
-	footerCount, _ := anonPage.Locator("footer").Count()
-	if footerCount > 0 {
-		t.Error("public note page should NOT have a <footer> element")
-	}
-}
-
 // TestBrowser_UnpublishNote tests making a public note private again.
 func TestBrowser_UnpublishNote(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	pw, err := playwright.Run()
-	if err != nil {
-		t.Fatalf("failed to start playwright: %v", err)
-	}
-	defer pw.Stop()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		t.Fatalf("failed to launch browser: %v", err)
-	}
-	defer browser.Close()
+	authCtx := env.NewContext(t)
+	defer authCtx.Close()
+	env.LoginUser(t, authCtx, "unpublish@example.com")
 
-	ts := setupPublicNotesTestServer(t)
-	defer ts.close()
-
-	userID := ts.createTestUser(t, "unpublish@example.com")
-	sessionID := ts.loginAs(t, userID)
-
-	context, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create context: %v", err)
-	}
-	defer context.Close()
-
-	setPublicNotesSessionCookie(t, context, ts.baseURL, sessionID)
-
-	page, err := context.NewPage()
+	page, err := authCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create page: %v", err)
 	}
+	defer page.Close()
 
-	// Create note
-	_, err = page.Goto(ts.baseURL + "/notes/new")
-	if err != nil {
-		t.Fatalf("failed to navigate: %v", err)
-	}
-
-	err = page.Locator("input#title").Fill("Note to Unpublish")
-	if err != nil {
-		t.Fatalf("failed to fill title: %v", err)
-	}
-
-	err = page.Locator("textarea#content").Fill("Content")
-	if err != nil {
-		t.Fatalf("failed to fill content: %v", err)
-	}
-
-	err = page.Locator("button[type='submit']:has-text('Create')").Click()
-	if err != nil {
-		t.Fatalf("failed to submit: %v", err)
-	}
-
-	err = page.WaitForURL(fmt.Sprintf("%s/notes/**", ts.baseURL), playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for URL: %v", err)
-	}
-
-	// Make public
-	err = page.Locator("button:has-text('Make Public')").Click()
-	if err != nil {
-		t.Fatalf("failed to make public: %v", err)
-	}
-
-	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for load: %v", err)
-	}
+	// Create and publish note
+	CreateNoteViaUI(t, page, env.BaseURL, "Note to Unpublish", "Content")
+	shareURL := PublishNoteViaUI(t, page)
 
 	// Verify it's now public (use specific class to avoid matching "Public Share Link")
 	publicBadge := page.Locator("span.bg-green-100:has-text('Public')")
@@ -657,15 +130,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 		t.Fatal("note should be public")
 	}
 
-	// Capture the short URL while note is still public
-	shareURLInput := page.Locator("input#share-url")
-	shareURL, err := shareURLInput.InputValue()
-	if err != nil {
-		t.Fatalf("failed to get share URL: %v", err)
-	}
-	if shareURL == "" {
-		t.Fatal("share URL is empty while note is public")
-	}
+	// Verify share URL is a short URL
 	if !strings.Contains(shareURL, "/pub/") {
 		t.Fatalf("share URL must be a short URL, got: %s", shareURL)
 	}
@@ -704,16 +169,14 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 	}
 
 	// Try to access the previously-working short URL (should 404 now)
-	anonContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create anon context: %v", err)
-	}
-	defer anonContext.Close()
+	anonCtx := env.NewContext(t)
+	defer anonCtx.Close()
 
-	anonPage, err := anonContext.NewPage()
+	anonPage, err := anonCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
+	defer anonPage.Close()
 
 	resp, err := anonPage.Goto(shareURL)
 	if err != nil {
@@ -732,103 +195,33 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	pw, err := playwright.Run()
-	if err != nil {
-		t.Fatalf("failed to start playwright: %v", err)
-	}
-	defer pw.Stop()
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		t.Fatalf("failed to launch browser: %v", err)
-	}
-	defer browser.Close()
+	// Create authenticated context to create and publish note
+	authCtx := env.NewContext(t)
+	defer authCtx.Close()
+	env.LoginUser(t, authCtx, "seo@example.com")
 
-	ts := setupPublicNotesTestServer(t)
-	defer ts.close()
-
-	userID := ts.createTestUser(t, "seo@example.com")
-	sessionID := ts.loginAs(t, userID)
-
-	// Create authenticated context to create note
-	authContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create context: %v", err)
-	}
-	defer authContext.Close()
-
-	setPublicNotesSessionCookie(t, authContext, ts.baseURL, sessionID)
-
-	authPage, err := authContext.NewPage()
+	authPage, err := authCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create page: %v", err)
 	}
+	defer authPage.Close()
 
 	// Create and publish a note
-	_, err = authPage.Goto(ts.baseURL + "/notes/new")
-	if err != nil {
-		t.Fatalf("failed to navigate: %v", err)
-	}
-
-	noteTitle := "SEO Test Note Title"
-	err = authPage.Locator("input#title").Fill(noteTitle)
-	if err != nil {
-		t.Fatalf("failed to fill title: %v", err)
-	}
-
-	err = authPage.Locator("textarea#content").Fill("This note tests SEO meta tags.")
-	if err != nil {
-		t.Fatalf("failed to fill content: %v", err)
-	}
-
-	err = authPage.Locator("button[type='submit']:has-text('Create')").Click()
-	if err != nil {
-		t.Fatalf("failed to submit: %v", err)
-	}
-
-	err = authPage.WaitForURL(fmt.Sprintf("%s/notes/**", ts.baseURL), playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for URL: %v", err)
-	}
-
-	// Make public
-	err = authPage.Locator("button:has-text('Make Public')").Click()
-	if err != nil {
-		t.Fatalf("failed to make public: %v", err)
-	}
-
-	err = authPage.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
-	if err != nil {
-		t.Fatalf("failed to wait: %v", err)
-	}
-
-	// Get the short URL from share input
-	shareURLInput := authPage.Locator("input#share-url")
-	shareURL, err := shareURLInput.InputValue()
-	if err != nil {
-		t.Fatalf("failed to get share URL: %v", err)
-	}
-	if shareURL == "" {
-		t.Fatal("share URL is empty")
-	}
+	CreateNoteViaUI(t, authPage, env.BaseURL, "SEO Test Note Title", "This note tests SEO meta tags.")
+	shareURL := PublishNoteViaUI(t, authPage)
 
 	// Navigate to public URL via short URL in anonymous context
-	anonContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create anon context: %v", err)
-	}
-	defer anonContext.Close()
+	anonCtx := env.NewContext(t)
+	defer anonCtx.Close()
 
-	anonPage, err := anonContext.NewPage()
+	anonPage, err := anonCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
+	defer anonPage.Close()
 
 	_, err = anonPage.Goto(shareURL)
 	if err != nil {
@@ -866,99 +259,32 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 }
 
 // TestBrowser_ShareLinkIsShortURL tests that the share link is a short URL (/pub/...) and is navigable.
+// Also verifies minimal chrome style: no nav/footer, wordmark present, CTA visible, "Public Note" badge.
 func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	pw, err := playwright.Run()
-	if err != nil {
-		t.Fatalf("failed to start playwright: %v", err)
-	}
-	defer pw.Stop()
-
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		t.Fatalf("failed to launch browser: %v", err)
-	}
-	defer browser.Close()
-
-	ts := setupPublicNotesTestServer(t)
-	defer ts.close()
-
-	userID := ts.createTestUser(t, "share@example.com")
-	sessionID := ts.loginAs(t, userID)
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
 
 	// Create authenticated context
-	authContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create context: %v", err)
-	}
-	defer authContext.Close()
+	authCtx := env.NewContext(t)
+	defer authCtx.Close()
+	env.LoginUser(t, authCtx, "share@example.com")
 
-	setPublicNotesSessionCookie(t, authContext, ts.baseURL, sessionID)
-
-	authPage, err := authContext.NewPage()
+	authPage, err := authCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create page: %v", err)
 	}
-
-	// Create and publish a note
-	_, err = authPage.Goto(ts.baseURL + "/notes/new")
-	if err != nil {
-		t.Fatalf("failed to navigate: %v", err)
-	}
+	defer authPage.Close()
 
 	noteTitle := "Shareable Note"
 	noteContent := "This content should be visible via share link."
 
-	err = authPage.Locator("input#title").Fill(noteTitle)
-	if err != nil {
-		t.Fatalf("failed to fill title: %v", err)
-	}
-
-	err = authPage.Locator("textarea#content").Fill(noteContent)
-	if err != nil {
-		t.Fatalf("failed to fill content: %v", err)
-	}
-
-	err = authPage.Locator("button[type='submit']:has-text('Create')").Click()
-	if err != nil {
-		t.Fatalf("failed to submit: %v", err)
-	}
-
-	err = authPage.WaitForURL(fmt.Sprintf("%s/notes/**", ts.baseURL), playwright.PageWaitForURLOptions{
-		Timeout: playwright.Float(5000),
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for URL: %v", err)
-	}
-
-	// Make public
-	err = authPage.Locator("button:has-text('Make Public')").Click()
-	if err != nil {
-		t.Fatalf("failed to make public: %v", err)
-	}
-
-	err = authPage.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
-	if err != nil {
-		t.Fatalf("failed to wait: %v", err)
-	}
-
-	// Get the share URL from the input field
-	shareURLInput := authPage.Locator("input#share-url")
-	shareURL, err := shareURLInput.InputValue()
-	if err != nil {
-		t.Fatalf("failed to get share URL: %v", err)
-	}
-
-	if shareURL == "" {
-		t.Fatal("share URL is empty")
-	}
+	// Create and publish a note
+	CreateNoteViaUI(t, authPage, env.BaseURL, noteTitle, noteContent)
+	shareURL := PublishNoteViaUI(t, authPage)
 
 	t.Logf("Share URL: %s", shareURL)
 
@@ -971,16 +297,14 @@ func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 	}
 
 	// Navigate to the short URL in an anonymous context
-	anonContext, err := browser.NewContext()
-	if err != nil {
-		t.Fatalf("failed to create anon context: %v", err)
-	}
-	defer anonContext.Close()
+	anonCtx := env.NewContext(t)
+	defer anonCtx.Close()
 
-	anonPage, err := anonContext.NewPage()
+	anonPage, err := anonCtx.NewPage()
 	if err != nil {
 		t.Fatalf("failed to create anon page: %v", err)
 	}
+	defer anonPage.Close()
 
 	// The short URL renders inline (no redirect to /public/)
 	_, err = anonPage.Goto(shareURL)
@@ -1017,7 +341,17 @@ func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 		t.Error("article content section should be visible")
 	}
 
-	// === Minimal chrome style assertions ===
+	// === Minimal chrome style assertions (merged from ViewPublicNoteWithoutAuth) ===
+
+	// Verify "Public Note" badge is visible
+	publicBadge := anonPage.Locator("span:has-text('Public Note')")
+	isVisible, err := publicBadge.IsVisible()
+	if err != nil {
+		t.Fatalf("failed to check public badge: %v", err)
+	}
+	if !isVisible {
+		t.Error("Public Note badge should be visible")
+	}
 
 	// Verify: NO full nav bar (the app nav has desktop nav links like "Notes", "API Keys")
 	fullNav := anonPage.Locator("nav")
