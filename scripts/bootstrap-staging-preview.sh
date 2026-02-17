@@ -4,15 +4,21 @@ set -euo pipefail
 # Bootstrap a named staging preview app with the required non-rotating secrets.
 #
 # Usage:
-#   source scripts/secrets.staging.example  # optional local template with placeholders
 #   ./scripts/bootstrap-staging-preview.sh staging-1-commonink
-#   ./scripts/bootstrap-staging-preview.sh
 #
 # The script intentionally expects values to be provided in environment variables so
 # real values never live in this repo.
 
 APP_NAME="${1:?Usage: ./scripts/bootstrap-staging-preview.sh <app-name>}"
 FLY_ORG="${FLY_ORG:-commonink-staging}"
+
+# Load local non-committed dev secrets if present.
+if [ -f "secrets.sh" ]; then
+  # shellcheck source=/dev/null
+  set -a
+  source secrets.sh
+  set +a
+fi
 
 # Staging bucket is explicit and shared by all preview apps.
 BUCKET_NAME="${BUCKET_NAME:-commonink-staging-public}"
