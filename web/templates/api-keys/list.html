@@ -10,7 +10,7 @@
             </p>
         </div>
         <a href="/api-keys/new"
-           class="mt-3 sm:mt-0 inline-flex items-center justify-center px-3 py-2 sm:px-4 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+           class="mt-3 sm:mt-0 inline-flex items-center justify-center px-3 py-2 sm:px-4 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
             <svg class="w-4 h-4 sm:w-5 sm:h-5 mr-1.5 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
             </svg>
@@ -19,18 +19,18 @@
     </div>
 
     {{if .Error}}
-    <div class="mb-6 rounded-lg bg-red-50 dark:bg-red-900/20 p-4 border border-red-200 dark:border-red-800" role="alert">
+    <div class="mb-6 rounded-card bg-error-50 dark:bg-error-900/20 p-4 border border-error-200 dark:border-error-800" role="alert">
         <div class="flex">
-            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="h-5 w-5 text-error-600 dark:text-error-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p class="ml-3 text-sm font-medium text-red-800 dark:text-red-200">{{.Error}}</p>
+            <p class="ml-3 text-sm font-medium text-error-800 dark:text-error-200">{{.Error}}</p>
         </div>
     </div>
     {{end}}
 
     <!-- API Keys List -->
-    <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
+    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card">
         <div class="px-4 py-5 sm:p-6">
             <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Active API Keys</h3>
 
@@ -59,7 +59,7 @@
                                 </div>
                             </td>
                             <td class="py-4 whitespace-nowrap">
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{if eq .Scope "read"}}bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300{{else}}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300{{end}}">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{if eq .Scope "read"}}bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300{{else}}bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300{{end}}">
                                     {{.Scope}}
                                 </span>
                             </td>
@@ -78,7 +78,7 @@
                             </td>
                             <td class="py-4 whitespace-nowrap text-right text-sm font-medium">
                                 <form action="/api-keys/{{.ID}}/revoke" method="POST" class="inline" onsubmit="return confirm('Are you sure you want to revoke this API key? This cannot be undone.');">
-                                    <button type="submit" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+                                    <button type="submit" class="text-error-600 hover:text-error-900 dark:text-error-400 dark:hover:text-error-300">
                                         Revoke
                                     </button>
                                 </form>
@@ -97,7 +97,7 @@
                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Create an API key to get started with API access.</p>
                 <div class="mt-6">
                     <a href="/api-keys/new"
-                       class="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                       class="inline-flex items-center px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                         </svg>
@@ -110,13 +110,13 @@
     </div>
 
     <!-- Usage Instructions -->
-    <div class="mt-4 sm:mt-6 bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-5 border border-gray-200 dark:border-gray-700">
+    <div class="mt-4 sm:mt-6 bg-white dark:bg-gray-800 rounded-card p-4 sm:p-5 border border-gray-200 dark:border-gray-700">
         <h3 class="text-sm font-medium text-gray-900 dark:text-white mb-2 sm:mb-3">How to use your API key</h3>
         <p class="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mb-3">
             Include your API key in the Authorization header:
         </p>
         <div class="bg-gray-800 dark:bg-gray-950 rounded-md p-3 sm:p-4 overflow-x-auto">
-            <code class="text-xs sm:text-sm text-green-400 font-mono whitespace-nowrap">
+            <code class="text-xs sm:text-sm text-success-400 font-mono whitespace-nowrap">
                 curl -H "Authorization: Bearer &lt;API_KEY&gt;" {{.BaseURL}}/api/notes
             </code>
         </div>

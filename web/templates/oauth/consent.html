@@ -8,7 +8,7 @@
             <img src="{{.ClientIcon}}" alt="{{.ClientName}} logo" class="h-16 w-16 rounded-xl shadow-sm" />
             {{else}}
             <!-- Placeholder icon when no client icon provided -->
-            <div class="h-16 w-16 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-sm">
+            <div class="h-16 w-16 rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center shadow-sm">
                 <svg class="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
                 </svg>
@@ -26,7 +26,7 @@
     </div>
 
     <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div class="bg-white dark:bg-gray-800 py-8 px-4 shadow-lg sm:rounded-xl sm:px-10 border border-gray-200 dark:border-gray-700">
+        <div class="bg-white dark:bg-gray-800 py-8 px-4 shadow-card sm:rounded-card sm:px-10 border border-gray-200 dark:border-gray-700">
             <!-- Scopes section -->
             <div class="mb-6">
                 <h2 class="text-sm font-semibold text-gray-900 dark:text-white uppercase tracking-wide mb-4">
@@ -36,7 +36,7 @@
                     {{range .Scopes}}
                     <li class="flex items-start">
                         <div class="flex-shrink-0">
-                            <svg class="h-5 w-5 text-green-500 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                            <svg class="h-5 w-5 text-success-500 dark:text-success-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                             </svg>
                         </div>
@@ -50,7 +50,7 @@
             </div>
 
             <!-- Security notice -->
-            <div class="rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4 mb-6">
+            <div class="rounded-card bg-gray-50 dark:bg-gray-700/50 p-4 mb-6">
                 <div class="flex">
                     <div class="flex-shrink-0">
                         <svg class="h-5 w-5 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -60,7 +60,7 @@
                     <div class="ml-3">
                         <p class="text-sm text-gray-600 dark:text-gray-300">
                             You can revoke this access anytime in your
-                            <a href="/settings" class="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300">account settings</a>.
+                            <a href="/settings" class="font-medium text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">account settings</a>.
                         </p>
                     </div>
                 </div>
@@ -82,7 +82,7 @@
                 <button type="submit"
                         name="decision"
                         value="allow"
-                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-gray-800 transition-colors">
+                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-input shadow-sm text-sm font-semibold text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 dark:focus:ring-offset-gray-800 transition-colors">
                     Allow
                 </button>
 
@@ -90,7 +90,7 @@
                 <button type="submit"
                         name="decision"
                         value="deny"
-                        class="w-full flex justify-center py-3 px-4 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm text-sm font-semibold text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 dark:focus:ring-offset-gray-800 transition-colors">
+                        class="w-full flex justify-center py-3 px-4 border border-gray-300 dark:border-gray-600 rounded-input shadow-sm text-sm font-semibold text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 dark:focus:ring-offset-gray-800 transition-colors">
                     Deny
                 </button>
             </form>
@@ -106,7 +106,7 @@
         <!-- Back to app link -->
         <p class="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
             Not sure about this?
-            <a href="{{.RedirectURI}}?error=access_denied&error_description=user_cancelled" class="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300">
+            <a href="{{.RedirectURI}}?error=access_denied&error_description=user_cancelled" class="font-medium text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
                 Return to {{.ClientName}}
             </a>
         </p>

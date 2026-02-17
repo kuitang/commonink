@@ -4,8 +4,8 @@
     <div class="max-w-md w-full space-y-8">
         <!-- Header -->
         <div class="text-center">
-            <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 dark:bg-red-900/30">
-                <svg class="h-8 w-8 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-error-100 dark:bg-error-900/30">
+                <svg class="h-8 w-8 text-error-600 dark:text-error-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
             </div>
@@ -15,11 +15,11 @@
         </div>
 
         <!-- Error card -->
-        <div class="bg-white dark:bg-gray-800 shadow-lg rounded-xl p-8 border border-gray-200 dark:border-gray-700">
+        <div class="bg-white dark:bg-gray-800 shadow-card rounded-card p-8 border border-gray-200 dark:border-gray-700">
             <div class="text-center space-y-6">
                 <!-- Error message -->
-                <div class="rounded-lg bg-red-50 dark:bg-red-900/20 p-4 border border-red-200 dark:border-red-800">
-                    <p class="text-sm font-medium text-red-800 dark:text-red-200">
+                <div class="rounded-lg bg-error-50 dark:bg-error-900/20 p-4 border border-error-200 dark:border-error-800">
+                    <p class="text-sm font-medium text-error-800 dark:text-error-200">
                         {{if .Error}}{{.Error}}{{else}}An unexpected error occurred during authentication.{{end}}
                     </p>
                 </div>
@@ -49,7 +49,7 @@
                 <div class="rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4 border border-gray-200 dark:border-gray-600 text-left">
                     <p class="text-sm text-gray-600 dark:text-gray-400">
                         Your account has been disabled. Please contact support at
-                        <a href="mailto:support@agent-notes.example.com" class="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
+                        <a href="mailto:support@agent-notes.example.com" class="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                             support@agent-notes.example.com
                         </a>
                         for assistance.
@@ -71,14 +71,14 @@
                 <!-- Action buttons -->
                 <div class="flex flex-col sm:flex-row gap-3 pt-4">
                     <a href="/login"
-                       class="flex-1 inline-flex justify-center items-center rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                       class="flex-1 inline-flex justify-center items-center rounded-input bg-primary-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
                         <svg class="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                         </svg>
                         Try again
                     </a>
                     <a href="/"
-                       class="flex-1 inline-flex justify-center items-center rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                       class="flex-1 inline-flex justify-center items-center rounded-input border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
                         Go to homepage
                     </a>
                 </div>
@@ -86,7 +86,7 @@
                 <!-- Support link -->
                 <p class="text-sm text-gray-500 dark:text-gray-400">
                     Need help?
-                    <a href="mailto:support@agent-notes.example.com" class="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
+                    <a href="mailto:support@agent-notes.example.com" class="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
                         Contact support
                     </a>
                 </p>

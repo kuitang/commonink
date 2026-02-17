@@ -4,8 +4,8 @@
     <div class="sm:mx-auto sm:w-full sm:max-w-md">
         <!-- Denied icon -->
         <div class="flex justify-center">
-            <div class="h-16 w-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                <svg class="h-8 w-8 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <div class="h-16 w-16 rounded-full bg-error-100 dark:bg-error-900/30 flex items-center justify-center">
+                <svg class="h-8 w-8 text-error-600 dark:text-error-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
             </div>
@@ -21,9 +21,9 @@
     </div>
 
     <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div class="bg-white dark:bg-gray-800 py-8 px-4 shadow-lg sm:rounded-xl sm:px-10 border border-gray-200 dark:border-gray-700">
+        <div class="bg-white dark:bg-gray-800 py-8 px-4 shadow-card sm:rounded-card sm:px-10 border border-gray-200 dark:border-gray-700">
             <!-- Info message -->
-            <div class="rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4 mb-6">
+            <div class="rounded-card bg-gray-50 dark:bg-gray-700/50 p-4 mb-6">
                 <div class="flex">
                     <div class="flex-shrink-0">
                         <svg class="h-5 w-5 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -53,7 +53,7 @@
                     If you are not redirected automatically,
                     <a href="{{.RedirectURI}}{{if .RedirectURI}}?error=access_denied&error_description=user_denied_consent{{if .State}}&state={{.State}}{{end}}{{end}}"
                        id="manual-redirect-link"
-                       class="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300">
+                       class="font-medium text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
                         click here to return to {{.ClientName}}
                     </a>
                 </p>
@@ -69,7 +69,7 @@
 
         <!-- Back to notes link -->
         <p class="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
-            <a href="/notes" class="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300">
+            <a href="/notes" class="font-medium text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
                 Go to your notes
             </a>
         </p>

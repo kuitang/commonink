@@ -10,20 +10,20 @@
 
     <!-- Flash Messages -->
     {{if .NewToken}}
-    <div class="mb-6 rounded-lg bg-green-50 dark:bg-green-900/20 p-4 border border-green-200 dark:border-green-800" role="alert">
+    <div class="mb-6 rounded-card bg-success-50 dark:bg-success-900/20 p-4 border border-success-200 dark:border-success-800" role="alert">
         <div class="flex flex-col">
             <div class="flex items-center mb-2">
-                <svg class="h-5 w-5 text-green-600 dark:text-green-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg class="h-5 w-5 text-success-600 dark:text-success-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span class="font-medium text-green-800 dark:text-green-200">API Key Created Successfully</span>
+                <span class="font-medium text-success-800 dark:text-success-200">API Key Created Successfully</span>
             </div>
-            <p class="text-sm text-green-700 dark:text-green-300 mb-2">
+            <p class="text-sm text-success-700 dark:text-success-300 mb-2">
                 Copy this API key now. You won't be able to see it again!
             </p>
-            <div class="flex items-center gap-2 bg-white dark:bg-gray-800 rounded-lg p-3 border border-green-300 dark:border-green-700">
+            <div class="flex items-center gap-2 bg-white dark:bg-gray-800 rounded-input p-3 border border-success-300 dark:border-success-700">
                 <code id="new-token" class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200 break-all select-all">{{.NewToken}}</code>
-                <button type="button" onclick="copyToken()" class="flex-shrink-0 inline-flex items-center px-3 py-1.5 border border-green-500 text-sm font-medium rounded-md text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                <button type="button" onclick="copyToken()" class="flex-shrink-0 inline-flex items-center px-3 py-1.5 border border-success-500 text-sm font-medium rounded-input text-success-700 dark:text-success-300 bg-success-50 dark:bg-success-900/30 hover:bg-success-100 dark:hover:bg-success-900/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-success-500">
                     <svg id="copy-icon" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
@@ -38,18 +38,18 @@
     {{end}}
 
     {{if .Error}}
-    <div class="mb-6 rounded-lg bg-red-50 dark:bg-red-900/20 p-4 border border-red-200 dark:border-red-800" role="alert">
+    <div class="mb-6 rounded-card bg-error-50 dark:bg-error-900/20 p-4 border border-error-200 dark:border-error-800" role="alert">
         <div class="flex">
-            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="h-5 w-5 text-error-600 dark:text-error-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p class="ml-3 text-sm font-medium text-red-800 dark:text-red-200">{{.Error}}</p>
+            <p class="ml-3 text-sm font-medium text-error-800 dark:text-error-200">{{.Error}}</p>
         </div>
     </div>
     {{end}}
 
     <!-- Create New API Key Form -->
-    <div class="bg-white dark:bg-gray-800 shadow rounded-lg mb-8">
+    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card mb-8">
         <div class="px-4 py-5 sm:p-6">
             <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Create New API Key</h3>
             <form action="/settings/api-keys" method="POST" class="space-y-4">
@@ -57,14 +57,14 @@
                     <label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Key Name</label>
                     <input type="text" name="name" id="name" required
                            placeholder="e.g., Claude Code, ChatGPT, CI/CD"
-                           class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                           class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">A descriptive name to identify this API key</p>
                 </div>
 
                 <div>
                     <label for="scope" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Permissions</label>
                     <select name="scope" id="scope"
-                            class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                            class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         <option value="read_write">Read and Write (recommended)</option>
                         <option value="read">Read Only</option>
                     </select>
@@ -73,7 +73,7 @@
                 <div>
                     <label for="expires_in" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Expiration</label>
                     <select name="expires_in" id="expires_in"
-                            class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                            class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         <option value="2592000">30 days</option>
                         <option value="7776000">90 days</option>
                         <option value="15552000">180 days</option>
@@ -87,19 +87,19 @@
                         <div>
                             <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
                             <input type="email" name="email" id="email" required
-                                   class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                                   class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         </div>
                         <div>
                             <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
                             <input type="password" name="password" id="password" required
-                                   class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                                   class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         </div>
                     </div>
                 </div>
 
                 <div class="flex justify-end">
                     <button type="submit"
-                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-input shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
                         Create API Key
                     </button>
                 </div>
@@ -108,7 +108,7 @@
     </div>
 
     <!-- Existing API Keys List -->
-    <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
+    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card">
         <div class="px-4 py-5 sm:p-6">
             <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Active API Keys</h3>
 
@@ -137,7 +137,7 @@
                                 </div>
                             </td>
                             <td class="py-4 whitespace-nowrap">
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{if eq .Scope "read"}}bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300{{else}}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300{{end}}">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{if eq .Scope "read"}}bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300{{else}}bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300{{end}}">
                                     {{.Scope}}
                                 </span>
                             </td>
@@ -156,7 +156,7 @@
                             </td>
                             <td class="py-4 whitespace-nowrap text-right text-sm font-medium">
                                 <form action="/settings/api-keys/{{.ID}}/revoke" method="POST" class="inline" onsubmit="return confirm('Are you sure you want to revoke this API key? This cannot be undone.');">
-                                    <button type="submit" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+                                    <button type="submit" class="text-error-600 hover:text-error-900 dark:text-error-400 dark:hover:text-error-300">
                                         Revoke
                                     </button>
                                 </form>
@@ -179,7 +179,7 @@
     </div>
 
     <!-- OAuth Credentials Section -->
-    <div class="bg-white dark:bg-gray-800 shadow rounded-lg mb-8">
+    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card mb-8">
         <div class="px-4 py-5 sm:p-6">
             <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-2">OAuth Credentials (MCP Connectors)</h3>
             <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
@@ -190,31 +190,31 @@
                     <label for="oauth-client-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Client Name</label>
                     <input type="text" id="oauth-client-name" required
                            placeholder="e.g., My ChatGPT Connector"
-                           class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                           class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">A descriptive name for this OAuth client</p>
                 </div>
 
                 <div>
                     <label for="oauth-platform" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Platform</label>
                     <select id="oauth-platform"
-                            class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2">
+                            class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         <option value="chatgpt">ChatGPT (confidential client)</option>
                         <option value="claude">Claude (public client)</option>
                     </select>
                 </div>
 
-                <div id="oauth-error" class="hidden rounded-lg bg-red-50 dark:bg-red-900/20 p-4 border border-red-200 dark:border-red-800" role="alert">
+                <div id="oauth-error" class="hidden rounded-card bg-error-50 dark:bg-error-900/20 p-4 border border-error-200 dark:border-error-800" role="alert">
                     <div class="flex">
-                        <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg class="h-5 w-5 text-error-600 dark:text-error-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        <p id="oauth-error-message" class="ml-3 text-sm font-medium text-red-800 dark:text-red-200"></p>
+                        <p id="oauth-error-message" class="ml-3 text-sm font-medium text-error-800 dark:text-error-200"></p>
                     </div>
                 </div>
 
                 <div class="flex justify-end">
                     <button type="submit" id="oauth-submit-btn"
-                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-input shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
                         Generate Credentials
                     </button>
                 </div>
@@ -226,8 +226,8 @@
     <dialog id="oauth-credentials-dialog" class="rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-0 w-full max-w-lg backdrop:bg-black/50">
         <div class="px-6 py-6">
             <div class="flex items-center mb-4">
-                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 mr-3">
-                    <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-success-100 dark:bg-success-900/30 mr-3">
+                    <svg class="h-6 w-6 text-success-600 dark:text-success-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                 </div>
@@ -238,10 +238,10 @@
                 <!-- Client ID -->
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Client ID</label>
-                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 rounded-lg p-3 border border-gray-200 dark:border-gray-600">
+                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 rounded-input p-3 border border-gray-200 dark:border-gray-600">
                         <code id="oauth-result-client-id" class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200 break-all select-all"></code>
                         <button type="button" onclick="copyOAuthField('oauth-result-client-id', this)"
-                                class="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 dark:border-gray-500 text-xs font-medium rounded text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-600 hover:bg-gray-100 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                class="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 dark:border-gray-500 text-xs font-medium rounded text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-600 hover:bg-gray-100 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
                             Copy
                         </button>
                     </div>
@@ -250,10 +250,10 @@
                 <!-- Client Secret (ChatGPT only) -->
                 <div id="oauth-result-secret-section" class="hidden">
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Client Secret</label>
-                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 rounded-lg p-3 border border-gray-200 dark:border-gray-600">
+                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 rounded-input p-3 border border-gray-200 dark:border-gray-600">
                         <code id="oauth-result-client-secret" class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200 break-all select-all"></code>
                         <button type="button" onclick="copyOAuthField('oauth-result-client-secret', this)"
-                                class="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 dark:border-gray-500 text-xs font-medium rounded text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-600 hover:bg-gray-100 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                class="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 dark:border-gray-500 text-xs font-medium rounded text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-600 hover:bg-gray-100 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
                             Copy
                         </button>
                     </div>
@@ -262,48 +262,48 @@
                 <!-- Server URL -->
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Server URL</label>
-                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 rounded-lg p-3 border border-gray-200 dark:border-gray-600">
+                    <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 rounded-input p-3 border border-gray-200 dark:border-gray-600">
                         <code id="oauth-result-server-url" class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200 break-all select-all">{{.BaseURL}}</code>
                         <button type="button" onclick="copyOAuthField('oauth-result-server-url', this)"
-                                class="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 dark:border-gray-500 text-xs font-medium rounded text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-600 hover:bg-gray-100 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                                class="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 dark:border-gray-500 text-xs font-medium rounded text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-600 hover:bg-gray-100 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
                             Copy
                         </button>
                     </div>
                 </div>
 
                 <!-- Warning -->
-                <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 p-3 border border-amber-200 dark:border-amber-800">
+                <div class="rounded-card bg-warning-50 dark:bg-warning-900/20 p-3 border border-warning-200 dark:border-warning-800">
                     <div class="flex">
-                        <svg class="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg class="h-5 w-5 text-warning-600 dark:text-warning-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
-                        <p class="ml-3 text-sm text-amber-800 dark:text-amber-200">
+                        <p class="ml-3 text-sm text-warning-800 dark:text-warning-200">
                             Save these credentials now. The client secret cannot be retrieved again.
                         </p>
                     </div>
                 </div>
 
                 <!-- Platform-specific setup instructions -->
-                <div id="oauth-result-instructions" class="rounded-lg bg-blue-50 dark:bg-blue-900/20 p-4 border border-blue-200 dark:border-blue-800">
+                <div id="oauth-result-instructions" class="rounded-card bg-primary-50 dark:bg-primary-900/20 p-4 border border-primary-200 dark:border-primary-800">
                 </div>
             </div>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700/50 px-6 py-4 border-t border-gray-200 dark:border-gray-600">
             <button type="button" onclick="document.getElementById('oauth-credentials-dialog').close()"
-                    class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                    class="w-full rounded-input bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
                 Close
             </button>
         </div>
     </dialog>
 
     <!-- Usage Instructions -->
-    <div class="mt-8 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-6">
+    <div class="mt-8 bg-gray-50 dark:bg-gray-900/50 rounded-card p-6">
         <h3 class="text-sm font-medium text-gray-900 dark:text-white mb-3">How to use your API key</h3>
         <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
             Include your API key in the Authorization header when making API requests:
         </p>
         <div class="bg-gray-800 dark:bg-gray-950 rounded-md p-4 overflow-x-auto">
-            <code class="text-sm text-green-400 font-mono">
+            <code class="text-sm text-success-400 font-mono">
                 curl -H "Authorization: Bearer &lt;YOUR_API_KEY&gt;" \<br>
                 &nbsp;&nbsp;&nbsp;&nbsp; {{.BaseURL}}/api/notes
             </code>
@@ -412,19 +412,19 @@ function copyOAuthField(elementId, button) {
             var instructions = document.getElementById('oauth-result-instructions');
             if (platform === 'chatgpt') {
                 instructions.innerHTML =
-                    '<h4 class="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">ChatGPT Setup Instructions</h4>' +
-                    '<ol class="text-sm text-blue-700 dark:text-blue-300 list-decimal list-inside space-y-1">' +
+                    '<h4 class="text-sm font-medium text-primary-800 dark:text-primary-200 mb-2">ChatGPT Setup Instructions</h4>' +
+                    '<ol class="text-sm text-primary-700 dark:text-primary-300 list-decimal list-inside space-y-1">' +
                     '<li>Go to ChatGPT &rarr; Settings &rarr; Custom Connectors</li>' +
                     '<li>Click "Add Connector" and enter your server URL</li>' +
                     '<li>Select OAuth as the authentication method</li>' +
                     '<li>Enter the Client ID and Client Secret shown above</li>' +
-                    '<li>Set Authorization URL to: <code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">' + escapeHtml('{{.BaseURL}}') + '/oauth/authorize</code></li>' +
-                    '<li>Set Token URL to: <code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">' + escapeHtml('{{.BaseURL}}') + '/oauth/token</code></li>' +
+                    '<li>Set Authorization URL to: <code class="bg-primary-100 dark:bg-primary-800 px-1 rounded">' + escapeHtml('{{.BaseURL}}') + '/oauth/authorize</code></li>' +
+                    '<li>Set Token URL to: <code class="bg-primary-100 dark:bg-primary-800 px-1 rounded">' + escapeHtml('{{.BaseURL}}') + '/oauth/token</code></li>' +
                     '</ol>';
             } else {
                 instructions.innerHTML =
-                    '<h4 class="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">Claude Setup Instructions</h4>' +
-                    '<ol class="text-sm text-blue-700 dark:text-blue-300 list-decimal list-inside space-y-1">' +
+                    '<h4 class="text-sm font-medium text-primary-800 dark:text-primary-200 mb-2">Claude Setup Instructions</h4>' +
+                    '<ol class="text-sm text-primary-700 dark:text-primary-300 list-decimal list-inside space-y-1">' +
                     '<li>Go to Claude &rarr; Settings &rarr; MCP Connectors</li>' +
                     '<li>Click "Add MCP Server" and enter your server URL</li>' +
                     '<li>Enter the Client ID shown above</li>' +

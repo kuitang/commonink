@@ -1,4 +1,4 @@
-// Package browser contains screenshot tests for visual verification.
+// Package browser contains screenshot tests for visual verification across themes.
 package browser
 
 import (
@@ -9,16 +9,17 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-// TestScreenshot_CapturePages captures screenshots of key pages for visual verification.
-func TestScreenshot_CapturePages(t *testing.T) {
+// TestScreenshot_AllThemes captures screenshots of key pages in all three themes
+// for visual review of theme distinctiveness.
+func TestScreenshot_AllThemes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping screenshot test in short mode")
 	}
 
-	env, cleanup := setupAuthTestEnv(t)
+	env, cleanup := setupStaticTestEnv(t)
 	defer cleanup()
 
-	if err := env.initAuthTestBrowser(t); err != nil {
+	if err := env.initStaticTestBrowser(t); err != nil {
 		t.Skip("Playwright not available:", err)
 	}
 
@@ -27,48 +28,78 @@ func TestScreenshot_CapturePages(t *testing.T) {
 	if err := os.MkdirAll(screenshotDir, 0755); err != nil {
 		t.Fatalf("Failed to create screenshot directory: %v", err)
 	}
-	t.Logf("Screenshots will be saved to: %s", screenshotDir)
+	t.Logf("=== Screenshots saved to: %s ===", screenshotDir)
 
-	page := env.newAuthTestPage(t)
-	defer page.Close()
-
-	// Set viewport for consistent screenshots
-	page.SetViewportSize(1280, 800)
-
+	themes := []string{"default", "academic", "neonfizz"}
 	pages := []struct {
 		name string
 		path string
 	}{
 		{"login", "/login"},
 		{"register", "/register"},
-		{"password_reset", "/password-reset"},
+		{"install", "/docs/install"},
+		{"about", "/about"},
 	}
 
-	for _, p := range pages {
-		_, err := page.Goto(env.baseURL + p.path)
-		if err != nil {
-			t.Errorf("Failed to navigate to %s: %v", p.path, err)
-			continue
-		}
+	for _, theme := range themes {
+		t.Run(theme, func(t *testing.T) {
+			// Fresh context per theme for clean state
+			ctx, err := env.browser.NewContext()
+			if err != nil {
+				t.Fatalf("Failed to create context: %v", err)
+			}
+			defer ctx.Close()
 
-		// Wait for page to fully load
-		err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State: playwright.LoadStateNetworkidle,
-		})
-		if err != nil {
-			t.Logf("Warning: network idle timeout for %s", p.path)
-		}
+			page, err := ctx.NewPage()
+			if err != nil {
+				t.Fatalf("Failed to create page: %v", err)
+			}
+			defer page.Close()
+			page.SetDefaultTimeout(15000)
+			page.SetViewportSize(1280, 800)
 
-		// Capture screenshot
-		screenshotPath := filepath.Join(screenshotDir, p.name+".png")
-		_, err = page.Screenshot(playwright.PageScreenshotOptions{
-			Path:     playwright.String(screenshotPath),
-			FullPage: playwright.Bool(true),
+			// Navigate to first page to set localStorage
+			_, err = page.Goto(env.baseURL + "/login")
+			if err != nil {
+				t.Fatalf("Failed to navigate: %v", err)
+			}
+			page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+				State: playwright.LoadStateDomcontentloaded,
+			})
+
+			// Set theme and remove darkmode override (let neonfizz auto-dark work)
+			page.Evaluate(`(t) => { localStorage.setItem('ci_theme', t); localStorage.removeItem('ci_darkmode'); }`, theme)
+
+			for _, p := range pages {
+				_, err := page.Goto(env.baseURL + p.path)
+				if err != nil {
+					t.Errorf("[%s] Failed to navigate to %s: %v", theme, p.path, err)
+					continue
+				}
+
+				err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+					State: playwright.LoadStateNetworkidle,
+				})
+				if err != nil {
+					t.Logf("[%s] Warning: network idle timeout for %s", theme, p.path)
+				}
+
+				// Ensure fade-in completes
+				page.Evaluate(`() => { document.body.style.opacity = '1'; }`)
+
+				screenshotPath := filepath.Join(screenshotDir, theme+"_"+p.name+".png")
+				_, err = page.Screenshot(playwright.PageScreenshotOptions{
+					Path:     playwright.String(screenshotPath),
+					FullPage: playwright.Bool(true),
+				})
+				if err != nil {
+					t.Errorf("[%s] Failed to capture %s: %v", theme, p.name, err)
+				} else {
+					t.Logf("[%s] %s -> %s", theme, p.name, screenshotPath)
+				}
+			}
 		})
-		if err != nil {
-			t.Errorf("Failed to capture screenshot of %s: %v", p.path, err)
-		} else {
-			t.Logf("Captured screenshot: %s", screenshotPath)
-		}
 	}
+
+	t.Logf("=== All screenshots in: %s ===", screenshotDir)
 }

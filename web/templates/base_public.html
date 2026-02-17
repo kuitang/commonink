@@ -9,55 +9,192 @@
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        primary: {
-                            50: '#eff6ff',
-                            100: '#dbeafe',
-                            200: '#bfdbfe',
-                            300: '#93c5fd',
-                            400: '#60a5fa',
-                            500: '#3b82f6',
-                            600: '#2563eb',
-                            700: '#1d4ed8',
-                            800: '#1e40af',
-                            900: '#1e3a8a',
-                        }
-                    }
-                }
+    (function() {
+      var themes = {
+        'default': {
+          darkMode: 'class',
+          theme: { extend: {
+            colors: {
+              primary: {50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a'},
+              success: {50:'#f0fdf4',100:'#dcfce7',200:'#bbf7d0',300:'#86efac',400:'#4ade80',500:'#22c55e',600:'#16a34a',700:'#15803d',800:'#166534',900:'#14532d'},
+              error: {50:'#fef2f2',100:'#fee2e2',200:'#fecaca',300:'#fca5a5',400:'#f87171',500:'#ef4444',600:'#dc2626',700:'#b91c1c',800:'#991b1b',900:'#7f1d1d'},
+              warning: {50:'#fffbeb',100:'#fef3c7',200:'#fde68a',300:'#fcd34d',400:'#fbbf24',500:'#f59e0b',600:'#d97706',700:'#b45309',800:'#92400e',900:'#78350f'}
+            },
+            borderRadius: {'card':'0.75rem','input':'0.5rem','badge':'9999px'},
+            boxShadow: {'card':'0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1)','card-hover':'0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)','subtle':'0 1px 2px 0 rgba(0,0,0,0.05)'},
+            fontFamily: {'display':['ui-sans-serif','system-ui','sans-serif'],'body':['ui-sans-serif','system-ui','sans-serif']}
+          }}
+        },
+        'academic': {
+          darkMode: 'class',
+          theme: { extend: {
+            colors: {
+              primary: {50:'#fdf5f0',100:'#fbe8dc',200:'#f6cdb5',300:'#f0ab85',400:'#e88453',500:'#c4633a',600:'#ae5630',700:'#924628',800:'#773a22',900:'#62301d'},
+              success: {50:'#f0f7f0',100:'#dceddc',200:'#b8dbb8',300:'#88c488',400:'#5aab5a',500:'#3d8b3d',600:'#2f6e2f',700:'#275a27',800:'#224922',900:'#1d3d1d'},
+              error: {50:'#fef2f2',100:'#fee2e2',200:'#fecaca',300:'#fca5a5',400:'#f87171',500:'#ef4444',600:'#dc2626',700:'#b91c1c',800:'#991b1b',900:'#7f1d1d'},
+              warning: {50:'#fffbeb',100:'#fef3c7',200:'#fde68a',300:'#fcd34d',400:'#fbbf24',500:'#f59e0b',600:'#d97706',700:'#b45309',800:'#92400e',900:'#78350f'},
+              gray: {50:'#F5F5F0',100:'#EBEBDF',200:'#d4d4c8',300:'#b0b0a4',400:'#8d8d82',500:'#6b6a60',600:'#55544c',700:'#403f3a',800:'#2b2a27',900:'#1a1a18'}
+            },
+            borderRadius: {'card':'0.25rem','input':'0','badge':'9999px','lg':'0.125rem','xl':'0.25rem','2xl':'0.375rem'},
+            boxShadow: {'card':'0 0.25rem 1.25rem rgba(0,0,0,0.035)','card-hover':'0 0.5rem 2rem rgba(0,0,0,0.06)','subtle':'0 1px 2px 0 rgba(0,0,0,0.03)','sm':'0 1px 2px rgba(0,0,0,0.03)','lg':'0 0.25rem 1.25rem rgba(0,0,0,0.035)'},
+            fontFamily: {'display':['Georgia',"'Times New Roman'",'serif'],'body':['Georgia',"'Times New Roman'",'serif']}
+          }}
+        },
+        'neonfizz': {
+          darkMode: 'class',
+          theme: { extend: {
+            colors: {
+              primary: {50:'#f5f3ff',100:'#ede9fe',200:'#ddd6fe',300:'#c4b5fd',400:'#a78bfa',500:'#8b5cf6',600:'#7c3aed',700:'#6d28d9',800:'#5b21b6',900:'#4c1d95'},
+              success: {50:'#ecfdf5',100:'#d1fae5',200:'#a7f3d0',300:'#6ee7b7',400:'#43B581',500:'#23A55A',600:'#16a34a',700:'#15803d',800:'#166534',900:'#14532d'},
+              error: {50:'#fef2f2',100:'#fee2e2',200:'#fecaca',300:'#fca5a5',400:'#f87171',500:'#F23F43',600:'#ED4245',700:'#b91c1c',800:'#991b1b',900:'#7f1d1d'},
+              warning: {50:'#fffbeb',100:'#fef3c7',200:'#fde68a',300:'#fcd34d',400:'#FAA61A',500:'#F0B232',600:'#d97706',700:'#b45309',800:'#92400e',900:'#78350f'},
+              gray: {50:'#f2f3f5',100:'#ebedef',200:'#d4d7dc',300:'#b9bbbe',400:'#949BA4',500:'#80848E',600:'#4E5058',700:'#383A40',800:'#313338',900:'#2B2D31',950:'#1E1F22'}
+            },
+            borderRadius: {'card':'1.25rem','input':'0.75rem','badge':'9999px','lg':'1rem','xl':'1.25rem','2xl':'1.5rem'},
+            boxShadow: {'card':'0 1px 0 rgba(4,4,5,0.2), 0 1.5px 0 rgba(6,6,7,0.05), 0 2px 0 rgba(4,4,5,0.05)','card-hover':'0 4px 4px rgba(0,0,0,0.16)','subtle':'0 1px 0 rgba(4,4,5,0.1)','sm':'0 1px 0 rgba(4,4,5,0.1)','lg':'0 1px 0 rgba(4,4,5,0.2), 0 1.5px 0 rgba(6,6,7,0.05), 0 2px 0 rgba(4,4,5,0.05)'},
+            fontFamily: {'display':["'SF Mono'",'ui-monospace','Consolas','monospace'],'body':['system-ui','-apple-system','sans-serif']}
+          }}
+        }
+      };
+      var t = localStorage.getItem('ci_theme') || 'default';
+      document.documentElement.setAttribute('data-theme', t);
+      tailwind.config = themes[t] || themes['default'];
+    })();
+    </script>
+    <style type="text/tailwindcss">
+        @layer base {
+            h1, h2, h3, h4, h5, h6 { @apply font-display; }
+
+            /* Default theme */
+            [data-theme="default"] {
+                --ci-texture: radial-gradient(circle, rgba(156,163,175,0.3) 0.5px, transparent 0.5px);
+                --ci-texture-size: 20px 20px;
+                --ci-glow: none;
+                --ci-glow-hover: none;
+                --ci-glow-focus: none;
+            }
+            html.dark[data-theme="default"] {
+                --ci-texture: radial-gradient(circle, rgba(255,255,255,0.05) 0.5px, transparent 0.5px);
+            }
+            [data-theme="default"] :is(h1, h2, h3) { @apply tracking-tight; }
+
+            /* Academic theme */
+            [data-theme="academic"] {
+                --ci-texture: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.015) 10px, rgba(0,0,0,0.015) 11px);
+                --ci-texture-size: 100% 100%;
+                --ci-glow: none;
+                --ci-glow-hover: none;
+                --ci-glow-focus: none;
+            }
+            html.dark[data-theme="academic"] {
+                --ci-texture: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.01) 10px, rgba(255,255,255,0.01) 11px);
+            }
+            [data-theme="academic"] body { line-height: 1.8; }
+            [data-theme="academic"] :is(h1, h2, h3, h4, h5, h6) { @apply tracking-tight; }
+
+            /* Neonfizz theme */
+            [data-theme="neonfizz"] {
+                --ci-texture: repeating-linear-gradient(0deg, transparent 0px, transparent 2px, rgba(255,255,255,0.015) 2px, rgba(255,255,255,0.015) 4px);
+                --ci-texture-size: 100% 4px;
+                --ci-glow: 0 0 15px rgba(139,92,246,0.3);
+                --ci-glow-hover: 0 0 25px rgba(139,92,246,0.5);
+                --ci-glow-focus: 0 0 0 2px rgba(139,92,246,0.5), 0 0 15px rgba(139,92,246,0.3);
+            }
+            [data-theme="neonfizz"] :is(h1, h2, h3) { @apply uppercase tracking-tighter; }
+        }
+
+        @layer components {
+            /* Page texture overlay */
+            .themed-page::before {
+                content: '';
+                position: fixed;
+                inset: 0;
+                background: var(--ci-texture);
+                background-size: var(--ci-texture-size);
+                pointer-events: none;
+                z-index: -1;
+            }
+
+            /* Themed card */
+            .themed-card {
+                @apply bg-white dark:bg-gray-800 rounded-card shadow-card overflow-hidden;
+                transition: all 0.2s ease;
+            }
+            [data-theme="default"] .themed-card { @apply border-t-2 border-t-primary-500; }
+            [data-theme="default"] .themed-card:hover {
+                transform: translateY(-2px);
+                @apply shadow-card-hover;
+            }
+            [data-theme="academic"] .themed-card {
+                @apply border-l-4 border-l-primary-500;
+                box-shadow: none;
+            }
+            [data-theme="academic"] .themed-card:hover { @apply border-l-primary-700; }
+            [data-theme="neonfizz"] .themed-card:hover { box-shadow: var(--ci-glow); }
+
+            /* Themed primary button */
+            .themed-btn-primary {
+                @apply inline-flex items-center justify-center font-semibold rounded-input text-white bg-primary-600 hover:bg-primary-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-900;
+                transition: all 0.2s ease;
+            }
+            [data-theme="default"] .themed-btn-primary:hover { transform: scale(1.02); }
+            [data-theme="neonfizz"] .themed-btn-primary { box-shadow: var(--ci-glow); }
+            [data-theme="neonfizz"] .themed-btn-primary:hover { box-shadow: var(--ci-glow-hover); }
+
+            /* Themed prose */
+            [data-theme="academic"] .themed-prose { @apply max-w-3xl mx-auto; }
+            [data-theme="academic"] .themed-prose > p:first-of-type { text-indent: 1.5em; }
+
+            /* Themed hero heading */
+            [data-theme="neonfizz"] .themed-hero-heading {
+                @apply bg-gradient-to-r from-primary-400 to-primary-300 bg-clip-text;
+                -webkit-text-fill-color: transparent;
+            }
+
+            /* Themed focus (neonfizz glow ring) */
+            [data-theme="neonfizz"] .themed-focus:focus {
+                outline: none;
+                box-shadow: var(--ci-glow-focus);
             }
         }
-    </script>
-    <style>
-        /* Let page scroll naturally */
     </style>
     <script>
-        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            document.documentElement.classList.add('dark');
-        }
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            if (e.matches) {
-                document.documentElement.classList.add('dark');
-            } else {
-                document.documentElement.classList.remove('dark');
-            }
-        });
+    (function(){
+      var t = localStorage.getItem('ci_theme') || 'default';
+      var explicitMode = localStorage.getItem('ci_darkmode');
+      var m = explicitMode || 'system';
+      if (t === 'neonfizz' && !explicitMode) m = 'dark';
+      var dark = m === 'dark' || (m === 'system' && matchMedia('(prefers-color-scheme:dark)').matches);
+      if (dark) document.documentElement.classList.add('dark');
+      if (m === 'system') matchMedia('(prefers-color-scheme:dark)')
+        .addEventListener('change', function(e){ document.documentElement.classList.toggle('dark', e.matches); });
+    })();
     </script>
     {{block "head" .}}{{end}}
 </head>
-<body class="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-    <!-- Minimal header: wordmark only -->
+<body class="themed-page min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-body" style="opacity:0">
+    <!-- Minimal header: wordmark + appearance controls -->
     <header class="py-4 px-4 sm:px-6 lg:px-8">
-        <div class="max-w-4xl mx-auto">
+        <div class="max-w-4xl mx-auto flex items-center justify-between">
             <a href="/" class="inline-flex items-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
-                <svg class="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <svg class="h-5 w-5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 <span class="ml-1.5 text-sm font-semibold">common.ink</span>
             </a>
+            <!-- Appearance controls -->
+            <div class="flex items-center gap-2">
+                <button id="darkmode-toggle" type="button" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" aria-label="Toggle dark mode">
+                    <svg id="dm-icon-system" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    <svg id="dm-icon-light" class="w-4 h-4 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                    <svg id="dm-icon-dark" class="w-4 h-4 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+                </button>
+                <div id="theme-swatches" class="flex items-center gap-1.5">
+                    <button data-theme="default" class="w-5 h-5 rounded-full bg-[#2563eb] transition-shadow" title="Default" aria-label="Default theme"></button>
+                    <button data-theme="academic" class="w-5 h-5 rounded-full bg-[#ae5630] transition-shadow" title="Academic" aria-label="Academic theme"></button>
+                    <button data-theme="neonfizz" class="w-5 h-5 rounded-full bg-[#7c3aed] transition-shadow" title="Neon Fizz" aria-label="Neon Fizz theme"></button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -65,6 +202,56 @@
     <main class="flex-1 flex flex-col min-h-0 overflow-y-auto">
         {{template "content" .}}
     </main>
+
+    <script>
+    (function(){
+        var modes = ['system', 'light', 'dark'];
+        var btn = document.getElementById('darkmode-toggle');
+        var icons = {
+            system: document.getElementById('dm-icon-system'),
+            light: document.getElementById('dm-icon-light'),
+            dark: document.getElementById('dm-icon-dark')
+        };
+        function getCurrentMode() { return localStorage.getItem('ci_darkmode') || 'system'; }
+        function setDarkIcon(mode) {
+            Object.keys(icons).forEach(function(k) { if (icons[k]) icons[k].classList.toggle('hidden', k !== mode); });
+        }
+        function applyDarkMode(mode) {
+            var html = document.documentElement;
+            if (mode === 'dark') html.classList.add('dark');
+            else if (mode === 'light') html.classList.remove('dark');
+            else html.classList.toggle('dark', matchMedia('(prefers-color-scheme:dark)').matches);
+        }
+        setDarkIcon(getCurrentMode());
+        if (btn) {
+            btn.addEventListener('click', function() {
+                var current = getCurrentMode();
+                var next = modes[(modes.indexOf(current) + 1) % modes.length];
+                localStorage.setItem('ci_darkmode', next);
+                setDarkIcon(next);
+                applyDarkMode(next);
+            });
+        }
+        var swatches = document.getElementById('theme-swatches');
+        var currentTheme = localStorage.getItem('ci_theme') || 'default';
+        if (swatches) {
+            swatches.querySelectorAll('button[data-theme]').forEach(function(b) {
+                if (b.getAttribute('data-theme') === currentTheme) b.classList.add('ring-2', 'ring-offset-2', 'ring-gray-900', 'dark:ring-white');
+                b.addEventListener('click', function() {
+                    var theme = b.getAttribute('data-theme');
+                    if (theme !== currentTheme) { localStorage.setItem('ci_theme', theme); location.reload(); }
+                });
+            });
+        }
+    })();
+    </script>
+    <!-- Fade in after Tailwind CDN processes -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        document.body.style.transition = 'opacity 0.15s ease';
+        document.body.style.opacity = '1';
+    });
+    </script>
 </body>
 </html>
 {{end}}

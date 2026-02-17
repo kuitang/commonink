@@ -2,8 +2,8 @@
 <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Success Header -->
     <div class="text-center mb-8">
-        <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/30 mb-4">
-            <svg class="h-8 w-8 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-success-100 dark:bg-success-900/30 mb-4">
+            <svg class="h-8 w-8 text-success-600 dark:text-success-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
             </svg>
         </div>
@@ -14,14 +14,14 @@
     </div>
 
     <!-- Warning Banner -->
-    <div class="mb-6 rounded-lg bg-amber-50 dark:bg-amber-900/20 p-4 border border-amber-200 dark:border-amber-800">
+    <div class="mb-6 rounded-card bg-warning-50 dark:bg-warning-900/20 p-4 border border-warning-200 dark:border-warning-800">
         <div class="flex">
-            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="h-5 w-5 text-warning-600 dark:text-warning-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
             <div class="ml-3">
-                <h3 class="text-sm font-medium text-amber-800 dark:text-amber-200">Copy this API key now</h3>
-                <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                <h3 class="text-sm font-medium text-warning-800 dark:text-warning-200">Copy this API key now</h3>
+                <p class="mt-1 text-sm text-warning-700 dark:text-warning-300">
                     You won't be able to see this API key again. Make sure to copy it and store it securely before leaving this page.
                 </p>
             </div>
@@ -29,15 +29,15 @@
     </div>
 
     <!-- API Key Display -->
-    <div class="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card overflow-hidden">
         <div class="px-4 py-5 sm:p-6">
             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Your API Key
             </label>
-            <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+            <div class="flex items-center gap-2 bg-gray-50 dark:bg-gray-900 rounded-input p-4 border border-gray-200 dark:border-gray-700">
                 <code id="token-value" class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200 break-all select-all">{{.Token}}</code>
                 <button type="button" onclick="copyToken()"
-                        class="flex-shrink-0 inline-flex items-center px-4 py-2 border border-blue-500 text-sm font-medium rounded-md text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+                        class="flex-shrink-0 inline-flex items-center px-4 py-2 border border-primary-500 text-sm font-medium rounded-input text-primary-700 dark:text-primary-300 bg-primary-50 dark:bg-primary-900/30 hover:bg-primary-100 dark:hover:bg-primary-900/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors">
                     <svg id="copy-icon" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
@@ -51,13 +51,13 @@
     </div>
 
     <!-- Usage Instructions -->
-    <div class="mt-8 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-6">
+    <div class="mt-8 bg-gray-50 dark:bg-gray-900/50 rounded-card p-6">
         <h3 class="text-sm font-medium text-gray-900 dark:text-white mb-3">How to use your API key</h3>
         <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
             Include your API key in the Authorization header when making API requests:
         </p>
         <div class="bg-gray-800 dark:bg-gray-950 rounded-md p-4 overflow-x-auto">
-            <code class="text-sm text-green-400 font-mono">
+            <code class="text-sm text-success-400 font-mono">
                 curl -H "Authorization: Bearer &lt;YOUR_API_KEY&gt;" \<br>
                 &nbsp;&nbsp;&nbsp;&nbsp; {{.BaseURL}}/api/notes
             </code>
@@ -70,7 +70,7 @@
     <!-- Action Buttons -->
     <div class="mt-8 flex justify-center">
         <a href="/api-keys"
-           class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+           class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-input shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
             Done - Back to API Keys
         </a>
     </div>

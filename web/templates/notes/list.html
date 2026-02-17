@@ -4,7 +4,7 @@
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1 flex flex-col w-full">
         {{/* Flash message */}}
         {{if .FlashMessage}}
-        <div class="mb-4 p-4 rounded-lg {{if eq .FlashType "error"}}bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200{{else}}bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200{{end}}">
+        <div class="mb-4 p-4 rounded-lg {{if eq .FlashType "error"}}bg-error-100 text-error-800 dark:bg-error-900 dark:text-error-200{{else}}bg-primary-100 text-primary-800 dark:bg-primary-900 dark:text-primary-200{{end}}">
             <p class="text-sm font-medium">{{.FlashMessage}}</p>
         </div>
         {{end}}
@@ -21,12 +21,12 @@
                     </svg>
                     <span>{{formatFloat .StorageUsage.UsedMB 1}} / {{formatFloat .StorageUsage.LimitMB 0}} MB</span>
                     <div class="w-24 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                        <div class="h-full rounded-full {{if gt .StorageUsage.Percentage 90.0}}bg-red-500{{else if gt .StorageUsage.Percentage 70.0}}bg-yellow-500{{else}}bg-blue-500{{end}}" style="width: {{formatFloat .StorageUsage.Percentage 1}}%"></div>
+                        <div class="h-full rounded-full {{if gt .StorageUsage.Percentage 90.0}}bg-error-500{{else if gt .StorageUsage.Percentage 70.0}}bg-warning-500{{else}}bg-primary-500{{end}}" style="width: {{formatFloat .StorageUsage.Percentage 1}}%"></div>
                     </div>
                 </div>
                 {{end}}
                 <a href="/notes/new"
-                   class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                   class="inline-flex items-center justify-center px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                     <svg class="w-5 h-5 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
@@ -43,7 +43,7 @@
             </svg>
             <span>{{formatFloat .StorageUsage.UsedMB 1}} / {{formatFloat .StorageUsage.LimitMB 0}} MB used</span>
             <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div class="h-full rounded-full {{if gt .StorageUsage.Percentage 90.0}}bg-red-500{{else if gt .StorageUsage.Percentage 70.0}}bg-yellow-500{{else}}bg-blue-500{{end}}" style="width: {{formatFloat .StorageUsage.Percentage 1}}%"></div>
+                <div class="h-full rounded-full {{if gt .StorageUsage.Percentage 90.0}}bg-error-500{{else if gt .StorageUsage.Percentage 70.0}}bg-warning-500{{else}}bg-primary-500{{end}}" style="width: {{formatFloat .StorageUsage.Percentage 1}}%"></div>
             </div>
         </div>
         {{end}}
@@ -52,14 +52,14 @@
         <!-- Notes Grid -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 flex-1 auto-rows-max overflow-y-auto">
             {{range .Notes}}
-            <article class="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-200 overflow-hidden h-fit">
+            <article class="themed-card h-fit">
                 <a href="/notes/{{.ID}}" class="block p-4 sm:p-5">
                     <div class="flex items-start justify-between mb-2 sm:mb-3">
                         <h2 class="text-base sm:text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
                             {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
                         </h2>
                         {{if .IsPublic}}
-                        <span class="ml-2 flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                        <span class="ml-2 flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200">
                             <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
@@ -92,7 +92,7 @@
 
         <!-- Pagination -->
         {{if or .HasPrev .HasNext}}
-        <nav class="flex items-center justify-between mt-4 sm:mt-6 px-3 sm:px-4 py-2 sm:py-3 bg-white dark:bg-gray-800 rounded-lg shadow flex-shrink-0" aria-label="Pagination">
+        <nav class="flex items-center justify-between mt-4 sm:mt-6 px-3 sm:px-4 py-2 sm:py-3 bg-white dark:bg-gray-800 rounded-card shadow-card flex-shrink-0" aria-label="Pagination">
             <div class="flex-1 flex justify-between sm:hidden">
                 {{if .HasPrev}}
                 <a href="?page={{sub .Page 1}}"
@@ -164,15 +164,32 @@
         {{else}}
         <!-- Empty State -->
         <div class="text-center py-8 sm:py-12 px-4 flex-1 flex flex-col items-center justify-center">
-            <div class="inline-flex items-center justify-center w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-blue-100 dark:bg-blue-900 mb-4 sm:mb-6">
-                <svg class="w-6 h-6 sm:w-8 sm:h-8 text-blue-600 dark:text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="inline-flex items-center justify-center w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-primary-100 dark:bg-primary-900 mb-4 sm:mb-6">
+                <svg class="w-6 h-6 sm:w-8 sm:h-8 text-primary-600 dark:text-primary-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
             </div>
             <h3 class="text-base sm:text-lg font-medium text-gray-900 dark:text-white mb-2">No notes yet</h3>
-            <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400 mb-4 sm:mb-6">Create your first note to get started!</p>
+            <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400 mb-4 sm:mb-6">
+                <span class="themed-empty-default">Your notebook is empty. Let's fix that.</span>
+                <span class="themed-empty-academic hidden">The first page awaits.</span>
+                <span class="themed-empty-neonfizz hidden">Nothing here yet. Time to hack.</span>
+            </p>
+            <script>
+            (function(){
+                var t = document.documentElement.getAttribute('data-theme') || 'default';
+                var spans = {
+                    'default': document.querySelector('.themed-empty-default'),
+                    'academic': document.querySelector('.themed-empty-academic'),
+                    'neonfizz': document.querySelector('.themed-empty-neonfizz')
+                };
+                Object.keys(spans).forEach(function(k) {
+                    if (spans[k]) spans[k].classList.toggle('hidden', k !== t);
+                });
+            })();
+            </script>
             <a href="/notes/new"
-               class="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+               class="inline-flex items-center px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                 </svg>
