@@ -92,7 +92,7 @@ jobs:
             exit 1
           fi
 
-          if ! flyctl apps list --json | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
+          if ! flyctl apps list --json --org "$FLY_ORG" | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
             echo "Creating new Fly app ${APP_NAME} for PR preview"
             flyctl apps create "$APP_NAME" --org "$FLY_ORG" --yes
           fi
