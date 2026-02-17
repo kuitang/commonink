@@ -82,33 +82,36 @@ func (h *StaticHandler) HandleAPIDocs(w http.ResponseWriter, r *http.Request) {
 }
 
 // servePage serves a static page by slug.
+// Always renders through the page.html template so that copy buttons and
+// other template-level features (styles, scripts) are included.
 func (h *StaticHandler) servePage(w http.ResponseWriter, r *http.Request, slug, title string) {
-	// Try pre-generated HTML first
+	var htmlContent []byte
+
+	// Try pre-generated HTML first (markdown already converted)
 	if h.useGenerated {
 		genPath := filepath.Join(h.staticGenDir, slug+".html")
 		content, err := h.readCached(genPath)
 		if err == nil {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(content)
-			return
+			htmlContent = content
 		}
 	}
 
 	// Fall back to dynamic rendering from markdown
-	srcFile := slug + ".md"
-	if slug == "terms" {
-		srcFile = "tos.md"
-	}
+	if htmlContent == nil {
+		srcFile := slug + ".md"
+		if slug == "terms" {
+			srcFile = "tos.md"
+		}
 
-	srcPath := filepath.Join(h.staticSrcDir, srcFile)
-	mdContent, err := h.readCached(srcPath)
-	if err != nil {
-		h.renderer.RenderError(w, http.StatusNotFound, "Page not found")
-		return
-	}
+		srcPath := filepath.Join(h.staticSrcDir, srcFile)
+		mdContent, err := h.readCached(srcPath)
+		if err != nil {
+			h.renderer.RenderError(w, http.StatusNotFound, "Page not found")
+			return
+		}
 
-	// Render markdown to HTML
-	htmlContent := renderMarkdownContent(mdContent)
+		htmlContent = renderMarkdownContent(mdContent)
+	}
 
 	data := StaticPageData{
 		PageData: PageData{
