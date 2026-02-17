@@ -38,20 +38,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Compute preview slot and app name
-        id: app
-        run: |
-          PR_NUMBER="${{ github.event.number }}"
-          SLOT=$(( (PR_NUMBER - 1) % 3 + 1 ))
-          APP="staging-${SLOT}-commonink"
-          APP="${APP:0:63}"
-          APP="${APP%-}"
-          BASE_URL="https://${APP}.fly.dev"
-          GOOGLE_REDIRECT_URL="${BASE_URL}/auth/google/callback"
-          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
-          echo "name=$APP" >> "$GITHUB_OUTPUT"
-          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
-          echo "google_redirect_url=$GOOGLE_REDIRECT_URL" >> "$GITHUB_OUTPUT"
       - name: Deploy preview
         shell: bash
         env:
@@ -59,43 +45,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          APP_NAME="${{ steps.app.outputs.name }}"
-          BUCKET_NAME="commonink-staging-public"
-          BASE_URL="${{ steps.app.outputs.base_url }}"
-          GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
           ORG="commonink-staging"
+          BUCKET_NAME="commonink-staging-public"
+          PR_NUMBER="${{ github.event.number }}"
+          SLOT=$(( (PR_NUMBER - 1) % 3 + 1 ))
+          APP_NAME="staging-${SLOT}-commonink"
+          BASE_URL="https://${APP_NAME}.fly.dev"
+          GOOGLE_REDIRECT_URL="${BASE_URL}/auth/google/callback"
 
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
             exit 1
           fi
 
-          TMP_APPS_JSON="$(mktemp)"
-          trap 'rm -f "$TMP_APPS_JSON"' EXIT
-
-          if ! flyctl apps list --json --org "$ORG" > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
-            echo "Failed to list apps in org '${ORG}'."
-            cat /tmp/fly_org_err.txt
+          if ! flyctl apps list --json --org "$ORG" | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
+            echo "Preview app '${APP_NAME}' is not pre-registered in org '${ORG}'."
+            echo "Create it before pushing this PR."
             exit 1
           fi
 
-          if ! jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' "$TMP_APPS_JSON" > /dev/null; then
-            echo "Preview app '${APP_NAME}' is not pre-registered in org '${ORG}'. Create it before merging this PR."
-            exit 1
-          fi
-
-          if [ -z "${BUCKET_NAME}" ]; then
-            echo "Missing BUCKET_NAME (hardcoded staging bucket name is required by config)"
-            exit 1
-          fi
-
-          if ! SECRET_LIST="$(flyctl secrets list --org "$ORG" --app "$APP_NAME" 2>&1)"; then
-            echo "Failed to read secrets for app '${APP_NAME}'."
-            echo "${SECRET_LIST}"
-            exit 1
-          fi
-          if ! printf '%s\n' "${SECRET_LIST}" | grep -q "GOOGLE_CLIENT_ID"; then
-            echo "Missing GOOGLE_CLIENT_ID secret in ${APP_NAME}. Set once with flyctl."
+          if ! flyctl secrets list --org "$ORG" --app "$APP_NAME" | grep -q "GOOGLE_CLIENT_ID"; then
+            echo "Missing GOOGLE_CLIENT_ID secret in ${APP_NAME}."
+            echo "Run: flyctl secrets set --org ${ORG} --app ${APP_NAME} GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=..."
             exit 1
           fi
 
