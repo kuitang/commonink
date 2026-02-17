@@ -7,7 +7,6 @@ primary_region = "ewr"
 [env]
   DATABASE_PATH = "/data"
   LISTEN_ADDR = ":8080"
-  BASE_URL = ""
 
 [[mounts]]
   source = "ci_stage_data"
@@ -18,7 +17,7 @@ primary_region = "ewr"
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [http_service.concurrency]
     type = "requests"

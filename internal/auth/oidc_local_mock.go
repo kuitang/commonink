@@ -46,7 +46,7 @@ func (p *LocalMockOIDCProvider) SetBaseURL(baseURL string) {
 
 // SetCallbackOrigin stores a request-specific origin for a given auth state.
 // This is used by /auth/google/login to ensure callback redirects include the
-// originating host for previews and localhost deployments.
+// originating host for previews and local deployments.
 func (p *LocalMockOIDCProvider) SetCallbackOrigin(state, origin string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -54,12 +54,12 @@ func (p *LocalMockOIDCProvider) SetCallbackOrigin(state, origin string) {
 }
 
 // GetAuthURL returns a URL to the local mock consent page.
-func (p *LocalMockOIDCProvider) GetAuthURL(state string) string {
+func (p *LocalMockOIDCProvider) GetAuthURL(state, _ string) string {
 	return fmt.Sprintf("%s/auth/mock-oidc/authorize?state=%s", p.baseURL, url.QueryEscape(state))
 }
 
 // ExchangeCode looks up a previously-issued code and returns mock claims.
-func (p *LocalMockOIDCProvider) ExchangeCode(_ context.Context, code string) (*Claims, error) {
+func (p *LocalMockOIDCProvider) ExchangeCode(_ context.Context, code, _ string) (*Claims, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

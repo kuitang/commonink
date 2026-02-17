@@ -27,7 +27,6 @@ echo "  AWS_ENDPOINT_URL_S3  - Tigris endpoint URL"
 echo "  BUCKET_NAME          - Tigris bucket name"
 echo ""
 echo "Optional:"
-echo "  BASE_URL             - Public URL (default: https://common.ink)"
 echo "  RESEND_FROM_EMAIL    - Sender email (default: noreply@common.ink)"
 echo ""
 

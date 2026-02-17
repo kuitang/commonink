@@ -10,7 +10,7 @@ set -euo pipefail
 # or a local, non-committed staging secret file (./secrets.staging.sh).
 
 APP_NAME="${1:?Usage: ./scripts/bootstrap-staging-preview.sh <app-name>}"
-FLY_ORG="${FLY_ORG:-}"
+FLY_ORG="commonink-staging"
 STAGING_SECRETS_FILE="${STAGING_SECRETS_FILE:-./secrets.staging.sh}"
 
 # Load local non-committed staging secrets if present.
@@ -21,10 +21,8 @@ if [ -f "${STAGING_SECRETS_FILE}" ]; then
   set +a
 fi
 
-# Staging bucket is explicit and shared by all preview apps.
-BUCKET_NAME="${BUCKET_NAME:-commonink-staging-public}"
-BASE_URL="${BASE_URL:-https://${APP_NAME}.fly.dev}"
-GOOGLE_REDIRECT_URL="${GOOGLE_REDIRECT_URL:-${BASE_URL}/auth/google/callback}"
+# Each preview app uses its own Tigris bucket so Fly can inject per-app S3 credentials.
+BUCKET_NAME="${BUCKET_NAME:-${APP_NAME}-public}"
 
 : "${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID in environment}"
 : "${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET in environment}"
@@ -42,26 +40,21 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-FLY_APPS_LIST_ARGS=()
-if [ -n "${FLY_ORG}" ]; then
-  FLY_APPS_LIST_ARGS+=(--org "${FLY_ORG}")
-fi
-
-APP_CREATE_ARGS=()
-if [ -n "${FLY_ORG}" ]; then
-  APP_CREATE_ARGS+=(--org "${FLY_ORG}")
-fi
-
 echo "Preparing staging app: ${APP_NAME}"
-if [ -n "${FLY_ORG}" ]; then
-  echo "Target org: ${FLY_ORG}"
-fi
+echo "Target org: ${FLY_ORG}"
 
-if ! flyctl apps list --json "${FLY_APPS_LIST_ARGS[@]}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
-  flyctl apps create "${APP_NAME}" "${APP_CREATE_ARGS[@]}" --yes
+if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
+  flyctl apps create "${APP_NAME}" --org "${FLY_ORG}" --yes
   echo "Created ${APP_NAME}"
 else
   echo "App ${APP_NAME} already exists"
+fi
+
+if flyctl storage status "${BUCKET_NAME}" --app "${APP_NAME}" >/dev/null 2>&1; then
+  echo "Bucket ${BUCKET_NAME} already exists"
+else
+  flyctl storage create --app "${APP_NAME}" --name "${BUCKET_NAME}" --public --yes
+  echo "Created bucket ${BUCKET_NAME}"
 fi
 
 secret_args=(
@@ -71,8 +64,6 @@ secret_args=(
   "MASTER_KEY=${MASTER_KEY}" \
   "OAUTH_HMAC_SECRET=${OAUTH_HMAC_SECRET}" \
   "OAUTH_SIGNING_KEY=${OAUTH_SIGNING_KEY}" \
-  "BASE_URL=${BASE_URL}" \
-  "GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}" \
   "BUCKET_NAME=${BUCKET_NAME}" \
 )
 

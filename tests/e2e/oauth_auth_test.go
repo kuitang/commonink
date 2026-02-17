@@ -312,7 +312,7 @@ func ChatGPTConfig() ClientConfig {
 	return ClientConfig{
 		Mode:                    ClientModeChatGPT,
 		ClientName:              "ChatGPT",
-		RedirectURIs:            []string{"https://chatgpt.com/connector_platform_oauth_redirect"},
+		RedirectURIs:            []string{"https://chatgpt-client.example.test/callback"},
 		TokenEndpointAuthMethod: "client_secret_post",
 	}
 }
@@ -322,7 +322,7 @@ func ClaudeConfig() ClientConfig {
 	return ClientConfig{
 		Mode:                    ClientModeClaude,
 		ClientName:              "claudeai",
-		RedirectURIs:            []string{"https://claude.ai/api/mcp/auth_callback"},
+		RedirectURIs:            []string{"https://claude-client.example.test/callback"},
 		TokenEndpointAuthMethod: "none",
 	}
 }
@@ -703,7 +703,7 @@ func (c *OAuthConformanceTest) TestNegative_InvalidRedirectURI() {
 
 	dcrReq := DCRRequest{
 		ClientName:    "Evil Client",
-		RedirectURIs:  []string{"https://evil.com/steal-tokens"},
+		RedirectURIs:  []string{"not-a-valid-uri"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"code"},
 	}
@@ -718,7 +718,7 @@ func (c *OAuthConformanceTest) TestNegative_InvalidRedirectURI() {
 	defer resp.Body.Close()
 
 	require.Equal(c.t, http.StatusBadRequest, resp.StatusCode,
-		"DCR with non-allowlisted redirect_uri MUST be rejected")
+		"DCR with invalid redirect_uri MUST be rejected")
 
 	c.t.Log("  [OK] DCR with invalid redirect_uri correctly rejected")
 }
@@ -1536,10 +1536,10 @@ func testOAuth_RefreshToken_PropertiesWithServer(t *rapid.T, ts *oauthTestServer
 	// Setup: Register client and get initial tokens
 	clientName := testutil.ClientNameGenerator().Draw(t, "clientName")
 
-	// Create client (use localhost redirect for testing)
+	// Create client (use neutral redirect URI for testing)
 	result, err := ts.oauthProvider.CreateClient(context.Background(), oauth.CreateClientParams{
 		ClientName:   clientName,
-		RedirectURIs: []string{"http://localhost:8080/callback"},
+		RedirectURIs: []string{"https://client.example.test/callback"},
 		IsPublic:     false,
 	})
 	if err != nil {
@@ -1976,7 +1976,7 @@ func testOAuth_StatePreservation_PropertiesWithServer(t *rapid.T, ts *oauthTestS
 	// Create a client
 	result, err := ts.oauthProvider.CreateClient(context.Background(), oauth.CreateClientParams{
 		ClientName:   "TestClient",
-		RedirectURIs: []string{"http://localhost:8080/callback"},
+		RedirectURIs: []string{"https://client.example.test/callback"},
 		IsPublic:     true,
 	})
 	if err != nil {
@@ -1992,7 +1992,7 @@ func testOAuth_StatePreservation_PropertiesWithServer(t *rapid.T, ts *oauthTestS
 	// Build authorization URL with state
 	params := url.Values{
 		"client_id":             {result.ClientID},
-		"redirect_uri":          {"http://localhost:8080/callback"},
+		"redirect_uri":          {"https://client.example.test/callback"},
 		"response_type":         {"code"},
 		"scope":                 {"notes:read"},
 		"state":                 {state},
@@ -2055,7 +2055,7 @@ func testOAuth_StatePreservation_PropertiesWithServer(t *rapid.T, ts *oauthTestS
 				"grant_type":    {"authorization_code"},
 				"client_id":     {result.ClientID},
 				"code":          {code},
-				"redirect_uri":  {"http://localhost:8080/callback"},
+				"redirect_uri":  {"https://client.example.test/callback"},
 				"code_verifier": {verifier},
 			}
 

@@ -702,7 +702,7 @@ Claude Code supports environment variable expansion in `.mcp.json`:
   "mcpServers": {
     "api-server": {
       "type": "http",
-      "url": "${API_BASE_URL:-https://api.example.com}/mcp",
+      "url": "${API_ROOT_URL:-https://api.example.com}/mcp",
       "headers": {
         "Authorization": "Bearer ${API_KEY}"
       }

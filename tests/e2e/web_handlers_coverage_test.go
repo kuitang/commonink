@@ -587,7 +587,7 @@ func TestWebHandler_ConsentPage_Properties(t *testing.T) {
 		clientID := testutil.ClientNameGenerator().Draw(rt, "clientID")
 		state := testutil.StateGenerator().Draw(rt, "state")
 		scope := testutil.ScopeGenerator().Draw(rt, "scope")
-		redirectURI := "http://localhost:8080/callback"
+		redirectURI := "https://client.example.test/callback"
 
 		// Property: GET /oauth/consent with valid params returns 200 with consent form
 		consentURL := ts.URL + "/oauth/consent?" + url.Values{
@@ -676,7 +676,7 @@ func TestWebHandler_ConsentDecisionDeny_Properties(t *testing.T) {
 
 		clientID := testutil.ClientNameGenerator().Draw(rt, "clientID")
 		state := testutil.StateGenerator().Draw(rt, "state")
-		redirectURI := "http://localhost:8080/callback"
+		redirectURI := "https://client.example.test/callback"
 
 		// Property: POST /oauth/consent with decision=deny shows denied page
 		resp, err := client.PostForm(
@@ -727,7 +727,7 @@ func TestWebHandler_ConsentDecisionAllow_Properties(t *testing.T) {
 		clientID := testutil.ClientNameGenerator().Draw(rt, "clientID")
 		state := testutil.StateGenerator().Draw(rt, "state")
 		scope := testutil.ScopeGenerator().Draw(rt, "scope")
-		redirectURI := "http://localhost:8080/callback"
+		redirectURI := "https://client.example.test/callback"
 
 		// Property: POST /oauth/consent with decision=allow shows granted page
 		resp, err := client.PostForm(

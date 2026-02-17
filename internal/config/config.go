@@ -26,7 +26,6 @@ const (
 type Config struct {
 	// Server settings
 	ListenAddr   string
-	BaseURL      string
 	TemplatesDir string
 
 	// Database and encryption
@@ -45,7 +44,6 @@ type Config struct {
 	// Google OIDC
 	GoogleClientID     string
 	GoogleClientSecret string
-	GoogleRedirectURL  string
 
 	// Resend Email
 	ResendAPIKey    string
@@ -113,10 +111,6 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	if addr != "" {
 		cfg.ListenAddr = addr
 	}
-	cfg.BaseURL = trimEnv("BASE_URL")
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = "http://localhost" + cfg.ListenAddr
-	}
 	cfg.TemplatesDir = getEnvOrDefault("TEMPLATES_DIR", "./web/templates")
 
 	// Database and encryption
@@ -136,10 +130,6 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	// Google OIDC
 	cfg.GoogleClientID = trimEnv("GOOGLE_CLIENT_ID")
 	cfg.GoogleClientSecret = trimEnv("GOOGLE_CLIENT_SECRET")
-	cfg.GoogleRedirectURL = trimEnv("GOOGLE_REDIRECT_URL")
-	if cfg.GoogleRedirectURL == "" && cfg.GoogleClientID != "" {
-		cfg.GoogleRedirectURL = cfg.BaseURL + "/auth/google/callback"
-	}
 
 	// Resend Email
 	cfg.ResendAPIKey = trimEnv("RESEND_API_KEY")
@@ -252,10 +242,9 @@ func (c *Config) IsDevelopment() bool {
 }
 
 // RequireSecureCookies returns true if secure cookies should be required.
-// Returns false for localhost development URLs.
+// Returns false for local/dev modes that run over plain HTTP.
 func (c *Config) RequireSecureCookies() bool {
-	return !strings.HasPrefix(c.BaseURL, "http://localhost") &&
-		!strings.HasPrefix(c.BaseURL, "http://127.0.0.1")
+	return !c.IsDevelopment()
 }
 
 // PrintStartupSummary prints a human-readable summary of the configuration to stderr.
@@ -289,7 +278,6 @@ func (c *Config) PrintStartupSummary() {
 
 	// Listen address
 	fmt.Fprintf(os.Stderr, "  Listen:  %s\n", c.ListenAddr)
-	fmt.Fprintf(os.Stderr, "  Base:    %s\n", c.BaseURL)
 	fmt.Fprintln(os.Stderr, "")
 }
 

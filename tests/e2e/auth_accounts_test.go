@@ -336,7 +336,7 @@ func testAuthAccounts_ReturnToRoundtrip(rt *rapid.T, ts *webFormServer) {
 	regResp.Body.Close()
 
 	// Login with return_to
-	returnTo := "/oauth/authorize?client_id=test&redirect_uri=http://localhost:3000/callback"
+	returnTo := "/oauth/authorize?client_id=test&redirect_uri=https://client.example.test/callback"
 
 	jar, _ := cookiejar.New(nil)
 	loginClient := ts.Client()

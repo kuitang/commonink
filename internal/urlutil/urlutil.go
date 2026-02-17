@@ -57,7 +57,7 @@ func requestScheme(r *http.Request) string {
 func normalizeBaseURL(base string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		return "http://localhost:8080"
+		return ""
 	}
 	return strings.TrimRight(base, "/")
 }

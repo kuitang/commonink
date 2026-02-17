@@ -23,7 +23,7 @@ func TestLocalMockOIDC_CallbackUsesConfiguredOrigin(t *testing.T) {
 		body := strings.NewReader(url.Values{"state": {state}, "email": {"test@example.com"}}.Encode())
 		req := httptest.NewRequest(http.MethodPost, "/auth/mock-oidc/authorize", body)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Host = "localhost:8080"
+		req.Host = "app.test:8080"
 		req.Header.Set("X-Forwarded-Proto", "https")
 		rr := httptest.NewRecorder()
 

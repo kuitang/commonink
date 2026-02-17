@@ -87,15 +87,18 @@ func (h *Handler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist request origin for mock OIDC local callback generation.
-	// This keeps localhost / preview hosts working without hardcoding callback URLs.
+	// This keeps host handling dynamic without hardcoded callback URLs.
 	h.setMockOIDCCallbackOriginCookie(w, r)
 
+	origin := urlutil.OriginFromRequest(r, h.userService.resolveBaseURL())
+	redirectURL := urlutil.BuildAbsolute(origin, "/auth/google/callback")
+
 	if mockOIDC, ok := h.oidcClient.(*LocalMockOIDCProvider); ok {
-		mockOIDC.SetCallbackOrigin(state, urlutil.OriginFromRequest(r, h.userService.resolveBaseURL()))
+		mockOIDC.SetCallbackOrigin(state, origin)
 	}
 
 	// Redirect to OIDC provider
-	authURL := h.oidcClient.GetAuthURL(state)
+	authURL := h.oidcClient.GetAuthURL(state, redirectURL)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -149,7 +152,9 @@ func (h *Handler) HandleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.oidcClient.ExchangeCode(r.Context(), code)
+	origin := urlutil.OriginFromRequest(r, h.userService.resolveBaseURL())
+	redirectURL := urlutil.BuildAbsolute(origin, "/auth/google/callback")
+	claims, err := h.oidcClient.ExchangeCode(r.Context(), code, redirectURL)
 	if err != nil {
 		http.Error(w, "Failed to exchange code", http.StatusInternalServerError)
 		return
