@@ -64,12 +64,12 @@ run-email: build
 test:
 	go test $(BUILD_TAGS) -v -timeout 120s -parallel $$(nproc 2>/dev/null || echo 4) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
-		-run 'Test' -rapid.checks=10 $(if $(strip $(TEST_SKIP_PATTERNS)), -skip $(TEST_SKIP_PATTERNS),)
+		-run 'Test' -rapid.checks=10 $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
 
 ## test-browser: Run browser tests (Playwright)
 test-browser:
 	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
-	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip $(BROWSER_TEST_SKIP_PATTERNS),)
+	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip '$(BROWSER_TEST_SKIP_PATTERNS)',)
 
 ## test-all: Run test + browser test suite
 test-all:
