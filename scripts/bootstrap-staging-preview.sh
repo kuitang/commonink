@@ -6,17 +6,18 @@ set -euo pipefail
 # Usage:
 #   ./scripts/bootstrap-staging-preview.sh staging-1-commonink
 #
-# The script intentionally expects values to be provided in environment variables so
-# real values never live in this repo.
+# The script expects values in the same format as secrets.sh, provided via env vars
+# or a local, non-committed staging secret file (./secrets.staging.sh).
 
 APP_NAME="${1:?Usage: ./scripts/bootstrap-staging-preview.sh <app-name>}"
 FLY_ORG="${FLY_ORG:-commonink-staging}"
+STAGING_SECRETS_FILE="${STAGING_SECRETS_FILE:-./secrets.staging.sh}"
 
-# Load local non-committed dev secrets if present.
-if [ -f "secrets.sh" ]; then
+# Load local non-committed staging secrets if present.
+if [ -f "${STAGING_SECRETS_FILE}" ]; then
   # shellcheck source=/dev/null
   set -a
-  source secrets.sh
+  source "${STAGING_SECRETS_FILE}"
   set +a
 fi
 

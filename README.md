@@ -41,12 +41,24 @@ Staging / preview storage uses a dedicated bucket:
 
 ### Preview app secret bootstrap (recommended)
 
-1. Create (or reuse) one-time secrets locally and provision each slot app directly in Fly:
+1. Create (or reuse) one-time staging secrets locally using the same format as `secrets.sh` and provision each slot app directly in Fly:
 
 ```bash
-source secrets.sh
-# Ensure GOOGLE_CLIENT_ID is exported (from your Makefile/env)
-export GOOGLE_CLIENT_ID=...
+cat > ./secrets.staging.sh <<'EOF'
+#!/usr/bin/env bash
+# secrets.staging.sh - Secret values only for commonink staging/preview
+# This file follows the same format as secrets.sh (secrets only).
+# DO NOT COMMIT THIS FILE (it is in .gitignore).
+# The identifiers/URLs are injected dynamically per preview slot.
+
+export GOOGLE_CLIENT_ID=""
+export GOOGLE_CLIENT_SECRET=""
+export RESEND_API_KEY=""
+export MASTER_KEY=""
+export OAUTH_HMAC_SECRET=""
+export OAUTH_SIGNING_KEY=""
+EOF
+source ./secrets.staging.sh
 
 ./scripts/bootstrap-staging-preview.sh staging-1-commonink
 ./scripts/bootstrap-staging-preview.sh staging-2-commonink
