@@ -58,7 +58,6 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
         run: |
           APP_NAME="${{ steps.app.outputs.name }}"
-          FLY_ORG="commonink-staging"
           BUCKET_NAME="commonink-staging-public"
           BASE_URL="${{ steps.app.outputs.base_url }}"
           GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
@@ -68,9 +67,39 @@ jobs:
             exit 1
           fi
 
-          if ! flyctl apps list --json --org "$FLY_ORG" | jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' > /dev/null; then
-            echo "Preview app ${APP_NAME} is not pre-registered in ${FLY_ORG}. Pre-create it before merging PRs."
-            exit 1
+          TMP_APPS_JSON="$(mktemp)"
+          trap 'rm -f "$TMP_APPS_JSON"' EXIT
+
+          if [ -n "${FLY_ORG:-}" ]; then
+            if ! flyctl apps list --json --org "$FLY_ORG" > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
+              if grep -q "Could not find organization" /tmp/fly_org_err.txt; then
+              echo "FLY_ORG (${FLY_ORG}) not available for token. Falling back to token default org."
+              unset FLY_ORG
+            else
+              echo "App lookup by org failed"
+              cat /tmp/fly_org_err.txt
+              exit 1
+            fi
+            fi
+          fi
+
+          if [ -z "${FLY_ORG:-}" ]; then
+            if ! flyctl apps list --json > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
+              echo "App lookup failed"
+              cat /tmp/fly_org_err.txt
+              exit 1
+            fi
+          fi
+
+          if ! jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' "$TMP_APPS_JSON" > /dev/null; then
+            echo "Creating missing preview app: ${APP_NAME}"
+            if [ -n "${FLY_ORG:-}" ]; then
+              flyctl apps create "$APP_NAME" --org "$FLY_ORG" --yes
+            else
+              flyctl apps create "$APP_NAME" --yes
+            fi
+          else
+            echo "Using existing preview app: ${APP_NAME}"
           fi
 
           if [ -z "${BUCKET_NAME}" ]; then

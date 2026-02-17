@@ -10,7 +10,7 @@ set -euo pipefail
 # or a local, non-committed staging secret file (./secrets.staging.sh).
 
 APP_NAME="${1:?Usage: ./scripts/bootstrap-staging-preview.sh <app-name>}"
-FLY_ORG="${FLY_ORG:-commonink-staging}"
+FLY_ORG="${FLY_ORG:-}"
 STAGING_SECRETS_FILE="${STAGING_SECRETS_FILE:-./secrets.staging.sh}"
 
 # Load local non-committed staging secrets if present.
@@ -42,9 +42,23 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Preparing staging app: ${APP_NAME} (org: ${FLY_ORG})"
-if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
-  flyctl apps create "${APP_NAME}" --org "${FLY_ORG}" --yes
+FLY_APPS_LIST_ARGS=()
+if [ -n "${FLY_ORG}" ]; then
+  FLY_APPS_LIST_ARGS+=(--org "${FLY_ORG}")
+fi
+
+APP_CREATE_ARGS=()
+if [ -n "${FLY_ORG}" ]; then
+  APP_CREATE_ARGS+=(--org "${FLY_ORG}")
+fi
+
+echo "Preparing staging app: ${APP_NAME}"
+if [ -n "${FLY_ORG}" ]; then
+  echo "Target org: ${FLY_ORG}"
+fi
+
+if ! flyctl apps list --json "${FLY_APPS_LIST_ARGS[@]}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
+  flyctl apps create "${APP_NAME}" "${APP_CREATE_ARGS[@]}" --yes
   echo "Created ${APP_NAME}"
 else
   echo "App ${APP_NAME} already exists"
