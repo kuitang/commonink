@@ -56,11 +56,15 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
         run: |
+          set -euo pipefail
+
           APP_NAME="${{ steps.app.outputs.name }}"
           BUCKET_NAME="commonink-staging-public"
           BASE_URL="${{ steps.app.outputs.base_url }}"
           GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
+          ORG="${FLY_ORG:?FLY_ORG is required and must match the Fly org for preview apps}"
 
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
@@ -68,38 +72,18 @@ jobs:
           fi
 
           TMP_APPS_JSON="$(mktemp)"
-          trap 'rm -f "$TMP_APPS_JSON"' EXIT
+          TMP_SECRETS="$(mktemp)"
+          trap 'rm -f "$TMP_APPS_JSON" "$TMP_SECRETS"' EXIT
 
-          if [ -n "${FLY_ORG:-}" ]; then
-            if ! flyctl apps list --json --org "$FLY_ORG" > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
-              if grep -q "Could not find organization" /tmp/fly_org_err.txt; then
-              echo "FLY_ORG (${FLY_ORG}) not available for token. Falling back to token default org."
-              unset FLY_ORG
-            else
-              echo "App lookup by org failed"
-              cat /tmp/fly_org_err.txt
-              exit 1
-            fi
-            fi
-          fi
-
-          if [ -z "${FLY_ORG:-}" ]; then
-            if ! flyctl apps list --json > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
-              echo "App lookup failed"
-              cat /tmp/fly_org_err.txt
-              exit 1
-            fi
+          if ! flyctl apps list --json --org "$ORG" > "$TMP_APPS_JSON" 2>/tmp/fly_org_err.txt; then
+            echo "Failed to list apps in org '${ORG}'."
+            cat /tmp/fly_org_err.txt
+            exit 1
           fi
 
           if ! jq -e --arg app "$APP_NAME" '.[] | select(.Name == $app)' "$TMP_APPS_JSON" > /dev/null; then
-            echo "Creating missing preview app: ${APP_NAME}"
-            if [ -n "${FLY_ORG:-}" ]; then
-              flyctl apps create "$APP_NAME" --org "$FLY_ORG" --yes
-            else
-              flyctl apps create "$APP_NAME" --yes
-            fi
-          else
-            echo "Using existing preview app: ${APP_NAME}"
+            echo "Preview app '${APP_NAME}' is not pre-registered in org '${ORG}'. Create it before merging this PR."
+            exit 1
           fi
 
           if [ -z "${BUCKET_NAME}" ]; then
@@ -107,7 +91,12 @@ jobs:
             exit 1
           fi
 
-          if ! flyctl secrets list --app "$APP_NAME" | grep -q "GOOGLE_CLIENT_ID"; then
+          if ! flyctl secrets list --org "$ORG" --app "$APP_NAME" > "$TMP_SECRETS" 2>/tmp/fly_secret_err.txt; then
+            echo "Failed to read secrets for app '${APP_NAME}'."
+            cat /tmp/fly_secret_err.txt
+            exit 1
+          fi
+          if ! grep -q "GOOGLE_CLIENT_ID" "$TMP_SECRETS"; then
             echo "Missing GOOGLE_CLIENT_ID secret in ${APP_NAME}. Set once with flyctl."
             exit 1
           fi
@@ -116,9 +105,11 @@ jobs:
             "BASE_URL=${BASE_URL}" \
             "GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}" \
             "BUCKET_NAME=${BUCKET_NAME}" \
+            --org "$ORG" \
             --app "${APP_NAME}"
 
           flyctl deploy \
             --remote-only \
             --config fly.staging.toml \
+            --org "$ORG" \
             --app "${APP_NAME}"
