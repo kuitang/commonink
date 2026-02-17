@@ -79,6 +79,23 @@ type UserDB struct {
 	userID  string
 }
 
+// NewSessionsDBFromSQL wraps an existing sql.DB as SessionsDB.
+func NewSessionsDBFromSQL(sqlDB *sql.DB) *SessionsDB {
+	return &SessionsDB{
+		db:      sqlDB,
+		queries: sessions.New(sqlDB),
+	}
+}
+
+// NewUserDBFromSQL wraps an existing sql.DB as UserDB.
+func NewUserDBFromSQL(userID string, sqlDB *sql.DB) *UserDB {
+	return &UserDB{
+		db:      sqlDB,
+		queries: userdb.New(sqlDB),
+		userID:  userID,
+	}
+}
+
 // DB returns the underlying sql.DB for direct access when needed
 func (s *SessionsDB) DB() *sql.DB {
 	return s.db
@@ -227,9 +244,10 @@ func OpenSessionsDB() (*SessionsDB, error) {
 		}
 
 		dbPath := filepath.Join(DataDirectory, SessionsDBName)
+		dsn := appendSQLiteParams(dbPath, sqliteCommonParams())
 
 		// Open unencrypted SQLite database
-		db, err := sql.Open("sqlite3", dbPath)
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			sessionsDBErr = fmt.Errorf("failed to open sessions database: %w", err)
 			return
@@ -260,10 +278,7 @@ func OpenSessionsDB() (*SessionsDB, error) {
 		return nil, sessionsDBErr
 	}
 
-	return &SessionsDB{
-		db:      sessionsDB,
-		queries: sessions.New(sessionsDB),
-	}, nil
+	return NewSessionsDBFromSQL(sessionsDB), nil
 }
 
 // OpenUserDB opens a per-user encrypted database.
@@ -303,11 +318,7 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	userDBsMu.RLock()
 	if db, exists := userDBs[userID]; exists {
 		userDBsMu.RUnlock()
-		return &UserDB{
-			db:      db,
-			queries: userdb.New(db),
-			userID:  userID,
-		}, nil
+		return NewUserDBFromSQL(userID, db), nil
 	}
 	userDBsMu.RUnlock()
 
@@ -317,11 +328,7 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 
 	// Double-check after acquiring write lock (race condition prevention)
 	if db, exists := userDBs[userID]; exists {
-		return &UserDB{
-			db:      db,
-			queries: userdb.New(db),
-			userID:  userID,
-		}, nil
+		return NewUserDBFromSQL(userID, db), nil
 	}
 
 	// Ensure data directory exists
@@ -339,6 +346,7 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	// Format: file.db?_pragma_key=x'HEX_KEY'&_pragma_cipher_page_size=4096
 	// Note: go-sqlcipher includes FTS5 by default, but we enable it explicitly for clarity
 	dsn := fmt.Sprintf("%s?_pragma_key=x'%s'&_pragma_cipher_page_size=4096&_fts5_tokenizer=porter", dbPath, dekHex)
+	dsn = appendSQLiteParams(dsn, sqliteCommonParams())
 
 	// Open encrypted SQLite database
 	db, err := sql.Open("sqlite3", dsn)
@@ -367,11 +375,7 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	// Cache the connection
 	userDBs[userID] = db
 
-	return &UserDB{
-		db:      db,
-		queries: userdb.New(db),
-		userID:  userID,
-	}, nil
+	return NewUserDBFromSQL(userID, db), nil
 }
 
 // InitSchemas ensures all database schemas are initialized.
@@ -468,46 +472,16 @@ func ResetUserDBsForTesting() {
 	userDBs = make(map[string]*sql.DB)
 }
 
-// NewUserDBInMemory creates an in-memory encrypted UserDB for testing.
-// This is faster than file-based databases and avoids filesystem contention.
-// The database is not cached and should be closed when done.
-func NewUserDBInMemory(userID string) (*UserDB, error) {
-	if userID == "" {
-		userID = "test-user"
+func sqliteCommonParams() string {
+	// Production-safe defaults: WAL + NORMAL provides good throughput while preserving safety.
+	return "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_foreign_keys=on"
+}
+
+func appendSQLiteParams(dsn, params string) string {
+	if strings.Contains(dsn, "?") {
+		return dsn + "&" + params
 	}
-
-	// Open in-memory database with encryption
-	// Using mode=memory with a shared cache allows multiple connections to the same in-memory DB
-	dekHex := hex.EncodeToString(hardcodedDEK)
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
-
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open in-memory database: %w", err)
-	}
-
-	// Keep at least one connection open to prevent the in-memory DB from being destroyed
-	db.SetMaxIdleConns(1)
-	db.SetMaxOpenConns(10)
-
-	// Verify connection
-	var sqliteVersion string
-	if err := db.QueryRow("SELECT sqlite_version()").Scan(&sqliteVersion); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to verify in-memory database: %w", err)
-	}
-
-	// Initialize schema
-	if _, err := db.Exec(UserDBSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize in-memory schema: %w", err)
-	}
-
-	return &UserDB{
-		db:      db,
-		queries: userdb.New(db),
-		userID:  userID,
-	}, nil
+	return dsn + "?" + params
 }
 
 // Close closes the SessionsDB connection.
@@ -516,34 +490,6 @@ func (s *SessionsDB) Close() error {
 		return s.db.Close()
 	}
 	return nil
-}
-
-// NewSessionsDBInMemory creates an in-memory unencrypted SessionsDB for testing.
-// Each call creates a fresh, independent database (no singleton caching).
-// The caller is responsible for calling Close() when done.
-func NewSessionsDBInMemory() (*SessionsDB, error) {
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open in-memory sessions database: %w", err)
-	}
-
-	db.SetMaxIdleConns(1)
-	db.SetMaxOpenConns(10)
-
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to ping in-memory sessions database: %w", err)
-	}
-
-	if _, err := db.Exec(SessionsDBSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize in-memory sessions schema: %w", err)
-	}
-
-	return &SessionsDB{
-		db:      db,
-		queries: sessions.New(db),
-	}, nil
 }
 
 // Close closes the UserDB connection. Only needed for in-memory databases

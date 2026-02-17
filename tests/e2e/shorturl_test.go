@@ -19,6 +19,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 )
 
 // =============================================================================
@@ -62,7 +63,7 @@ func setupShortURLTestServer(t *testing.T) *shortURLTestServer {
 	}
 
 	// Create in-memory user database
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		t.Fatalf("Failed to create in-memory user database: %v", err)
 	}

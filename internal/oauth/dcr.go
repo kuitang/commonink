@@ -140,7 +140,7 @@ func (p *Provider) DCR(w http.ResponseWriter, r *http.Request) {
 			writeDCRError(w, http.StatusInternalServerError, DCRErrorInvalidClientMetadata, "Failed to generate client_secret")
 			return
 		}
-		hash, err := HashSecret(clientSecret)
+		hash, err := p.secretHash.HashSecret(clientSecret)
 		if err != nil {
 			writeDCRError(w, http.StatusInternalServerError, DCRErrorInvalidClientMetadata, "Failed to hash client_secret")
 			return

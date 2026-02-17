@@ -17,6 +17,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 )
 
 // =============================================================================
@@ -45,7 +46,7 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	userID := fmt.Sprintf("public-test-user-%d", testID)
 
 	// Create in-memory database
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		t.Fatalf("Failed to create in-memory database: %v", err)
 	}

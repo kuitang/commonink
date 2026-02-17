@@ -174,13 +174,14 @@ func main() {
 	// Initialize OAuth 2.1 provider
 	oauthHMACSecret := loadOAuthHMACSecret(cfg)
 	oauthSigningKey := loadOAuthSigningKey(cfg)
-	oauthProvider, err := oauth.NewProvider(oauth.Config{
+	oauthCfg := oauth.Config{
 		DB:         sessionsDB.DB(),
 		Issuer:     cfg.BaseURL,
 		Resource:   cfg.BaseURL,
 		HMACSecret: oauthHMACSecret,
 		SigningKey: oauthSigningKey,
-	})
+	}
+	oauthProvider, err := oauth.NewProvider(oauthCfg)
 	if err != nil {
 		log.Fatalf("Failed to create OAuth provider: %v", err)
 	}

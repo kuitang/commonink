@@ -139,6 +139,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 		Resource:   server.URL,
 		HMACSecret: hmacSecret,
 		SigningKey: signingKey,
+		ClientSecretHasher: oauth.FakeInsecureClientSecretHasher{},
 	})
 	if err != nil {
 		panic("Failed to create OAuth provider: " + err.Error())

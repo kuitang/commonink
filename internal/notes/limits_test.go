@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/kuitang/agent-notes/internal/db"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"pgregory.net/rapid"
 )
 
@@ -19,7 +19,7 @@ func setupLimitsTestService(t interface {
 	testID := testCounter.Add(1)
 	userID := fmt.Sprintf("limits-test-%d", testID)
 
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/s3client"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"pgregory.net/rapid"
 )
 
@@ -49,7 +50,7 @@ func setupPublicTestEnvForT(t *testing.T) *publicTestEnv {
 	testID := testCounter.Add(1)
 	userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestPublic_AccessibleAfterSetPublic_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -153,7 +154,7 @@ func FuzzPublic_AccessibleAfterSetPublic_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -187,7 +188,7 @@ func TestPublic_PrivateReturnsError_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -242,7 +243,7 @@ func FuzzPublic_PrivateReturnsError_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -276,7 +277,7 @@ func TestPublic_OwnerCanToggle_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -333,7 +334,7 @@ func FuzzPublic_OwnerCanToggle_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -360,7 +361,7 @@ func TestPublic_ListReturnsOnlyPublic_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -425,7 +426,7 @@ func FuzzPublic_ListReturnsOnlyPublic_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -451,7 +452,7 @@ func TestPublic_S3ObjectCreatedDeleted_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -524,7 +525,7 @@ func FuzzPublic_S3ObjectCreatedDeleted_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -550,7 +551,7 @@ func TestPublic_SetPublicNonExistent_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -576,7 +577,7 @@ func FuzzPublic_SetPublicNonExistent_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -604,7 +605,7 @@ func TestPublic_SetPublicEmptyID_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -628,7 +629,7 @@ func FuzzPublic_SetPublicEmptyID_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -653,7 +654,7 @@ func TestPublic_GetPublicEmptyID_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -677,7 +678,7 @@ func FuzzPublic_GetPublicEmptyID_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -702,7 +703,7 @@ func TestPublic_GetPublicURL_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -738,7 +739,7 @@ func FuzzPublic_GetPublicURL_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -764,7 +765,7 @@ func TestPublic_ListPagination_Properties(t *testing.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
@@ -825,7 +826,7 @@ func FuzzPublic_ListPagination_Properties(f *testing.F) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-fuzz%d", HardcodedUserID, testID)
 
-		userDB, err := db.NewUserDBInMemory(userID)
+		userDB, err := dbtestutil.NewUserDBInMemory(userID)
 		if err != nil {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}

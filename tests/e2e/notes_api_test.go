@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/kuitang/agent-notes/internal/api"
-	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/notes"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 	"pgregory.net/rapid"
 )
@@ -65,7 +65,7 @@ func createNotesTestServer() *notesTestServer {
 	userID := fmt.Sprintf("api-test-user-%d", testID)
 
 	// Create in-memory database for this test
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		panic("Failed to create in-memory database: " + err.Error())
 	}

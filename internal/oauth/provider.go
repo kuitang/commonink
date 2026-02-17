@@ -21,7 +21,6 @@ import (
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/kuitang/agent-notes/internal/db/sessions"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // Errors returned by the OAuth provider.
@@ -65,6 +64,7 @@ type Provider struct {
 	signingKey ed25519.PrivateKey
 	publicKey  ed25519.PublicKey
 	keyID      string
+	secretHash ClientSecretHasher
 }
 
 // Config holds the configuration for creating a new Provider.
@@ -84,6 +84,9 @@ type Config struct {
 	// KeyID is the key identifier for the JWT header.
 	// If empty, will be derived from the public key.
 	KeyID string
+	// ClientSecretHasher hashes and verifies OAuth client secrets.
+	// If nil, a bcrypt hasher with production cost is used.
+	ClientSecretHasher ClientSecretHasher
 }
 
 // NewProvider creates a new OAuth provider with the given configuration.
@@ -96,6 +99,10 @@ func NewProvider(cfg Config) (*Provider, error) {
 	}
 	if len(cfg.HMACSecret) < 32 {
 		return nil, errors.New("oauth: HMACSecret must be at least 32 bytes")
+	}
+	secretHash := cfg.ClientSecretHasher
+	if secretHash == nil {
+		secretHash = NewBcryptClientSecretHasher(DefaultBcryptClientSecretCost)
 	}
 	signingKey := cfg.SigningKey
 	var publicKey ed25519.PublicKey
@@ -124,6 +131,7 @@ func NewProvider(cfg Config) (*Provider, error) {
 		signingKey: signingKey,
 		publicKey:  publicKey,
 		keyID:      keyID,
+		secretHash: secretHash,
 	}, nil
 }
 
@@ -176,30 +184,6 @@ func GenerateSecureSecret() (string, error) {
 		return "", fmt.Errorf("oauth: failed to generate random bytes: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// =============================================================================
-// Secret Hashing (bcrypt for client_secret)
-// =============================================================================
-
-// HashSecret hashes a client_secret using bcrypt with a cost of 12.
-// Use this for storing client_secret values.
-func HashSecret(secret string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(secret), 12)
-	if err != nil {
-		return "", fmt.Errorf("oauth: failed to hash secret: %w", err)
-	}
-	return string(hash), nil
-}
-
-// VerifySecret verifies a plaintext secret against a bcrypt hash.
-// Returns nil on success, error on failure.
-func VerifySecret(hash, secret string) error {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(secret))
-	if err != nil {
-		return ErrInvalidClient
-	}
-	return nil
 }
 
 // =============================================================================
@@ -321,7 +305,7 @@ func (p *Provider) CreateClient(ctx context.Context, params CreateClientParams) 
 		if err != nil {
 			return nil, err
 		}
-		hash, err := HashSecret(clientSecret)
+		hash, err := p.secretHash.HashSecret(clientSecret)
 		if err != nil {
 			return nil, err
 		}
@@ -418,7 +402,7 @@ func (p *Provider) AuthenticateClient(ctx context.Context, clientID, clientSecre
 		return nil, ErrClientSecretMissing
 	}
 
-	if err := VerifySecret(client.ClientSecretHash, clientSecret); err != nil {
+	if err := p.secretHash.VerifySecret(client.ClientSecretHash, clientSecret); err != nil {
 		return nil, err
 	}
 

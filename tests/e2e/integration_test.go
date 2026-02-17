@@ -37,6 +37,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/mcp"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/oauth"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"github.com/kuitang/agent-notes/internal/web"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
@@ -150,11 +151,12 @@ func createFullAppServer(tempDir string) *fullAppServer {
 
 	// Create OAuth provider
 	oauthProvider, err := oauth.NewProvider(oauth.Config{
-		DB:         sessionsDB.DB(),
-		Issuer:     server.URL,
-		Resource:   server.URL,
-		HMACSecret: hmacSecret,
-		SigningKey: signingKey,
+		DB:                 sessionsDB.DB(),
+		Issuer:             server.URL,
+		Resource:           server.URL,
+		HMACSecret:         hmacSecret,
+		SigningKey:         signingKey,
+		ClientSecretHasher: oauth.FakeInsecureClientSecretHasher{},
 	})
 	if err != nil {
 		panic("Failed to create OAuth provider: " + err.Error())
@@ -529,7 +531,7 @@ func (h *integrationMCPHandler) getOrCreateMCPServer(userID string) (*mcp.Server
 	}
 
 	// Use in-memory database for MCP tests
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user DB: %w", err)
 	}

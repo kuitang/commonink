@@ -578,7 +578,7 @@ func (h *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 			return
 		}
 		// Verify client secret
-		if err := VerifySecret(client.ClientSecretHash, req.ClientSecret); err != nil {
+		if err := h.provider.secretHash.VerifySecret(client.ClientSecretHash, req.ClientSecret); err != nil {
 			h.writeTokenError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
 			return
 		}
@@ -642,7 +642,7 @@ func (h *Handler) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request
 			h.writeTokenError(w, http.StatusUnauthorized, "invalid_client", "client_secret is required for confidential clients")
 			return
 		}
-		if err := VerifySecret(client.ClientSecretHash, req.ClientSecret); err != nil {
+		if err := h.provider.secretHash.VerifySecret(client.ClientSecretHash, req.ClientSecret); err != nil {
 			h.writeTokenError(w, http.StatusUnauthorized, "invalid_client", "Invalid client credentials")
 			return
 		}

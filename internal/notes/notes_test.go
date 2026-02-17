@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/kuitang/agent-notes/internal/db"
+	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"pgregory.net/rapid"
 )
 
@@ -32,7 +32,7 @@ func createInMemoryService(t interface {
 	testID := testCounter.Add(1)
 	userID := fmt.Sprintf("%s-test%d", HardcodedUserID, testID)
 
-	userDB, err := db.NewUserDBInMemory(userID)
+	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}

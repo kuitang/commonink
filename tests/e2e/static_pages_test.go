@@ -111,6 +111,7 @@ func createStaticPageServer(tempDir string) *staticPageServer {
 		Resource:   server.URL,
 		HMACSecret: hmacSecret,
 		SigningKey: signingKey,
+		ClientSecretHasher: oauth.FakeInsecureClientSecretHasher{},
 	})
 	if err != nil {
 		panic("Failed to create OAuth provider: " + err.Error())
