@@ -6,20 +6,23 @@ set -euo pipefail
 # Usage:
 #   ./scripts/bootstrap-staging-preview.sh staging-1-commonink
 #
-# The script expects values in the same format as secrets.sh, provided via env vars
-# or a local, non-committed staging secret file (./secrets.staging.sh).
+# The script expects a local, non-committed staging secret file:
+#   ./secrets.staging.sh
 
 APP_NAME="${1:?Usage: ./scripts/bootstrap-staging-preview.sh <app-name>}"
 FLY_ORG="commonink-staging"
-STAGING_SECRETS_FILE="${STAGING_SECRETS_FILE:-./secrets.staging.sh}"
+STAGING_SECRETS_FILE="./secrets.staging.sh"
 
-# Load local non-committed staging secrets if present.
-if [ -f "${STAGING_SECRETS_FILE}" ]; then
-  # shellcheck source=/dev/null
-  set -a
-  source "${STAGING_SECRETS_FILE}"
-  set +a
+if [ ! -f "${STAGING_SECRETS_FILE}" ]; then
+  echo "ERROR: ${STAGING_SECRETS_FILE} is required."
+  echo "Create it from local secrets and staging OAuth client credentials."
+  exit 1
 fi
+
+# shellcheck source=/dev/null
+set -a
+source "${STAGING_SECRETS_FILE}"
+set +a
 
 # Each preview app uses its own Tigris bucket so Fly can inject per-app S3 credentials.
 BUCKET_NAME="${BUCKET_NAME:-${APP_NAME}-public}"
@@ -27,6 +30,7 @@ BUCKET_NAME="${BUCKET_NAME:-${APP_NAME}-public}"
 : "${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID in environment}"
 : "${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET in environment}"
 : "${RESEND_API_KEY:?Set RESEND_API_KEY in environment}"
+: "${OPENAI_API_KEY:?Set OPENAI_API_KEY in environment}"
 : "${MASTER_KEY:?Set MASTER_KEY in environment}"
 : "${OAUTH_HMAC_SECRET:?Set OAUTH_HMAC_SECRET in environment}"
 : "${OAUTH_SIGNING_KEY:?Set OAUTH_SIGNING_KEY in environment}"
@@ -61,6 +65,7 @@ secret_args=(
   "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}" \
   "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}" \
   "RESEND_API_KEY=${RESEND_API_KEY}" \
+  "OPENAI_API_KEY=${OPENAI_API_KEY}" \
   "MASTER_KEY=${MASTER_KEY}" \
   "OAUTH_HMAC_SECRET=${OAUTH_HMAC_SECRET}" \
   "OAUTH_SIGNING_KEY=${OAUTH_SIGNING_KEY}" \

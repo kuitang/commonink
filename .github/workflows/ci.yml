@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - master
+      - prod
   pull_request:
     branches:
       - master
+      - prod
 
 jobs:
   test:
@@ -34,12 +36,16 @@ jobs:
     needs: test
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-preview-${{ github.event.number }}
+      cancel-in-progress: true
+    environment: staging
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Install Flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        uses: superfly/flyctl-actions/setup-flyctl@v1
       - name: Deploy preview
         shell: bash
         env:
@@ -47,3 +53,27 @@ jobs:
           PR_NUMBER: ${{ github.event.number }}
         run: |
           bash ./scripts/deploy-staging-preview.sh
+
+  deploy-prod:
+    name: deploy-prod
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/prod')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+      - name: Deploy production
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
+          APP_NAME: commonink
+          CONFIG_FILE: fly.toml
+        run: |
+          bash ./scripts/deploy.sh
