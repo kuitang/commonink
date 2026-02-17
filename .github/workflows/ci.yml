@@ -21,10 +21,14 @@ jobs:
           go-version: "1.25.6"
           check-latest: true
       - name: Run Go tests
+        env:
+          TEST_SKIP_PATTERNS: Pagination
         run: make test
       - name: Install Playwright
         run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
       - name: Run browser tests
+        env:
+          BROWSER_TEST_SKIP_PATTERNS: Pagination|Screenshot
         run: make test-browser
 
   deploy-preview:

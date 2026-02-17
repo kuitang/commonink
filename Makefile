@@ -33,6 +33,10 @@ export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
+# Optional regex for go test -skip (CI-friendly filtering)
+TEST_SKIP_PATTERNS ?=
+BROWSER_TEST_SKIP_PATTERNS ?=
+
 .PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
 all: test build
@@ -60,12 +64,12 @@ run-email: build
 test:
 	go test $(BUILD_TAGS) -v -timeout 120s -parallel $$(nproc 2>/dev/null || echo 4) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
-		-run 'Test' -rapid.checks=10
+		-run 'Test' -rapid.checks=10 $(if $(strip $(TEST_SKIP_PATTERNS)), -skip $(TEST_SKIP_PATTERNS),)
 
 ## test-browser: Run browser tests (Playwright)
 test-browser:
 	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
-	go test -v ./tests/browser/...
+	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip $(BROWSER_TEST_SKIP_PATTERNS),)
 
 ## test-all: Run test + browser test suite
 test-all:
