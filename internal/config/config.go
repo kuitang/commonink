@@ -19,10 +19,7 @@ import (
 )
 
 const (
-	defaultProdBucketName    = "commonink-public"
-	defaultStagingBucket    = "commonink-staging-public"
-	defaultTigrisRegion     = "auto"
-	defaultTigrisEndpoint   = "https://fly.storage.tigris.dev"
+	defaultTigrisRegion = "auto"
 )
 
 // Config holds all application configuration.
@@ -150,16 +147,10 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 
 	// S3/Tigris Storage (AWS_ env vars set automatically by `fly storage create`)
 	cfg.AWSEndpointS3 = strings.TrimSpace(os.Getenv("AWS_ENDPOINT_URL_S3"))
-	if cfg.AWSEndpointS3 == "" {
-		cfg.AWSEndpointS3 = defaultTigrisEndpoint
-	}
 	cfg.AWSRegion = getEnvOrDefault("AWS_REGION", defaultTigrisRegion)
 	cfg.AWSAccessKeyID = strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
 	cfg.AWSSecretAccessKey = strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY"))
 	cfg.AWSBucketName = strings.TrimSpace(os.Getenv("BUCKET_NAME"))
-	if cfg.AWSBucketName == "" {
-		cfg.AWSBucketName = inferBucketName(cfg.BaseURL)
-	}
 	cfg.AWSPublicURL = strings.TrimSpace(os.Getenv("S3_PUBLIC_URL"))
 	if cfg.AWSPublicURL == "" && cfg.AWSEndpointS3 != "" && cfg.AWSBucketName != "" {
 		cfg.AWSPublicURL = strings.TrimRight(cfg.AWSEndpointS3, "/") + "/" + cfg.AWSBucketName
@@ -199,6 +190,9 @@ func (c *Config) Validate() error {
 	if !c.NoS3 {
 		if c.AWSEndpointS3 == "" {
 			errs = append(errs, "AWS_ENDPOINT_URL_S3 is required (set env var or use --no-s3)")
+		}
+		if c.AWSBucketName == "" {
+			errs = append(errs, "BUCKET_NAME is required (set env var or use --no-s3)")
 		}
 		if c.AWSAccessKeyID == "" {
 			errs = append(errs, "AWS_ACCESS_KEY_ID is required (set env var or use --no-s3)")
@@ -293,29 +287,6 @@ func (c *Config) PrintStartupSummary() {
 	fmt.Fprintf(os.Stderr, "  Listen:  %s\n", c.ListenAddr)
 	fmt.Fprintf(os.Stderr, "  Base:    %s\n", c.BaseURL)
 	fmt.Fprintln(os.Stderr, "")
-}
-
-// inferBucketName chooses a safe default bucket for the running environment.
-//
-// The bucket is intentionally selected by deployment app name to avoid accidental
-// writes into the production bucket when preview apps inherit older env defaults.
-func inferBucketName(baseURL string) string {
-	appName := strings.TrimSpace(os.Getenv("FLY_APP_NAME"))
-	if appName != "" {
-		if appName == "commonink" {
-			return defaultProdBucketName
-		}
-		if appName == "commonink-staging" || strings.HasPrefix(appName, "staging-") {
-			return defaultStagingBucket
-		}
-	}
-
-	base := strings.ToLower(strings.TrimSpace(baseURL))
-	if base != "" && strings.Contains(base, "staging") {
-		return defaultStagingBucket
-	}
-
-	return defaultProdBucketName
 }
 
 // Helper functions for parsing environment variables

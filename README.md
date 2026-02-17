@@ -49,6 +49,6 @@ To create staging storage in Fly/Tigris:
 flyctl storage create --app commonink-staging --name commonink-staging-public
 ```
 
-4. Keep `BUCKET_NAME=commonink-staging-public` in `.env.staging` (the app also defaults safely to this bucket for `FLY_APP_NAME` values like `staging-*`).
+4. Keep `BUCKET_NAME=commonink-staging-public` in `.env.staging`. `BUCKET_NAME` is required and must point to the staging bucket.
 
 5. Fly/Tigris automatically inject `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_ENDPOINT_URL_S3` into preview apps that have storage attached, so secrets are not required to be duplicated in GitHub for each run.
