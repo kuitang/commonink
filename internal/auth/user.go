@@ -21,6 +21,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/sessions"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"github.com/kuitang/agent-notes/internal/email"
+	"github.com/kuitang/agent-notes/internal/urlutil"
 )
 
 // Errors
@@ -294,7 +295,7 @@ func (s *UserService) LinkGoogleAccount(ctx context.Context, userID, googleSub s
 }
 
 // SendMagicLink generates and sends a magic login link.
-func (s *UserService) SendMagicLink(ctx context.Context, emailAddr string) error {
+func (s *UserService) SendMagicLink(ctx context.Context, emailAddr string, baseURLs ...string) error {
 	// Generate random token
 	token, err := generateSecureToken(32)
 	if err != nil {
@@ -322,7 +323,8 @@ func (s *UserService) SendMagicLink(ctx context.Context, emailAddr string) error
 	}
 
 	// Send email with magic link
-	link := fmt.Sprintf("%s/auth/magic/verify?token=%s", s.baseURL, token)
+	baseURL := s.resolveBaseURL(baseURLs...)
+	link := fmt.Sprintf("%s/auth/magic/verify?token=%s", baseURL, token)
 	err = s.emailService.Send(emailAddr, email.TemplateMagicLink, email.MagicLinkData{
 		Link:      link,
 		ExpiresIn: "15 minutes",
@@ -367,6 +369,14 @@ func (s *UserService) VerifyMagicToken(ctx context.Context, token string) (*User
 		Email:     magicToken.Email,
 		CreatedAt: stdtime.Unix(magicToken.CreatedAt, 0),
 	}, nil
+}
+
+func (s *UserService) resolveBaseURL(baseURLs ...string) string {
+	baseURL := s.baseURL
+	if len(baseURLs) > 0 && strings.TrimSpace(baseURLs[0]) != "" {
+		baseURL = baseURLs[0]
+	}
+	return strings.TrimRight(urlutil.OriginFromRequest(nil, baseURL), "/")
 }
 
 // ValidatePasswordStrength checks if a password meets minimum requirements.
@@ -454,7 +464,7 @@ func VerifyPassword(password, encodedHash string) bool {
 }
 
 // SendPasswordReset sends a password reset email.
-func (s *UserService) SendPasswordReset(ctx context.Context, emailAddr string) error {
+func (s *UserService) SendPasswordReset(ctx context.Context, emailAddr string, baseURLs ...string) error {
 	// Generate random token
 	token, err := generateSecureToken(32)
 	if err != nil {
@@ -482,7 +492,8 @@ func (s *UserService) SendPasswordReset(ctx context.Context, emailAddr string) e
 	}
 
 	// Send email with reset link
-	link := fmt.Sprintf("%s/auth/password-reset-confirm?token=%s", s.baseURL, token)
+	baseURL := s.resolveBaseURL(baseURLs...)
+	link := fmt.Sprintf("%s/auth/password-reset-confirm?token=%s", baseURL, token)
 	err = s.emailService.Send(emailAddr, email.TemplatePasswordReset, email.PasswordResetData{
 		Link:      link,
 		ExpiresIn: "15 minutes",

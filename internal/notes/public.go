@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
+	"github.com/kuitang/agent-notes/internal/urlutil"
 )
 
 // PublicNoteService handles public note operations including toggling visibility
@@ -188,7 +190,7 @@ func (s *PublicNoteService) GetPublicURL(userID, noteID string) string {
 
 // GetShortURL returns the short URL for a public note.
 // Returns an empty string if no short URL exists or service is not configured.
-func (s *PublicNoteService) GetShortURL(ctx context.Context, userID, noteID string) string {
+func (s *PublicNoteService) GetShortURL(ctx context.Context, userID, noteID string, baseURLs ...string) string {
 	if s.shortURLSvc == nil {
 		return ""
 	}
@@ -199,7 +201,12 @@ func (s *PublicNoteService) GetShortURL(ctx context.Context, userID, noteID stri
 		return ""
 	}
 
-	return s.baseURL + "/pub/" + shortURL.ShortID
+	baseURL := s.baseURL
+	if len(baseURLs) > 0 && strings.TrimSpace(baseURLs[0]) != "" {
+		baseURL = baseURLs[0]
+	}
+
+	return urlutil.BuildAbsolute(baseURL, "/pub/"+shortURL.ShortID)
 }
 
 // renderNoteHTML renders a note's markdown content to a complete HTML document.

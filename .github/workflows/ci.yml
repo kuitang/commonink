@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.6"
+          check-latest: true
+      - name: Run Go tests
+        run: make test
+      - name: Install Playwright
+        run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+      - name: Run browser tests
+        run: make test-browser
+
+  deploy-preview:
+    name: deploy-preview
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Compute preview app name
+        id: app
+        run: |
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+          APP="pr-${{ github.event.number }}-${OWNER}-commonink"
+          APP="${APP:0:63}"
+          APP="${APP%-}"
+          echo "name=$APP" >> "$GITHUB_OUTPUT"
+      - name: Deploy preview
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          APP_NAME="${{ steps.app.outputs.name }}"
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "Missing FLY_API_TOKEN secret"
+            exit 1
+          fi
+
+          if [ -f ".env.staging" ]; then
+            echo "Applying non-empty .env.staging secrets to ${APP_NAME}"
+            while IFS='=' read -r key value; do
+              if [ -z "${key}" ] || [[ "${key}" == \#* ]]; then
+                continue
+              fi
+              case "${key}" in
+                BASE_URL)
+                  value="https://${APP_NAME}.fly.dev"
+                  ;;
+              esac
+              if [ -n "${value}" ]; then
+                flyctl secrets set "${key}=${value}" --app "${APP_NAME}"
+              fi
+            done < .env.staging
+          fi
+
+          flyctl deploy \
+            --remote-only \
+            --config fly.staging.toml \
+            --app "${APP_NAME}"

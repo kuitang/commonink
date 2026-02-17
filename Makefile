@@ -33,7 +33,7 @@ export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
-.PHONY: all build run run-test run-email test test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
+.PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
@@ -61,6 +61,16 @@ test:
 	go test $(BUILD_TAGS) -v -timeout 120s -parallel $$(nproc 2>/dev/null || echo 4) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
 		-run 'Test' -rapid.checks=10
+
+## test-browser: Run browser tests (Playwright)
+test-browser:
+	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+	go test -v ./tests/browser/...
+
+## test-all: Run test + browser test suite
+test-all:
+	$(MAKE) test
+	$(MAKE) test-browser
 
 ## test-full: Full tests with coverage (requires OPENAI_API_KEY for conformance)
 test-full:

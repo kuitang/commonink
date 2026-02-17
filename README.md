@@ -15,3 +15,14 @@ Runtime informational pages served by the app are sourced from:
 - `static/src/tos.md`
 - `static/src/about.md`
 - `static/src/api-docs.md`
+
+## Copyright and license
+
+Project copyright is held by the project owner and contributors.
+
+- Project status: **Source Available (not Open Source)**  
+- Active license: **Elastic License 2.0** (`LICENSE`)
+
+The repository is intentionally using a Source-Available license. See `LICENSE` for full terms.
+
+Live production target: `https://common.ink`

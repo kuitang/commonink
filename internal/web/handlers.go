@@ -13,6 +13,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
+	"github.com/kuitang/agent-notes/internal/urlutil"
 )
 
 // WebHandler provides HTTP handlers for web UI pages.
@@ -491,7 +492,7 @@ func (h *WebHandler) HandleViewNote(w http.ResponseWriter, r *http.Request) {
 	userID := auth.GetUserID(r.Context())
 	shareURL := ""
 	if note.IsPublic && h.publicNotes != nil {
-		shareURL = h.publicNotes.GetShortURL(r.Context(), userID, note.ID)
+		shareURL = h.publicNotes.GetShortURL(r.Context(), userID, note.ID, h.requestOrigin(r))
 	}
 
 	data := NoteViewData{
@@ -671,7 +672,7 @@ func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Reque
 	noteID := parts[2]
 
 	// Render the public note inline at /pub/{short_id}
-	h.renderPublicNote(w, r, userID, noteID, h.baseURL+"/pub/"+shortID)
+	h.renderPublicNote(w, r, userID, noteID, urlutil.BuildAbsolute(h.requestOrigin(r), "/pub/"+shortID))
 }
 
 // HandlePublicNote handles GET /public/{user_id}/{note_id} - redirects to short URL if available.
@@ -695,7 +696,11 @@ func (h *WebHandler) HandlePublicNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback: render inline if no short URL exists
-	h.renderPublicNote(w, r, userID, noteID, h.baseURL+fullPath)
+	h.renderPublicNote(w, r, userID, noteID, urlutil.BuildAbsolute(h.requestOrigin(r), fullPath))
+}
+
+func (h *WebHandler) requestOrigin(r *http.Request) string {
+	return urlutil.OriginFromRequest(r, h.baseURL)
 }
 
 // renderPublicNote renders a public note page with the minimal-chrome template.
