@@ -33,22 +33,33 @@ This repo is configured to be hostname-agnostic for redirects and absolute URLs.
 
 - Production domain: `https://common.ink`
 - PR preview domains: `staging-1-commonink.fly.dev` to `staging-3-commonink.fly.dev` (assigned by PR number in CI)
-- Staging secrets are defined in `.env.staging` and are separate from production secrets.
+- GitHub CI for previews should only require `FLY_API_TOKEN_STAGING`.
 
 Staging / preview storage uses a dedicated bucket:
 
 - `commonink-staging-public`
 
-To create staging storage in Fly/Tigris:
+### Preview app secret bootstrap (recommended)
 
-1. Configure Fly auth/session in your shell.
-2. Ensure the staging app exists (`commonink-staging`) or that preview is allowed to create apps.
-3. Create the dedicated bucket once for staging previews:
+1. Create (or reuse) one-time secrets locally and provision each slot app directly in Fly:
 
+```bash
+cp scripts/secrets.staging.example scripts/secrets.staging
+# Fill in real values in scripts/secrets.staging
+source scripts/secrets.staging
+
+./scripts/bootstrap-staging-preview.sh staging-1-commonink
+./scripts/bootstrap-staging-preview.sh staging-2-commonink
+./scripts/bootstrap-staging-preview.sh staging-3-commonink
+```
+
+2. Create staging storage (once) in Fly/Tigris and keep the bucket name as:
 ```bash
 flyctl storage create --app commonink-staging --name commonink-staging-public
 ```
 
-4. Keep `BUCKET_NAME=commonink-staging-public` in `.env.staging`. `BUCKET_NAME` is required and must point to the staging bucket.
+3. Keep bucket name explicit:
 
-5. Fly/Tigris automatically inject `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_ENDPOINT_URL_S3` into preview apps that have storage attached, so secrets are not required to be duplicated in GitHub for each run.
+- `BUCKET_NAME=commonink-staging-public`
+
+CI updates `BASE_URL`, `GOOGLE_REDIRECT_URL`, and `BUCKET_NAME` per PR slot on each preview deploy.
