@@ -53,6 +53,7 @@ jobs:
           echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
           echo "google_redirect_url=$GOOGLE_REDIRECT_URL" >> "$GITHUB_OUTPUT"
       - name: Deploy preview
+        shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID_STAGING }}
@@ -67,6 +68,7 @@ jobs:
           FLY_ORG="commonink-staging"
           BASE_URL="${{ steps.app.outputs.base_url }}"
           GOOGLE_REDIRECT_URL="${{ steps.app.outputs.google_redirect_url }}"
+          BUCKET_NAME=""
 
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "Missing FLY_API_TOKEN_STAGING secret"
@@ -96,13 +98,21 @@ jobs:
               fi
               case "${key}" in
                 BASE_URL|GOOGLE_REDIRECT_URL|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|RESEND_API_KEY|MASTER_KEY|OAUTH_HMAC_SECRET|OAUTH_SIGNING_KEY|AWS_ENDPOINT_URL_S3|AWS_REGION|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|S3_PUBLIC_URL)
-                  continue
-                  ;;
+                continue
+                ;;
               esac
+              if [ "$key" = "BUCKET_NAME" ]; then
+                BUCKET_NAME="$value"
+              fi
               if [ -n "${value}" ]; then
                 flyctl secrets set "${key}=${value}" --app "${APP_NAME}"
               fi
             done < .env.staging
+          fi
+
+          if [ -z "${BUCKET_NAME}" ]; then
+            echo "Missing BUCKET_NAME in .env.staging"
+            exit 1
           fi
 
           flyctl secrets set \
@@ -115,7 +125,7 @@ jobs:
             "OAUTH_HMAC_SECRET=${OAUTH_HMAC_SECRET}" \
             "OAUTH_SIGNING_KEY=${OAUTH_SIGNING_KEY}" \
             "S3_PUBLIC_URL=${S3_PUBLIC_URL}" \
-            "BUCKET_NAME=${BUCKET_NAME:-commonink-staging-public}" \
+            "BUCKET_NAME=${BUCKET_NAME}" \
             --app "${APP_NAME}"
 
           flyctl deploy \
