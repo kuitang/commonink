@@ -17,7 +17,7 @@ import (
 // the developer can enter an email to "sign in as". This makes "Sign in with
 // Google" functional in --no-oidc / make run-test mode.
 type LocalMockOIDCProvider struct {
-	baseURL        string
+	baseURL         string
 	callbackOrigins map[string]string
 
 	mu    sync.Mutex

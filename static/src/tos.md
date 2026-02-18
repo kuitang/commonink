@@ -48,9 +48,17 @@ You agree NOT to:
 ## API and MCP Usage
 
 - API access is subject to rate limiting
-- Free tier: 60 requests per minute
-- Paid tier: 6000 requests per minute
+- Free tier: 10 requests per second (600 per minute)
+- Pro tier: 1,000 requests per second
 - You must not circumvent rate limits or abuse API access
+
+## Billing and Subscriptions
+
+- Free accounts include 100 MB of storage and standard rate limits
+- Pro subscriptions ($2/month or $20/year) include unlimited storage and higher rate limits
+- Subscriptions are managed through Stripe and can be canceled at any time
+- Refunds are handled on a case-by-case basis; contact us at legal@common.ink
+- Downgrading to Free does not delete existing data, but new writes may be blocked if over the free storage limit
 
 ## Service Availability
 

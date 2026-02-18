@@ -58,6 +58,19 @@ type OauthToken struct {
 	CreatedAt        int64          `json:"created_at"`
 }
 
+type PendingSubscription struct {
+	Email              string `json:"email"`
+	StripeCustomerID   string `json:"stripe_customer_id"`
+	SubscriptionID     string `json:"subscription_id"`
+	SubscriptionStatus string `json:"subscription_status"`
+	CreatedAt          int64  `json:"created_at"`
+}
+
+type ProcessedWebhookEvent struct {
+	EventID     string `json:"event_id"`
+	ProcessedAt int64  `json:"processed_at"`
+}
+
 type Session struct {
 	SessionID string `json:"session_id"`
 	UserID    string `json:"user_id"`
@@ -70,6 +83,11 @@ type ShortUrl struct {
 	ShortID   string `json:"short_id"`
 	FullPath  string `json:"full_path"`
 	CreatedAt int64  `json:"created_at"`
+}
+
+type StripeCustomerMap struct {
+	StripeCustomerID string `json:"stripe_customer_id"`
+	UserID           string `json:"user_id"`
 }
 
 type UserKey struct {

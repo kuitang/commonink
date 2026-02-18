@@ -50,8 +50,10 @@ run: build
 	@bash -c 'source secrets.sh && $(BINARY_PATH)'
 
 ## run-test: Run with all mocks (deterministic test secrets from Makefile)
+## Uses separate data-test/ directory to avoid key conflicts with `make run`
 run-test: build
-	DATABASE_PATH=./data $(BINARY_PATH) --test
+	rm -rf ./data-test/
+	DATABASE_PATH=./data-test $(BINARY_PATH) --test
 
 ## run-email: Run with real email only (mock OIDC + S3)
 run-email: build
@@ -123,7 +125,7 @@ mod-tidy:
 ## clean: Remove build artifacts and test data
 clean:
 	rm -rf bin/ test-results/
-	rm -rf ./data/
+	rm -rf ./data/ ./data-test/
 	rm -rf ./internal/db/testdata/
 	rm -rf ./tests/e2e/testdata/
 	rm -f coverage.out coverage.html

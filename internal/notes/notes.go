@@ -24,12 +24,13 @@ const (
 
 // Service handles note CRUD operations using the db layer
 type Service struct {
-	userDB *db.UserDB
+	userDB       *db.UserDB
+	storageLimit int64
 }
 
-// NewService creates a new notes service for the specified user
-func NewService(userDB *db.UserDB) *Service {
-	return &Service{userDB: userDB}
+// NewService creates a new notes service. storageLimit of 0 means unlimited (paid users).
+func NewService(userDB *db.UserDB, storageLimit int64) *Service {
+	return &Service{userDB: userDB, storageLimit: storageLimit}
 }
 
 // NewServiceForHardcodedUser creates a new notes service for the hardcoded test user
@@ -39,7 +40,7 @@ func NewServiceForHardcodedUser() (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user database: %w", err)
 	}
-	return &Service{userDB: userDB}, nil
+	return &Service{userDB: userDB, storageLimit: FreeStorageLimitBytes}, nil
 }
 
 // GetStorageUsage returns the current storage usage for this user
@@ -49,7 +50,7 @@ func (s *Service) GetStorageUsage() (StorageUsageInfo, error) {
 	if err != nil {
 		return StorageUsageInfo{}, fmt.Errorf("failed to get storage usage: %w", err)
 	}
-	return NewStorageUsageInfo(totalSize), nil
+	return NewStorageUsageInfo(totalSize, s.storageLimit), nil
 }
 
 // Create creates a new note
@@ -66,7 +67,7 @@ func (s *Service) Create(params CreateNoteParams) (*Note, error) {
 		return nil, fmt.Errorf("failed to check storage: %w", err)
 	}
 	newContentSize := int64(len(params.Title) + len(params.Content))
-	if err := CheckStorageLimit(currentSize, newContentSize); err != nil {
+	if err := CheckStorageLimit(currentSize, newContentSize, s.storageLimit); err != nil {
 		return nil, err
 	}
 
@@ -157,7 +158,7 @@ func (s *Service) Update(id string, params UpdateNoteParams) (*Note, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to check storage: %w", err)
 		}
-		if err := CheckStorageLimitForUpdate(currentTotalSize, oldSize, newSize); err != nil {
+		if err := CheckStorageLimitForUpdate(currentTotalSize, oldSize, newSize, s.storageLimit); err != nil {
 			return nil, err
 		}
 	}

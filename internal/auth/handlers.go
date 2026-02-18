@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -163,13 +164,50 @@ func (h *Handler) HandleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// Find or create user (OIDC auto-creates)
 	user, err := h.userService.FindOrCreateByProvider(r.Context(), claims.Email)
 	if err != nil {
+		log.Printf("[AUTH] FindOrCreateByProvider failed for email=%q: %v", claims.Email, err)
 		http.Error(w, "Failed to find or create user", http.StatusInternalServerError)
 		return
 	}
 
-	// Link Google account if not already linked
+	// Verify/link Google sub
+	// Check if intent is "link" (from account settings flow)
+	intentCookie, _ := r.Cookie("oauth_intent")
+	isLinkIntent := intentCookie != nil && intentCookie.Value == "link"
+
+	if isLinkIntent {
+		// Account linking flow: verify email matches logged-in user, then link
+		sessionID, sessionErr := GetFromRequest(r)
+		if sessionErr != nil {
+			http.Error(w, "Must be logged in to link account", http.StatusUnauthorized)
+			return
+		}
+		loggedInUserID, sessionErr := h.sessionService.Validate(r.Context(), sessionID)
+		if sessionErr != nil {
+			http.Error(w, "Invalid session", http.StatusUnauthorized)
+			return
+		}
+		if loggedInUserID != user.ID {
+			http.Error(w, "Email mismatch: Google email must match your account email", http.StatusForbidden)
+			return
+		}
+		if err := h.userService.LinkGoogleAccount(r.Context(), user.ID, claims.Sub); err != nil {
+			log.Printf("[AUTH] LinkGoogleAccount failed: %v", err)
+			http.Error(w, "Failed to link Google account", http.StatusInternalServerError)
+			return
+		}
+		// Clear intent cookie
+		http.SetCookie(w, &http.Cookie{Name: "oauth_intent", Value: "", Path: "/", MaxAge: -1})
+		// Don't create new session — user is already logged in
+		// Redirect to account settings with success
+		http.Redirect(w, r, "/settings/account?success=google_linked", http.StatusFound)
+		return
+	}
+
+	// Normal login flow: verify google_sub consistency
 	if err := h.userService.LinkGoogleAccount(r.Context(), user.ID, claims.Sub); err != nil {
-		// Log but don't fail - account linking is optional
+		log.Printf("[AUTH] LinkGoogleAccount failed for user=%s: %v", user.ID, err)
+		http.Error(w, "Google account mismatch", http.StatusForbidden)
+		return
 	}
 
 	// Create session

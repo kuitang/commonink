@@ -55,7 +55,7 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 	s3Client := s3client.TestClient(t, fmt.Sprintf("public-test-bucket-%d", testID))
 
 	// Create services
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, notes.FreeStorageLimitBytes)
 	publicService := notes.NewPublicNoteService(s3Client)
 
 	// Create mux

@@ -23,7 +23,7 @@ func setupLimitsTestService(t interface {
 	if err != nil {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}
-	return NewService(userDB)
+	return NewService(userDB, FreeStorageLimitBytes)
 }
 
 // =============================================================================
@@ -31,16 +31,16 @@ func setupLimitsTestService(t interface {
 // =============================================================================
 
 func testCheckStorageLimit_Properties(t *rapid.T) {
-	currentSize := rapid.Int64Range(0, StorageLimitBytes).Draw(t, "currentSize")
-	newContentSize := rapid.Int64Range(0, StorageLimitBytes).Draw(t, "newContentSize")
+	currentSize := rapid.Int64Range(0, FreeStorageLimitBytes).Draw(t, "currentSize")
+	newContentSize := rapid.Int64Range(0, FreeStorageLimitBytes).Draw(t, "newContentSize")
 
-	err := CheckStorageLimit(currentSize, newContentSize)
+	err := CheckStorageLimit(currentSize, newContentSize, FreeStorageLimitBytes)
 
-	if currentSize+newContentSize > StorageLimitBytes {
+	if currentSize+newContentSize > FreeStorageLimitBytes {
 		// Property: Should fail when exceeding limit
 		if err == nil {
 			t.Fatalf("Expected error when currentSize(%d) + newContentSize(%d) > limit(%d)",
-				currentSize, newContentSize, StorageLimitBytes)
+				currentSize, newContentSize, FreeStorageLimitBytes)
 		}
 		if !errors.Is(err, ErrStorageLimitExceeded) {
 			t.Fatalf("Expected ErrStorageLimitExceeded, got: %v", err)
@@ -69,9 +69,9 @@ func FuzzCheckStorageLimit_Properties(f *testing.F) {
 func testCheckStorageLimitForUpdate_ShrinkAlways_Properties(t *rapid.T) {
 	oldContentSize := rapid.Int64Range(100, 10000).Draw(t, "oldContentSize")
 	newContentSize := rapid.Int64Range(0, oldContentSize).Draw(t, "newContentSize")
-	currentTotalSize := rapid.Int64Range(oldContentSize, StorageLimitBytes+10000).Draw(t, "currentTotalSize")
+	currentTotalSize := rapid.Int64Range(oldContentSize, FreeStorageLimitBytes+10000).Draw(t, "currentTotalSize")
 
-	err := CheckStorageLimitForUpdate(currentTotalSize, oldContentSize, newContentSize)
+	err := CheckStorageLimitForUpdate(currentTotalSize, oldContentSize, newContentSize, FreeStorageLimitBytes)
 
 	// Property: Shrinking content should always succeed
 	if err != nil {
@@ -97,12 +97,12 @@ func testCheckStorageLimitForUpdate_GrowEnforced_Properties(t *rapid.T) {
 	oldContentSize := rapid.Int64Range(0, 10000).Draw(t, "oldContentSize")
 	growAmount := rapid.Int64Range(1, 10000).Draw(t, "growAmount")
 	newContentSize := oldContentSize + growAmount
-	currentTotalSize := rapid.Int64Range(oldContentSize, StorageLimitBytes+10000).Draw(t, "currentTotalSize")
+	currentTotalSize := rapid.Int64Range(oldContentSize, FreeStorageLimitBytes+10000).Draw(t, "currentTotalSize")
 
-	err := CheckStorageLimitForUpdate(currentTotalSize, oldContentSize, newContentSize)
+	err := CheckStorageLimitForUpdate(currentTotalSize, oldContentSize, newContentSize, FreeStorageLimitBytes)
 
 	delta := newContentSize - oldContentSize
-	if currentTotalSize+delta > StorageLimitBytes {
+	if currentTotalSize+delta > FreeStorageLimitBytes {
 		if err == nil {
 			t.Fatalf("Expected error when growing content would exceed limit")
 		}
@@ -130,18 +130,18 @@ func FuzzCheckStorageLimitForUpdate_GrowEnforced_Properties(f *testing.F) {
 // =============================================================================
 
 func testNewStorageUsageInfo_Properties(t *rapid.T) {
-	usedBytes := rapid.Int64Range(0, StorageLimitBytes*2).Draw(t, "usedBytes")
+	usedBytes := rapid.Int64Range(0, FreeStorageLimitBytes*2).Draw(t, "usedBytes")
 
-	info := NewStorageUsageInfo(usedBytes)
+	info := NewStorageUsageInfo(usedBytes, FreeStorageLimitBytes)
 
 	// Property: UsedBytes matches input
 	if info.UsedBytes != usedBytes {
 		t.Fatalf("UsedBytes mismatch: expected %d, got %d", usedBytes, info.UsedBytes)
 	}
 
-	// Property: LimitBytes is always StorageLimitBytes
-	if info.LimitBytes != StorageLimitBytes {
-		t.Fatalf("LimitBytes mismatch: expected %d, got %d", StorageLimitBytes, info.LimitBytes)
+	// Property: LimitBytes is always FreeStorageLimitBytes
+	if info.LimitBytes != FreeStorageLimitBytes {
+		t.Fatalf("LimitBytes mismatch: expected %d, got %d", FreeStorageLimitBytes, info.LimitBytes)
 	}
 
 	// Property: Percentage is in [0, 100] range
@@ -172,8 +172,8 @@ func FuzzNewStorageUsageInfo_Properties(f *testing.F) {
 
 func testStorageLimitConstant_Properties(t *rapid.T) {
 	expected := int64(100 * 1024 * 1024)
-	if StorageLimitBytes != expected {
-		t.Fatalf("StorageLimitBytes should be %d (100MB), got %d", expected, StorageLimitBytes)
+	if FreeStorageLimitBytes != expected {
+		t.Fatalf("FreeStorageLimitBytes should be %d (100MB), got %d", expected, FreeStorageLimitBytes)
 	}
 }
 
@@ -310,8 +310,8 @@ func testWithinLimit_CreateSucceeds_Properties(t *rapid.T) {
 		t.Fatalf("GetStorageUsage failed: %v", err)
 	}
 
-	if usage.UsedBytes > StorageLimitBytes {
-		t.Fatalf("Usage should be within limit: %d > %d", usage.UsedBytes, StorageLimitBytes)
+	if usage.UsedBytes > FreeStorageLimitBytes {
+		t.Fatalf("Usage should be within limit: %d > %d", usage.UsedBytes, FreeStorageLimitBytes)
 	}
 }
 

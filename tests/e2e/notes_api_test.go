@@ -71,7 +71,7 @@ func createNotesTestServer() *notesTestServer {
 	}
 
 	// Create notes service and handler
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, notes.FreeStorageLimitBytes)
 	handler := api.NewHandler(notesService)
 
 	// Create mux and register routes

@@ -156,6 +156,54 @@ func (q *Queries) CreateOAuthToken(ctx context.Context, arg CreateOAuthTokenPara
 	return err
 }
 
+const createPendingSubscription = `-- name: CreatePendingSubscription :exec
+
+INSERT INTO pending_subscriptions (email, stripe_customer_id, subscription_id, subscription_status, created_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(email) DO UPDATE SET
+  stripe_customer_id = excluded.stripe_customer_id,
+  subscription_id = excluded.subscription_id,
+  subscription_status = excluded.subscription_status,
+  created_at = excluded.created_at
+`
+
+type CreatePendingSubscriptionParams struct {
+	Email              string `json:"email"`
+	StripeCustomerID   string `json:"stripe_customer_id"`
+	SubscriptionID     string `json:"subscription_id"`
+	SubscriptionStatus string `json:"subscription_status"`
+	CreatedAt          int64  `json:"created_at"`
+}
+
+// Pending subscriptions operations
+func (q *Queries) CreatePendingSubscription(ctx context.Context, arg CreatePendingSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, createPendingSubscription,
+		arg.Email,
+		arg.StripeCustomerID,
+		arg.SubscriptionID,
+		arg.SubscriptionStatus,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const createProcessedWebhookEvent = `-- name: CreateProcessedWebhookEvent :exec
+
+INSERT INTO processed_webhook_events (event_id, processed_at)
+VALUES (?, ?)
+`
+
+type CreateProcessedWebhookEventParams struct {
+	EventID     string `json:"event_id"`
+	ProcessedAt int64  `json:"processed_at"`
+}
+
+// Processed webhook events operations
+func (q *Queries) CreateProcessedWebhookEvent(ctx context.Context, arg CreateProcessedWebhookEventParams) error {
+	_, err := q.db.ExecContext(ctx, createProcessedWebhookEvent, arg.EventID, arg.ProcessedAt)
+	return err
+}
+
 const createSession = `-- name: CreateSession :exec
 
 
@@ -197,6 +245,24 @@ type CreateShortURLParams struct {
 // Short URL operations
 func (q *Queries) CreateShortURL(ctx context.Context, arg CreateShortURLParams) error {
 	_, err := q.db.ExecContext(ctx, createShortURL, arg.ShortID, arg.FullPath, arg.CreatedAt)
+	return err
+}
+
+const createStripeCustomerMap = `-- name: CreateStripeCustomerMap :exec
+
+INSERT INTO stripe_customer_map (stripe_customer_id, user_id)
+VALUES (?, ?)
+ON CONFLICT(stripe_customer_id) DO UPDATE SET user_id = excluded.user_id
+`
+
+type CreateStripeCustomerMapParams struct {
+	StripeCustomerID string `json:"stripe_customer_id"`
+	UserID           string `json:"user_id"`
+}
+
+// Stripe customer map operations
+func (q *Queries) CreateStripeCustomerMap(ctx context.Context, arg CreateStripeCustomerMapParams) error {
+	_, err := q.db.ExecContext(ctx, createStripeCustomerMap, arg.StripeCustomerID, arg.UserID)
 	return err
 }
 
@@ -341,6 +407,24 @@ func (q *Queries) DeleteOAuthTokensByUserID(ctx context.Context, userID string) 
 	return err
 }
 
+const deleteOldProcessedWebhookEvents = `-- name: DeleteOldProcessedWebhookEvents :exec
+DELETE FROM processed_webhook_events WHERE processed_at < ?
+`
+
+func (q *Queries) DeleteOldProcessedWebhookEvents(ctx context.Context, processedAt int64) error {
+	_, err := q.db.ExecContext(ctx, deleteOldProcessedWebhookEvents, processedAt)
+	return err
+}
+
+const deletePendingSubscription = `-- name: DeletePendingSubscription :exec
+DELETE FROM pending_subscriptions WHERE email = ?
+`
+
+func (q *Queries) DeletePendingSubscription(ctx context.Context, email string) error {
+	_, err := q.db.ExecContext(ctx, deletePendingSubscription, email)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE session_id = ?
 `
@@ -374,6 +458,15 @@ DELETE FROM short_urls WHERE full_path = ?
 
 func (q *Queries) DeleteShortURLByFullPath(ctx context.Context, fullPath string) error {
 	_, err := q.db.ExecContext(ctx, deleteShortURLByFullPath, fullPath)
+	return err
+}
+
+const deleteStripeCustomerMap = `-- name: DeleteStripeCustomerMap :exec
+DELETE FROM stripe_customer_map WHERE stripe_customer_id = ?
+`
+
+func (q *Queries) DeleteStripeCustomerMap(ctx context.Context, stripeCustomerID string) error {
+	_, err := q.db.ExecContext(ctx, deleteStripeCustomerMap, stripeCustomerID)
 	return err
 }
 
@@ -574,6 +667,38 @@ func (q *Queries) GetOAuthTokensByUserClient(ctx context.Context, arg GetOAuthTo
 	return items, nil
 }
 
+const getPendingSubscription = `-- name: GetPendingSubscription :one
+SELECT email, stripe_customer_id, subscription_id, subscription_status, created_at
+FROM pending_subscriptions
+WHERE email = ?
+`
+
+func (q *Queries) GetPendingSubscription(ctx context.Context, email string) (PendingSubscription, error) {
+	row := q.db.QueryRowContext(ctx, getPendingSubscription, email)
+	var i PendingSubscription
+	err := row.Scan(
+		&i.Email,
+		&i.StripeCustomerID,
+		&i.SubscriptionID,
+		&i.SubscriptionStatus,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getProcessedWebhookEvent = `-- name: GetProcessedWebhookEvent :one
+SELECT event_id, processed_at
+FROM processed_webhook_events
+WHERE event_id = ?
+`
+
+func (q *Queries) GetProcessedWebhookEvent(ctx context.Context, eventID string) (ProcessedWebhookEvent, error) {
+	row := q.db.QueryRowContext(ctx, getProcessedWebhookEvent, eventID)
+	var i ProcessedWebhookEvent
+	err := row.Scan(&i.EventID, &i.ProcessedAt)
+	return i, err
+}
+
 const getSession = `-- name: GetSession :one
 SELECT session_id, user_id, expires_at, created_at
 FROM sessions
@@ -660,6 +785,32 @@ func (q *Queries) GetShortURLByShortID(ctx context.Context, shortID string) (Sho
 		&i.FullPath,
 		&i.CreatedAt,
 	)
+	return i, err
+}
+
+const getStripeCustomerMap = `-- name: GetStripeCustomerMap :one
+SELECT stripe_customer_id, user_id
+FROM stripe_customer_map
+WHERE stripe_customer_id = ?
+`
+
+func (q *Queries) GetStripeCustomerMap(ctx context.Context, stripeCustomerID string) (StripeCustomerMap, error) {
+	row := q.db.QueryRowContext(ctx, getStripeCustomerMap, stripeCustomerID)
+	var i StripeCustomerMap
+	err := row.Scan(&i.StripeCustomerID, &i.UserID)
+	return i, err
+}
+
+const getStripeCustomerMapByUserID = `-- name: GetStripeCustomerMapByUserID :one
+SELECT stripe_customer_id, user_id
+FROM stripe_customer_map
+WHERE user_id = ?
+`
+
+func (q *Queries) GetStripeCustomerMapByUserID(ctx context.Context, userID string) (StripeCustomerMap, error) {
+	row := q.db.QueryRowContext(ctx, getStripeCustomerMapByUserID, userID)
+	var i StripeCustomerMap
+	err := row.Scan(&i.StripeCustomerID, &i.UserID)
 	return i, err
 }
 

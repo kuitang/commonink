@@ -203,3 +203,56 @@ DELETE FROM short_urls WHERE short_id = ?;
 
 -- name: DeleteShortURLByFullPath :exec
 DELETE FROM short_urls WHERE full_path = ?;
+
+-- Pending subscriptions operations
+
+-- name: CreatePendingSubscription :exec
+INSERT INTO pending_subscriptions (email, stripe_customer_id, subscription_id, subscription_status, created_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(email) DO UPDATE SET
+  stripe_customer_id = excluded.stripe_customer_id,
+  subscription_id = excluded.subscription_id,
+  subscription_status = excluded.subscription_status,
+  created_at = excluded.created_at;
+
+-- name: GetPendingSubscription :one
+SELECT email, stripe_customer_id, subscription_id, subscription_status, created_at
+FROM pending_subscriptions
+WHERE email = ?;
+
+-- name: DeletePendingSubscription :exec
+DELETE FROM pending_subscriptions WHERE email = ?;
+
+-- Stripe customer map operations
+
+-- name: CreateStripeCustomerMap :exec
+INSERT INTO stripe_customer_map (stripe_customer_id, user_id)
+VALUES (?, ?)
+ON CONFLICT(stripe_customer_id) DO UPDATE SET user_id = excluded.user_id;
+
+-- name: GetStripeCustomerMap :one
+SELECT stripe_customer_id, user_id
+FROM stripe_customer_map
+WHERE stripe_customer_id = ?;
+
+-- name: GetStripeCustomerMapByUserID :one
+SELECT stripe_customer_id, user_id
+FROM stripe_customer_map
+WHERE user_id = ?;
+
+-- name: DeleteStripeCustomerMap :exec
+DELETE FROM stripe_customer_map WHERE stripe_customer_id = ?;
+
+-- Processed webhook events operations
+
+-- name: CreateProcessedWebhookEvent :exec
+INSERT INTO processed_webhook_events (event_id, processed_at)
+VALUES (?, ?);
+
+-- name: GetProcessedWebhookEvent :one
+SELECT event_id, processed_at
+FROM processed_webhook_events
+WHERE event_id = ?;
+
+-- name: DeleteOldProcessedWebhookEvents :exec
+DELETE FROM processed_webhook_events WHERE processed_at < ?;

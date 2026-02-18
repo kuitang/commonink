@@ -42,6 +42,11 @@ echo "  AWS_REGION"
 echo "  AWS_ACCESS_KEY_ID"
 echo "  AWS_SECRET_ACCESS_KEY"
 echo "  BUCKET_NAME"
+echo "  STRIPE_SECRET_KEY"
+echo "  STRIPE_PUBLISHABLE_KEY"
+echo "  STRIPE_WEBHOOK_SECRET"
+echo "  STRIPE_PRICE_MONTHLY"
+echo "  STRIPE_PRICE_ANNUAL"
 echo ""
 
 if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
@@ -64,6 +69,11 @@ required_secrets=(
   AWS_ACCESS_KEY_ID
   AWS_SECRET_ACCESS_KEY
   BUCKET_NAME
+  STRIPE_SECRET_KEY
+  STRIPE_PUBLISHABLE_KEY
+  STRIPE_WEBHOOK_SECRET
+  STRIPE_PRICE_MONTHLY
+  STRIPE_PRICE_ANNUAL
 )
 
 missing=()

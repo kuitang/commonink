@@ -75,7 +75,7 @@ func setupShortURLTestServer(t *testing.T) *shortURLTestServer {
 	shortURLSvc := shorturl.NewService(sessionsDB.Queries())
 
 	// Create services
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, notes.FreeStorageLimitBytes)
 	publicService := notes.NewPublicNoteService(s3Client)
 
 	// Create mux

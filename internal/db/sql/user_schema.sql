@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS account (
     created_at INTEGER NOT NULL,
     subscription_status TEXT DEFAULT 'free',
     subscription_id TEXT,
+    stripe_customer_id TEXT,
     db_size_bytes INTEGER DEFAULT 0,
     last_login INTEGER
 );

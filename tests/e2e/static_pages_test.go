@@ -25,6 +25,7 @@ import (
 	_ "github.com/mutecomm/go-sqlcipher/v4"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	emailpkg "github.com/kuitang/agent-notes/internal/email"
@@ -46,7 +47,7 @@ type staticPageServer struct {
 	rateLimiter    *ratelimit.RateLimiter
 	sessionsDB     *db.SessionsDB
 	emailService   *emailpkg.MockEmailService
-	oidcClient     *auth.MockOIDCClient
+	mockOIDC       *auth.LocalMockOIDCProvider
 	userService    *auth.UserService
 	sessionService *auth.SessionService
 	shared         bool
@@ -106,11 +107,11 @@ func createStaticPageServer(tempDir string) *staticPageServer {
 	consentService := auth.NewConsentService(sessionsDB)
 
 	oauthProvider, err := oauth.NewProvider(oauth.Config{
-		DB:         sessionsDB.DB(),
-		Issuer:     server.URL,
-		Resource:   server.URL,
-		HMACSecret: hmacSecret,
-		SigningKey: signingKey,
+		DB:                 sessionsDB.DB(),
+		Issuer:             server.URL,
+		Resource:           server.URL,
+		HMACSecret:         hmacSecret,
+		SigningKey:         signingKey,
 		ClientSecretHasher: oauth.FakeInsecureClientSecretHasher{},
 	})
 	if err != nil {
@@ -154,6 +155,7 @@ func createStaticPageServer(tempDir string) *staticPageServer {
 		consentService,
 		mockS3Client,
 		nil, // shortURLSvc
+		billing.NewMockService(),
 		server.URL,
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)
@@ -164,9 +166,10 @@ func createStaticPageServer(tempDir string) *staticPageServer {
 	staticHandler.RegisterRoutes(mux)
 
 	// Auth API routes
-	oidcClient := auth.NewMockOIDCClient()
-	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
+	mockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
+	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
 	authHandler.RegisterRoutes(mux)
+	mockOIDC.RegisterRoutes(mux)
 
 	// OAuth metadata
 	oauthProvider.RegisterMetadataRoutes(mux)
@@ -185,7 +188,7 @@ func createStaticPageServer(tempDir string) *staticPageServer {
 		rateLimiter:    rateLimiter,
 		sessionsDB:     sessionsDB,
 		emailService:   emailService,
-		oidcClient:     oidcClient,
+		mockOIDC:       mockOIDC,
 		userService:    userService,
 		sessionService: sessionService,
 	}
@@ -250,9 +253,6 @@ func resetStaticPageServerState(ts *staticPageServer) error {
 	}
 	if ts.emailService != nil {
 		ts.emailService.Clear()
-	}
-	if ts.oidcClient != nil {
-		ts.oidcClient.Reset()
 	}
 	return nil
 }

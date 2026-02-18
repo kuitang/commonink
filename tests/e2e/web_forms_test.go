@@ -30,6 +30,7 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	emailpkg "github.com/kuitang/agent-notes/internal/email"
@@ -66,7 +67,7 @@ type webFormServer struct {
 	sessionService *auth.SessionService
 	emailService   *emailpkg.MockEmailService
 	rateLimiter    *ratelimit.RateLimiter
-	oidcClient     *auth.MockOIDCClient
+	mockOIDC       *auth.LocalMockOIDCProvider
 }
 
 // setupWebFormServer creates a test server with all web handlers wired up.
@@ -134,11 +135,11 @@ func createWebFormServer(tempDir string) *webFormServer {
 
 	// Create OAuth provider
 	oauthProvider, err := oauth.NewProvider(oauth.Config{
-		DB:         sessionsDB.DB(),
-		Issuer:     server.URL,
-		Resource:   server.URL,
-		HMACSecret: hmacSecret,
-		SigningKey: signingKey,
+		DB:                 sessionsDB.DB(),
+		Issuer:             server.URL,
+		Resource:           server.URL,
+		HMACSecret:         hmacSecret,
+		SigningKey:         signingKey,
 		ClientSecretHasher: oauth.FakeInsecureClientSecretHasher{},
 	})
 	if err != nil {
@@ -187,6 +188,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 		consentService,
 		mockS3Client,
 		shortURLSvc,
+		billing.NewMockService(),
 		server.URL,
 	)
 
@@ -197,10 +199,10 @@ func createWebFormServer(tempDir string) *webFormServer {
 	mux.Handle("POST /oauth/consent", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(webHandler.HandleConsentDecision)))
 
 	// Register auth API routes (POST /auth/* for form handling)
-	oidcClient := auth.NewMockOIDCClient()
-	oidcClient.SetNextSuccess("webform-default-sub", "webform-default@example.com", "Web Form User", true)
-	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
+	mockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
+	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
 	authHandler.RegisterRoutes(mux)
+	mockOIDC.RegisterRoutes(mux)
 
 	// Register OAuth metadata routes
 	oauthProvider.RegisterMetadataRoutes(mux)
@@ -222,7 +224,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 		sessionService: sessionService,
 		emailService:   emailService,
 		rateLimiter:    rateLimiter,
-		oidcClient:     oidcClient,
+		mockOIDC:       mockOIDC,
 	}
 }
 
@@ -293,10 +295,6 @@ func resetWebFormServerState(ts *webFormServer) error {
 
 	if ts.emailService != nil {
 		ts.emailService.Clear()
-	}
-	if ts.oidcClient != nil {
-		ts.oidcClient.Reset()
-		ts.oidcClient.SetNextSuccess("webform-default-sub", "webform-default@example.com", "Web Form User", true)
 	}
 	return nil
 }

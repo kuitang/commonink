@@ -155,6 +155,42 @@
     </div>
 </section>
 
+<!-- Pricing Section -->
+<section class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
+        <div class="text-center mb-12">
+            <h2 class="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-white">Choose your plan</h2>
+            <p class="mt-4 text-lg text-gray-600 dark:text-gray-300">Start free, upgrade when you need more.</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto">
+            <!-- Free -->
+            <div class="themed-card border border-gray-200 dark:border-gray-700 p-8">
+                <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Free</h3>
+                <p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$0</span><span class="text-gray-500 dark:text-gray-400">/mo</span></p>
+                <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
+                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>100 MB storage</li>
+                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>10 requests/second</li>
+                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Web + MCP access</li>
+                </ul>
+                <a href="/register" class="mt-8 block w-full text-center px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-input text-gray-700 dark:text-gray-200 font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">Get Started Free</a>
+            </div>
+            <!-- Pro -->
+            <div class="themed-card border-2 border-primary-500 p-8 relative">
+                <div class="absolute -top-3 left-1/2 -translate-x-1/2"><span class="bg-primary-600 text-white text-xs font-bold px-3 py-1 rounded-badge uppercase tracking-wide">Recommended</span></div>
+                <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Pro</h3>
+                <p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$2</span><span class="text-gray-500 dark:text-gray-400">/mo</span></p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">or $20/year &mdash; save 17%</p>
+                <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
+                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Unlimited storage</li>
+                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>1,000 requests/second</li>
+                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Priority support</li>
+                </ul>
+                <a href="/pricing" class="themed-btn-primary mt-8 block w-full px-6 py-3">View Pricing</a>
+            </div>
+        </div>
+    </div>
+</section>
+
 <!-- CTA Footer Section -->
 <section class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
@@ -163,7 +199,7 @@
                 Ready to get started?
             </h2>
             <p class="mt-4 text-lg text-gray-600 dark:text-gray-300 max-w-xl mx-auto">
-                Create your free account and start taking notes that both you and your AI assistants can use.
+                Join thousands of users who trust common.ink for their AI-powered notes.
             </p>
             <div class="mt-8">
                 {{if .User}}
@@ -182,6 +218,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
                 </a>
+                <a href="/pricing" class="block mt-3 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">View pricing &rarr;</a>
                 {{end}}
             </div>
         </div>
