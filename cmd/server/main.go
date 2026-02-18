@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/config"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
@@ -151,6 +153,23 @@ func main() {
 		log.Println("Using real Google OIDC client")
 	}
 
+	// Initialize billing service
+	var billingService billing.BillingService
+	if cfg.IsTestMode() {
+		billingService = billing.NewMockService()
+		log.Println("Using mock billing service (--test)")
+	} else {
+		billingCfg := billing.Config{
+			SecretKey:      cfg.StripeSecretKey,
+			PublishableKey: cfg.StripePublishableKey,
+			WebhookSecret:  cfg.StripeWebhookSecret,
+			PriceMonthly:   cfg.StripePriceMonthly,
+			PriceAnnual:    cfg.StripePriceAnnual,
+		}
+		billingService = billing.NewService(billingCfg, sessionsDB, keyManager)
+		log.Println("Using real Stripe billing service")
+	}
+
 	// Disable secure cookies for local development (HTTP)
 	if !cfg.RequireSecureCookies() {
 		auth.SetSecureCookies(false)
@@ -207,6 +226,7 @@ func main() {
 		consentService,
 		s3Client,
 		shortURLSvc,
+		billingService,
 		"",
 	)
 
@@ -260,8 +280,16 @@ func main() {
 		return auth.GetUserID(r.Context())
 	}
 	getIsPaid := func(r *http.Request) bool {
-		// TODO: Check subscription status from user record
-		return false
+		userDB := auth.GetUserDB(r.Context())
+		if userDB == nil {
+			return false
+		}
+		userID := auth.GetUserID(r.Context())
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err != nil {
+			return false
+		}
+		return account.SubscriptionStatus.Valid && account.SubscriptionStatus.String == "active"
 	}
 	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
 
@@ -321,67 +349,82 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Bind the listener BEFORE logging "ready" to avoid a race where the test
+	// detects the log line but the socket isn't accepting connections yet.
+	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen on %s: %v", cfg.ListenAddr, err)
+	}
+
+	log.Printf("Server listening on %s", listener.Addr())
+	log.Println("Endpoints:")
+	log.Println("  OAuth 2.1 Provider:")
+	log.Println("    GET  /.well-known/oauth-protected-resource  - Protected resource metadata")
+	log.Println("    GET  /.well-known/oauth-authorization-server - Auth server metadata")
+	log.Println("    GET  /.well-known/jwks.json                  - JWKS for token verification")
+	log.Println("    POST /oauth/register              - Dynamic Client Registration (DCR)")
+	log.Println("    GET  /oauth/authorize             - Authorization endpoint")
+	log.Println("    POST /oauth/consent               - Consent submission")
+	log.Println("    POST /oauth/token                 - Token endpoint")
+	log.Println("  Web UI:")
+	log.Println("    GET  /                           - Landing (redirects)")
+	log.Println("    GET  /login                      - Login page")
+	log.Println("    GET  /register                   - Registration page")
+	log.Println("    GET  /password-reset             - Password reset page")
+	log.Println("    GET  /notes                      - Notes list (protected)")
+	log.Println("    GET  /notes/new                  - New note form (protected)")
+	log.Println("    GET  /notes/{id}                 - View note (protected)")
+	log.Println("    GET  /notes/{id}/edit            - Edit note form (protected)")
+	log.Println("    GET  /public/{user_id}/{note_id} - Public note view")
+	log.Println("    GET  /pub/{short_id}             - Short URL redirect")
+	log.Println("    GET  /oauth/consent              - OAuth consent page (protected)")
+	log.Println("  Static Pages:")
+	log.Println("    GET  /privacy                    - Privacy policy")
+	log.Println("    GET  /terms                      - Terms of service")
+	log.Println("    GET  /about                      - About page")
+	log.Println("    GET  /docs/api                   - API documentation")
+	log.Println("  Auth API:")
+	log.Println("    GET  /auth/google                - Google OIDC login")
+	log.Println("    GET  /auth/google/callback       - Google OIDC callback")
+	log.Println("    POST /auth/magic                 - Request magic link")
+	log.Println("    GET  /auth/magic/verify          - Verify magic link")
+	log.Println("    POST /auth/register              - Email/password registration")
+	log.Println("    POST /auth/login                 - Email/password login")
+	log.Println("    POST /auth/password-reset         - Request password reset")
+	log.Println("    POST /auth/password-reset-confirm - Confirm password reset")
+	log.Println("    POST /auth/logout                - Logout")
+	log.Println("    GET  /auth/whoami                - Current user info")
+	log.Println("  Notes API (rate limited):")
+	log.Println("    GET  /api/notes                  - List notes (protected)")
+	log.Println("    POST /api/notes                  - Create note (protected)")
+	log.Println("    GET  /api/notes/{id}             - Get note (protected)")
+	log.Println("    PUT  /api/notes/{id}             - Update note (protected)")
+	log.Println("    DELETE /api/notes/{id}           - Delete note (protected)")
+	log.Println("    POST /api/notes/search           - Search notes (protected)")
+	log.Println("  API Keys:")
+	log.Println("    GET  /api/keys                   - List API keys (protected)")
+	log.Println("    POST /api/keys                   - Create API key (protected)")
+	log.Println("    DELETE /api/keys/{id}            - Revoke API key (protected)")
+	log.Println("  Billing:")
+	log.Println("    GET  /pricing                    - Pricing page")
+	log.Println("    POST /billing/checkout           - Create checkout session")
+	log.Println("    GET  /billing/success            - Checkout success page")
+	log.Println("    POST /billing/webhook            - Stripe webhook")
+	log.Println("    POST /billing/portal             - Stripe customer portal (protected)")
+	log.Println("    GET  /settings/billing           - Billing settings (protected)")
+	log.Println("  MCP (rate limited):")
+	log.Println("    POST /mcp                        - MCP endpoint (protected)")
+	log.Println("  Health:")
+	log.Println("    GET  /health                     - Health check")
+	log.Println("")
+	log.Println("Server ready to accept connections")
+
 	// Channel to receive server errors
 	serverErr := make(chan error, 1)
 
-	// Start server in goroutine
+	// Start serving on the already-bound listener
 	go func() {
-		log.Printf("Server listening on %s", cfg.ListenAddr)
-		log.Println("Endpoints:")
-		log.Println("  OAuth 2.1 Provider:")
-		log.Println("    GET  /.well-known/oauth-protected-resource  - Protected resource metadata")
-		log.Println("    GET  /.well-known/oauth-authorization-server - Auth server metadata")
-		log.Println("    GET  /.well-known/jwks.json                  - JWKS for token verification")
-		log.Println("    POST /oauth/register              - Dynamic Client Registration (DCR)")
-		log.Println("    GET  /oauth/authorize             - Authorization endpoint")
-		log.Println("    POST /oauth/consent               - Consent submission")
-		log.Println("    POST /oauth/token                 - Token endpoint")
-		log.Println("  Web UI:")
-		log.Println("    GET  /                           - Landing (redirects)")
-		log.Println("    GET  /login                      - Login page")
-		log.Println("    GET  /register                   - Registration page")
-		log.Println("    GET  /password-reset             - Password reset page")
-		log.Println("    GET  /notes                      - Notes list (protected)")
-		log.Println("    GET  /notes/new                  - New note form (protected)")
-		log.Println("    GET  /notes/{id}                 - View note (protected)")
-		log.Println("    GET  /notes/{id}/edit            - Edit note form (protected)")
-		log.Println("    GET  /public/{user_id}/{note_id} - Public note view")
-		log.Println("    GET  /pub/{short_id}             - Short URL redirect")
-		log.Println("    GET  /oauth/consent              - OAuth consent page (protected)")
-		log.Println("  Static Pages:")
-		log.Println("    GET  /privacy                    - Privacy policy")
-		log.Println("    GET  /terms                      - Terms of service")
-		log.Println("    GET  /about                      - About page")
-		log.Println("    GET  /docs/api                   - API documentation")
-		log.Println("  Auth API:")
-		log.Println("    GET  /auth/google                - Google OIDC login")
-		log.Println("    GET  /auth/google/callback       - Google OIDC callback")
-		log.Println("    POST /auth/magic                 - Request magic link")
-		log.Println("    GET  /auth/magic/verify          - Verify magic link")
-		log.Println("    POST /auth/register              - Email/password registration")
-		log.Println("    POST /auth/login                 - Email/password login")
-		log.Println("    POST /auth/password-reset         - Request password reset")
-		log.Println("    POST /auth/password-reset-confirm - Confirm password reset")
-		log.Println("    POST /auth/logout                - Logout")
-		log.Println("    GET  /auth/whoami                - Current user info")
-		log.Println("  Notes API (rate limited):")
-		log.Println("    GET  /api/notes                  - List notes (protected)")
-		log.Println("    POST /api/notes                  - Create note (protected)")
-		log.Println("    GET  /api/notes/{id}             - Get note (protected)")
-		log.Println("    PUT  /api/notes/{id}             - Update note (protected)")
-		log.Println("    DELETE /api/notes/{id}           - Delete note (protected)")
-		log.Println("    POST /api/notes/search           - Search notes (protected)")
-		log.Println("  API Keys:")
-		log.Println("    GET  /api/keys                   - List API keys (protected)")
-		log.Println("    POST /api/keys                   - Create API key (protected)")
-		log.Println("    DELETE /api/keys/{id}            - Revoke API key (protected)")
-		log.Println("  MCP (rate limited):")
-		log.Println("    POST /mcp                        - MCP endpoint (protected)")
-		log.Println("  Health:")
-		log.Println("    GET  /health                     - Health check")
-		log.Println("")
-		log.Println("Server ready to accept connections")
-		serverErr <- server.ListenAndServe()
+		serverErr <- server.Serve(listener)
 	}()
 
 	// Set up signal handling for graceful shutdown
@@ -516,7 +559,13 @@ func (h *AuthenticatedNotesHandler) getService(r *http.Request) (*notes.Service,
 	if userDB == nil {
 		return nil, fmt.Errorf("no user database in context")
 	}
-	return notes.NewService(userDB), nil
+	storageLimit := notes.FreeStorageLimitBytes
+	userID := auth.GetUserID(r.Context())
+	account, err := userDB.Queries().GetAccount(r.Context(), userID)
+	if err == nil && account.SubscriptionStatus.Valid {
+		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+	}
+	return notes.NewService(userDB, storageLimit), nil
 }
 
 // ListNotes handles GET /api/notes - returns a paginated list of notes
@@ -734,7 +783,13 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	notesSvc := notes.NewService(userDB)
+	storageLimit := notes.FreeStorageLimitBytes
+	userID := auth.GetUserID(r.Context())
+	account, err := userDB.Queries().GetAccount(r.Context(), userID)
+	if err == nil && account.SubscriptionStatus.Valid {
+		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+	}
+	notesSvc := notes.NewService(userDB, storageLimit)
 	mcpServer := mcp.NewServer(notesSvc)
 	mcpServer.ServeHTTP(w, r)
 }

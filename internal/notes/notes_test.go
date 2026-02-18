@@ -36,7 +36,7 @@ func createInMemoryService(t interface {
 	if err != nil {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}
-	return NewService(userDB)
+	return NewService(userDB, FreeStorageLimitBytes)
 }
 
 // =============================================================================

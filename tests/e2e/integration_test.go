@@ -70,7 +70,7 @@ type fullAppServer struct {
 	oauthProvider  *oauth.Provider
 	authMiddleware *auth.Middleware
 	renderer       *web.Renderer
-	oidcClient     *auth.MockOIDCClient // Exposed for tests to configure mock responses
+	mockOIDC       *auth.LocalMockOIDCProvider
 }
 
 // setupFullAppServer creates a test server with ALL real handlers wired up.
@@ -142,9 +142,7 @@ func createFullAppServer(tempDir string) *fullAppServer {
 
 	// Initialize services
 	emailService := emailpkg.NewMockEmailService()
-	oidcClient := auth.NewMockOIDCClient()
-	// Configure mock OIDC client with a default success response
-	oidcClient.SetNextSuccess("google-sub-12345", "test@example.com", "Test User", true)
+	mockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
 	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
@@ -174,7 +172,7 @@ func createFullAppServer(tempDir string) *fullAppServer {
 
 	// Create handlers
 	oauthHandler := oauth.NewHandler(oauthProvider, sessionService, consentService, renderer)
-	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
+	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
 
 	// NOTE: We do NOT use webHandler.RegisterRoutes() because it has a route conflict
 	// with oauthHandler.RegisterRoutes() (both register POST /oauth/consent).
@@ -201,6 +199,7 @@ func createFullAppServer(tempDir string) *fullAppServer {
 
 	// Auth API routes (REAL handlers from internal/auth/handlers.go)
 	authHandler.RegisterRoutes(mux)
+	mockOIDC.RegisterRoutes(mux)
 
 	// Landing page redirect
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +245,7 @@ func createFullAppServer(tempDir string) *fullAppServer {
 		oauthProvider:  oauthProvider,
 		authMiddleware: authMiddleware,
 		renderer:       renderer,
-		oidcClient:     oidcClient,
+		mockOIDC:       mockOIDC,
 	}
 }
 
@@ -299,10 +298,6 @@ func resetFullAppServerState(ts *fullAppServer) error {
 	if ts.emailService != nil {
 		ts.emailService.Clear()
 	}
-	if ts.oidcClient != nil {
-		ts.oidcClient.Reset()
-		ts.oidcClient.SetNextSuccess("google-sub-12345", "test@example.com", "Test User", true)
-	}
 	return nil
 }
 
@@ -339,7 +334,7 @@ func (h *integrationNotesHandler) getService(r *http.Request) (*notes.Service, e
 	if userDB == nil {
 		return nil, fmt.Errorf("no user database in context")
 	}
-	return notes.NewService(userDB), nil
+	return notes.NewService(userDB, notes.FreeStorageLimitBytes), nil
 }
 
 func (h *integrationNotesHandler) ListNotes(w http.ResponseWriter, r *http.Request) {
@@ -537,7 +532,7 @@ func (h *integrationMCPHandler) getOrCreateMCPServer(userID string) (*mcp.Server
 	}
 
 	// Create notes service and MCP server
-	notesSvc := notes.NewService(userDB)
+	notesSvc := notes.NewService(userDB, notes.FreeStorageLimitBytes)
 	mcpServer := mcp.NewServer(notesSvc)
 	h.mcpServers[userID] = mcpServer
 
@@ -1335,11 +1330,7 @@ func testIntegration_GoogleOAuth_PropertiesWithServer(t *rapid.T, ts *fullAppSer
 		t.Fatalf("Callback with error should return 401, got %d", errorResp.StatusCode)
 	}
 
-	// Property 7: SUCCESSFUL callback flow - complete the OAuth dance
-	// Configure the mock OIDC client to return success
-	ts.oidcClient.SetNextSuccess("google-sub-"+testEmail, testEmail, "Test User", true)
-
-	// Create a client that preserves cookies through the flow
+	// Property 7: SUCCESSFUL callback flow via full mock OIDC redirect chain
 	jar3, _ := cookiejar.New(nil)
 	client4 := newIntegrationHTTPClient(ts)
 	client4.Jar = jar3
@@ -1347,60 +1338,23 @@ func testIntegration_GoogleOAuth_PropertiesWithServer(t *rapid.T, ts *fullAppSer
 		return http.ErrUseLastResponse
 	}
 
-	// Step 1: Start the OAuth flow
-	startResp, err := client4.Get(ts.URL + "/auth/google")
-	if err != nil {
-		t.Fatalf("Start OAuth request failed: %v", err)
-	}
-	startResp.Body.Close()
-
-	if startResp.StatusCode != http.StatusFound {
-		t.Fatalf("Start OAuth should redirect, got %d", startResp.StatusCode)
-	}
-
-	// Extract state from cookies
-	var state string
-	for _, c := range jar3.Cookies(serverURL) {
-		if c.Name == "oauth_state" {
-			state = c.Value
-			break
-		}
-	}
-	if state == "" {
-		t.Fatal("State cookie not found after starting OAuth")
-	}
-
-	// Step 2: Simulate callback from Google with matching state
-	callbackURL := fmt.Sprintf("%s/auth/google/callback?code=valid_code&state=%s", ts.URL, state)
-	successResp, err := client4.Get(callbackURL)
-	if err != nil {
-		t.Fatalf("Successful callback request failed: %v", err)
-	}
-	successResp.Body.Close()
-
-	// Should redirect to home after successful auth
-	if successResp.StatusCode != http.StatusFound {
-		t.Fatalf("Successful callback should redirect (302), got %d", successResp.StatusCode)
-	}
+	sessionCookie := doMockOIDCLogin(t, client4, ts.URL, testEmail)
 
 	// Property 8: Session cookie should be set after successful callback
-	sessionCookieFound := false
-	for _, c := range jar3.Cookies(serverURL) {
-		if c.Name == "session_id" && c.Value != "" {
-			sessionCookieFound = true
-			break
-		}
-	}
-	if !sessionCookieFound {
-		t.Fatal("Session cookie should be set after successful Google callback")
+	if sessionCookie == "" {
+		t.Fatal("Session cookie should be set after successful OIDC login")
 	}
 
 	// Property 9: User should be authenticated after callback
-	// Need a new client that follows redirects
-	client5 := newIntegrationHTTPClient(ts)
-	client5.Jar = jar3
+	jar3.SetCookies(serverURL, []*http.Cookie{{
+		Name:  "session_id",
+		Value: sessionCookie,
+		Path:  "/",
+	}})
+	whoamiClient := newIntegrationHTTPClient(ts)
+	whoamiClient.Jar = jar3
 
-	whoamiResp, err := client5.Get(ts.URL + "/auth/whoami")
+	whoamiResp, err := whoamiClient.Get(ts.URL + "/auth/whoami")
 	if err != nil {
 		t.Fatalf("Whoami request failed: %v", err)
 	}

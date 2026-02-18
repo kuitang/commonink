@@ -16,6 +16,7 @@ type Account struct {
 	CreatedAt          int64          `json:"created_at"`
 	SubscriptionStatus sql.NullString `json:"subscription_status"`
 	SubscriptionID     sql.NullString `json:"subscription_id"`
+	StripeCustomerID   sql.NullString `json:"stripe_customer_id"`
 	DbSizeBytes        sql.NullInt64  `json:"db_size_bytes"`
 	LastLogin          sql.NullInt64  `json:"last_login"`
 }

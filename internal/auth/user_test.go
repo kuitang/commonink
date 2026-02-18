@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -124,37 +123,6 @@ func TestPassword_Validation_ValidPasswords(t *testing.T) {
 		validPassword := string(validBytes)
 		if err := ValidatePasswordStrength(validPassword); err != nil {
 			t.Fatalf("valid password (len=%d) should pass validation: %v", len(validPassword), err)
-		}
-	})
-}
-
-// TestMockOIDC_Reset tests that MockOIDCClient.Reset() clears all state.
-func TestMockOIDC_Reset(t *testing.T) {
-	rapid.Check(t, func(rt *rapid.T) {
-		oidcClient := NewMockOIDCClient()
-
-		// Set up some state
-		sub := rapid.StringMatching(`[0-9]{10}`).Draw(rt, "sub")
-		emailAddr := rapid.StringMatching(`[a-z]{5}@test\.com`).Draw(rt, "email")
-		oidcClient.SetNextSuccess(sub, emailAddr, "Test User", true)
-		oidcClient.GetAuthURL("test-state", "https://example.com/auth/google/callback")
-		_, _ = oidcClient.ExchangeCode(context.Background(), "test-code", "https://example.com/auth/google/callback")
-
-		// Reset
-		oidcClient.Reset()
-
-		// Property: All state should be cleared
-		if oidcClient.NextClaims != nil {
-			rt.Fatal("NextClaims should be nil after reset")
-		}
-		if oidcClient.NextError != nil {
-			rt.Fatal("NextError should be nil after reset")
-		}
-		if oidcClient.LastState != "" {
-			rt.Fatal("LastState should be empty after reset")
-		}
-		if oidcClient.LastCode != "" {
-			rt.Fatal("LastCode should be empty after reset")
 		}
 	})
 }

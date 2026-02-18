@@ -976,7 +976,7 @@ func TestWebHandler_GoogleLoginStub(t *testing.T) {
 	}
 
 	// Property: GET /auth/google redirects to OIDC provider
-	// Note: The test server configures a MockOIDCClient with AuthURL = "https://mock-oidc.example.com/authorize"
+	// Note: The test server configures a LocalMockOIDCProvider with auth URL at /auth/mock-oidc/authorize
 	resp, err := client.Get(ts.URL + "/auth/google")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
@@ -988,7 +988,7 @@ func TestWebHandler_GoogleLoginStub(t *testing.T) {
 	}
 
 	location := resp.Header.Get("Location")
-	if !strings.Contains(location, "mock-oidc.example.com/authorize") {
+	if !strings.Contains(location, "/auth/mock-oidc/authorize") {
 		t.Fatalf("Expected redirect to mock OIDC provider, got %s", location)
 	}
 }

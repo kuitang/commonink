@@ -125,11 +125,11 @@ func createOAuthTestServer(tempDir string) *oauthTestServer {
 
 	// Create OAuth provider with server URL as issuer
 	oauthProvider, err := oauth.NewProvider(oauth.Config{
-		DB:         sessionsDB.DB(),
-		Issuer:     server.URL,
-		Resource:   server.URL,
-		HMACSecret: hmacSecret,
-		SigningKey: signingKey,
+		DB:                 sessionsDB.DB(),
+		Issuer:             server.URL,
+		Resource:           server.URL,
+		HMACSecret:         hmacSecret,
+		SigningKey:         signingKey,
 		ClientSecretHasher: oauth.FakeInsecureClientSecretHasher{},
 	})
 	if err != nil {

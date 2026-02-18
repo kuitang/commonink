@@ -88,3 +88,24 @@ CREATE TABLE IF NOT EXISTS short_urls (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_short_urls_full_path ON short_urls(full_path);
+
+-- Pending subscriptions: logged-out Stripe purchases awaiting registration
+CREATE TABLE IF NOT EXISTS pending_subscriptions (
+    email TEXT PRIMARY KEY,
+    stripe_customer_id TEXT NOT NULL,
+    subscription_id TEXT NOT NULL,
+    subscription_status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+
+-- Stripe customer map: links Stripe customer IDs to internal user IDs
+CREATE TABLE IF NOT EXISTS stripe_customer_map (
+    stripe_customer_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE
+);
+
+-- Processed webhook events: idempotency guard for Stripe webhooks
+CREATE TABLE IF NOT EXISTS processed_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    processed_at INTEGER NOT NULL
+);

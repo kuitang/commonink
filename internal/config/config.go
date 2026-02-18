@@ -60,6 +60,13 @@ type Config struct {
 	AWSSecretAccessKey string // AWS_SECRET_ACCESS_KEY
 	AWSBucketName      string // BUCKET_NAME
 	AWSPublicURL       string // S3_PUBLIC_URL (custom, not set by Tigris)
+
+	// Stripe Billing
+	StripeSecretKey      string
+	StripePublishableKey string
+	StripeWebhookSecret  string
+	StripePriceMonthly   string
+	StripePriceAnnual    string
 }
 
 // ValidationError represents a configuration validation error with multiple issues.
@@ -150,6 +157,13 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 		cfg.AWSPublicURL = strings.TrimRight(cfg.AWSEndpointS3, "/") + "/" + cfg.AWSBucketName
 	}
 
+	// Stripe Billing
+	cfg.StripeSecretKey = trimEnv("STRIPE_SECRET_KEY")
+	cfg.StripePublishableKey = trimEnv("STRIPE_PUBLISHABLE_KEY")
+	cfg.StripeWebhookSecret = trimEnv("STRIPE_WEBHOOK_SECRET")
+	cfg.StripePriceMonthly = trimEnv("STRIPE_PRICE_MONTHLY")
+	cfg.StripePriceAnnual = trimEnv("STRIPE_PRICE_ANNUAL")
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -177,6 +191,25 @@ func (c *Config) Validate() error {
 	if !c.NoEmail {
 		if c.ResendAPIKey == "" {
 			errs = append(errs, "RESEND_API_KEY is required (set env var or use --no-email)")
+		}
+	}
+
+	// Stripe: require keys unless test mode
+	if !c.IsTestMode() {
+		if c.StripeSecretKey == "" {
+			errs = append(errs, "STRIPE_SECRET_KEY is required (set env var or use --test)")
+		}
+		if c.StripePublishableKey == "" {
+			errs = append(errs, "STRIPE_PUBLISHABLE_KEY is required (set env var or use --test)")
+		}
+		if c.StripeWebhookSecret == "" {
+			errs = append(errs, "STRIPE_WEBHOOK_SECRET is required (set env var or use --test)")
+		}
+		if c.StripePriceMonthly == "" {
+			errs = append(errs, "STRIPE_PRICE_MONTHLY is required (set env var or use --test)")
+		}
+		if c.StripePriceAnnual == "" {
+			errs = append(errs, "STRIPE_PRICE_ANNUAL is required (set env var or use --test)")
 		}
 	}
 
@@ -231,6 +264,11 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// IsTestMode returns true when all mocks are active (--test flag).
+func (c *Config) IsTestMode() bool {
+	return c.NoOIDC && c.NoEmail && c.NoS3
+}
+
 // IsProduction returns true if all mock services are disabled.
 func (c *Config) IsProduction() bool {
 	return !c.NoOIDC && !c.NoEmail && !c.NoS3
@@ -271,6 +309,13 @@ func (c *Config) PrintStartupSummary() {
 		fmt.Fprintln(os.Stderr, "  Storage: Mock S3 (--no-s3)")
 	} else {
 		fmt.Fprintf(os.Stderr, "  Storage: Tigris S3 (real, endpoint: %s)\n", c.AWSEndpointS3)
+	}
+
+	// Billing
+	if c.IsTestMode() {
+		fmt.Fprintln(os.Stderr, "  Billing: Mock (--test)")
+	} else {
+		fmt.Fprintln(os.Stderr, "  Billing: Stripe (real)")
 	}
 
 	// Master key

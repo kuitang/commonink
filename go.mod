@@ -20,6 +20,7 @@ require (
 	github.com/playwright-community/playwright-go v0.5200.1
 	github.com/resend/resend-go/v3 v3.1.0
 	github.com/stretchr/testify v1.11.1
+	github.com/stripe/stripe-go/v82 v82.5.1
 	golang.org/x/crypto v0.47.0
 	golang.org/x/oauth2 v0.34.0
 	golang.org/x/time v0.14.0

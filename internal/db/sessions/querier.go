@@ -22,11 +22,17 @@ type Querier interface {
 	CreateOAuthCode(ctx context.Context, arg CreateOAuthCodeParams) error
 	// OAuth tokens operations
 	CreateOAuthToken(ctx context.Context, arg CreateOAuthTokenParams) error
+	// Pending subscriptions operations
+	CreatePendingSubscription(ctx context.Context, arg CreatePendingSubscriptionParams) error
+	// Processed webhook events operations
+	CreateProcessedWebhookEvent(ctx context.Context, arg CreateProcessedWebhookEventParams) error
 	// Sessions queries for the shared sessions database
 	// Sessions CRUD operations
 	CreateSession(ctx context.Context, arg CreateSessionParams) error
 	// Short URL operations
 	CreateShortURL(ctx context.Context, arg CreateShortURLParams) error
+	// Stripe customer map operations
+	CreateStripeCustomerMap(ctx context.Context, arg CreateStripeCustomerMapParams) error
 	// User keys operations
 	CreateUserKey(ctx context.Context, arg CreateUserKeyParams) error
 	DeleteConsent(ctx context.Context, arg DeleteConsentParams) error
@@ -43,10 +49,13 @@ type Querier interface {
 	DeleteOAuthToken(ctx context.Context, accessTokenHash string) error
 	DeleteOAuthTokensByClientID(ctx context.Context, clientID string) error
 	DeleteOAuthTokensByUserID(ctx context.Context, userID string) error
+	DeleteOldProcessedWebhookEvents(ctx context.Context, processedAt int64) error
+	DeletePendingSubscription(ctx context.Context, email string) error
 	DeleteSession(ctx context.Context, sessionID string) error
 	DeleteSessionsByUserID(ctx context.Context, userID string) error
 	DeleteShortURL(ctx context.Context, shortID string) error
 	DeleteShortURLByFullPath(ctx context.Context, fullPath string) error
+	DeleteStripeCustomerMap(ctx context.Context, stripeCustomerID string) error
 	DeleteUserKey(ctx context.Context, userID string) error
 	GetConsent(ctx context.Context, arg GetConsentParams) (OauthConsent, error)
 	GetMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
@@ -56,10 +65,14 @@ type Querier interface {
 	GetOAuthToken(ctx context.Context, accessTokenHash string) (OauthToken, error)
 	GetOAuthTokenByRefresh(ctx context.Context, refreshTokenHash sql.NullString) (OauthToken, error)
 	GetOAuthTokensByUserClient(ctx context.Context, arg GetOAuthTokensByUserClientParams) ([]OauthToken, error)
+	GetPendingSubscription(ctx context.Context, email string) (PendingSubscription, error)
+	GetProcessedWebhookEvent(ctx context.Context, eventID string) (ProcessedWebhookEvent, error)
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	GetSessionsByUserID(ctx context.Context, userID string) ([]Session, error)
 	GetShortURLByFullPath(ctx context.Context, fullPath string) (ShortUrl, error)
 	GetShortURLByShortID(ctx context.Context, shortID string) (ShortUrl, error)
+	GetStripeCustomerMap(ctx context.Context, stripeCustomerID string) (StripeCustomerMap, error)
+	GetStripeCustomerMapByUserID(ctx context.Context, userID string) (StripeCustomerMap, error)
 	GetUserKey(ctx context.Context, userID string) (UserKey, error)
 	GetValidMagicToken(ctx context.Context, tokenHash string) (MagicToken, error)
 	GetValidOAuthCode(ctx context.Context, codeHash string) (OauthCode, error)

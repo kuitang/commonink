@@ -26,6 +26,7 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	emailpkg "github.com/kuitang/agent-notes/internal/email"
@@ -59,7 +60,7 @@ type shortURLWebServer struct {
 	emailService   *emailpkg.MockEmailService
 	shortURLSvc    *shorturl.Service
 	rateLimiter    *ratelimit.RateLimiter
-	oidcClient     *auth.MockOIDCClient
+	mockOIDC       *auth.LocalMockOIDCProvider
 }
 
 // setupShortURLWebServer creates a test server with all web handlers wired up,
@@ -113,7 +114,6 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 
 	// Initialize services
 	emailService := emailpkg.NewMockEmailService()
-	oidcClient := auth.NewMockOIDCClient()
 	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	sessionService := auth.NewSessionService(sessionsDB)
 	consentService := auth.NewConsentService(sessionsDB)
@@ -145,6 +145,9 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 	// Update userService baseURL
 	userService = auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 
+	// Create mock OIDC provider (needs final server URL)
+	mockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
+
 	// Create mock S3 server and client (shared helper from web_forms_test.go)
 	s3Server, mockS3Client := createMockS3ServerWithBucket("test-bucket-shorturl-web")
 
@@ -165,6 +168,7 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 		consentService,
 		mockS3Client,
 		shortURLSvc,
+		billing.NewMockService(),
 		server.URL,
 	)
 
@@ -172,8 +176,11 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 	webHandler.RegisterRoutes(mux, authMiddleware)
 
 	// Register auth API routes (POST /auth/* for form handling)
-	authHandler := auth.NewHandler(oidcClient, userService, sessionService)
+	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
 	authHandler.RegisterRoutes(mux)
+
+	// Register mock OIDC provider routes (consent form + authorize endpoint)
+	mockOIDC.RegisterRoutes(mux)
 
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +200,7 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 		emailService:   emailService,
 		shortURLSvc:    shortURLSvc,
 		rateLimiter:    rateLimiter,
-		oidcClient:     oidcClient,
+		mockOIDC:       mockOIDC,
 	}
 }
 
@@ -253,9 +260,6 @@ func resetShortURLWebServerState(ts *shortURLWebServer) error {
 	}
 	if ts.emailService != nil {
 		ts.emailService.Clear()
-	}
-	if ts.oidcClient != nil {
-		ts.oidcClient.Reset()
 	}
 	return nil
 }
@@ -896,8 +900,6 @@ func TestShortURLWeb_GoogleOAuthHandlers_Properties(t *testing.T) {
 
 	rapid.Check(t, func(rt *rapid.T) {
 		testEmail := testutil.EmailGenerator().Draw(rt, "email")
-		testSub := testutil.OIDCSubjectGenerator().Draw(rt, "sub")
-		testName := testutil.OIDCNameGenerator().Draw(rt, "name")
 
 		client := ts.noFollowClient(nil)
 		jar, _ := cookiejar.New(nil)
@@ -993,7 +995,8 @@ func TestShortURLWeb_GoogleOAuthHandlers_Properties(t *testing.T) {
 		}
 
 		// Property 7: Successful callback flow creates session
-		ts.oidcClient.SetNextSuccess(testSub, testEmail, testName, true)
+		auth.SetSecureCookies(false)
+		defer auth.SetSecureCookies(true)
 
 		successJar, _ := cookiejar.New(nil)
 		successClient := &http.Client{
@@ -1003,60 +1006,15 @@ func TestShortURLWeb_GoogleOAuthHandlers_Properties(t *testing.T) {
 			},
 		}
 
-		// Start Google OAuth flow to get the state
-		startResp, err := successClient.Get(ts.URL + "/auth/google")
-		if err != nil {
-			rt.Fatalf("Start Google flow failed: %v", err)
-		}
-		startResp.Body.Close()
-
-		// Extract state from the oauth_state cookie in the response.
-		// The handler sets Secure: true on the cookie, but our test server is
-		// plain HTTP (not TLS), so the cookie jar won't send it back automatically.
-		// We manually re-set the cookie without the Secure flag.
-		var oauthState string
-		for _, c := range startResp.Cookies() {
-			if c.Name == "oauth_state" {
-				oauthState = c.Value
-				break
-			}
-		}
-		if oauthState == "" {
-			rt.Fatal("oauth_state cookie should be set on start")
+		sessionCookie := doMockOIDCLogin(rt, successClient, ts.URL, testEmail)
+		if sessionCookie == "" {
+			rt.Fatal("Session cookie should be set after successful OIDC login")
 		}
 
-		// Manually set the cookie without Secure flag for plain HTTP test server
+		// Property 8: Authenticated user can access whoami
 		successJar.SetCookies(serverURL, []*http.Cookie{{
-			Name:  "oauth_state",
-			Value: oauthState,
-			Path:  "/",
+			Name: "session_id", Value: sessionCookie, Path: "/",
 		}})
-
-		// Simulate the callback with matching state and a valid code
-		callbackResp, err := successClient.Get(
-			ts.URL + "/auth/google/callback?code=valid_code&state=" + url.QueryEscape(oauthState),
-		)
-		if err != nil {
-			rt.Fatalf("Successful callback failed: %v", err)
-		}
-		callbackResp.Body.Close()
-
-		// Should redirect to home after success
-		if callbackResp.StatusCode != http.StatusFound {
-			rt.Fatalf("Successful callback should redirect (302), got %d", callbackResp.StatusCode)
-		}
-
-		// Property 8: Session cookie is set after successful callback
-		sessionFound := false
-		for _, c := range callbackResp.Cookies() {
-			if c.Name == "session_id" && c.Value != "" {
-				sessionFound = true
-				break
-			}
-		}
-		if !sessionFound {
-			rt.Fatal("Session cookie should be set after successful Google callback")
-		}
 
 		// Property 9: Callback without code returns 400
 		noCodeJar, _ := cookiejar.New(nil)

@@ -2,14 +2,19 @@
 package web
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
@@ -26,6 +31,7 @@ type WebHandler struct {
 	consentService *auth.ConsentService
 	s3Client       *s3client.Client
 	shortURLSvc    *shorturl.Service
+	billingService billing.BillingService
 	baseURL        string
 }
 
@@ -39,6 +45,7 @@ func NewWebHandler(
 	consentService *auth.ConsentService,
 	s3Client *s3client.Client,
 	shortURLSvc *shorturl.Service,
+	billingService billing.BillingService,
 	baseURL string,
 ) *WebHandler {
 	return &WebHandler{
@@ -50,6 +57,7 @@ func NewWebHandler(
 		consentService: consentService,
 		s3Client:       s3Client,
 		shortURLSvc:    shortURLSvc,
+		billingService: billingService,
 		baseURL:        baseURL,
 	}
 }
@@ -95,6 +103,20 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("GET /api-keys/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewAPIKeyPage)))
 	mux.Handle("POST /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
 	mux.Handle("POST /api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
+
+	// Account settings (auth required)
+	mux.Handle("GET /settings/account", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleAccountSettings)))
+	mux.Handle("POST /settings/set-password", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleSetPassword)))
+	mux.Handle("POST /settings/link-google", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleLinkGoogle)))
+	mux.Handle("POST /settings/unlink-google", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleUnlinkGoogle)))
+
+	// Billing routes
+	mux.Handle("GET /pricing", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandlePricing)))
+	mux.Handle("POST /billing/checkout", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleCreateCheckout)))
+	mux.Handle("GET /billing/success", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleBillingSuccess)))
+	mux.HandleFunc("POST /billing/webhook", h.HandleBillingWebhook)
+	mux.Handle("POST /billing/portal", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleBillingPortal)))
+	mux.Handle("GET /settings/billing", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleBillingSettings)))
 
 }
 
@@ -207,6 +229,47 @@ type AuthErrorData struct {
 	ErrorDescription string
 }
 
+// PricingPageData contains data for the pricing page.
+type PricingPageData struct {
+	PageData
+	StripePublishableKey string
+	IsMockBilling        bool
+}
+
+// BillingSuccessData contains data for the billing success page.
+type BillingSuccessData struct {
+	PageData
+	SessionStatus string
+	CustomerEmail string
+}
+
+// BillingSettingsData contains data for the billing settings page.
+type BillingSettingsData struct {
+	PageData
+	SubscriptionStatus string
+	StorageUsage       *notes.StorageUsageInfo
+}
+
+// AccountSettingsData contains data for the account settings page.
+type AccountSettingsData struct {
+	PageData
+	HasPassword bool
+	HasGoogle   bool
+}
+
+// storageLimitForRequest returns the storage limit for the current user based on subscription status.
+func storageLimitForRequest(r *http.Request) int64 {
+	userID := auth.GetUserID(r.Context())
+	userDB := auth.GetUserDB(r.Context())
+	if userDB != nil {
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err == nil && account.SubscriptionStatus.Valid {
+			return notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+		}
+	}
+	return notes.FreeStorageLimitBytes
+}
+
 // getUserWithEmail returns a User with ID and Email populated from the user's database.
 func getUserWithEmail(r *http.Request) *auth.User {
 	userID := auth.GetUserID(r.Context())
@@ -216,6 +279,9 @@ func getUserWithEmail(r *http.Request) *auth.User {
 		account, err := userDB.Queries().GetAccount(r.Context(), userID)
 		if err == nil {
 			user.Email = account.Email
+			if account.SubscriptionStatus.Valid {
+				user.SubscriptionStatus = account.SubscriptionStatus.String
+			}
 		}
 	}
 	return user
@@ -278,6 +344,7 @@ func (h *WebHandler) HandleRegisterPage(w http.ResponseWriter, r *http.Request) 
 		PageData: PageData{
 			Title: "Create Account",
 		},
+		Email:    r.URL.Query().Get("email"),
 		ReturnTo: r.URL.Query().Get("return_to"),
 	}
 
@@ -363,7 +430,7 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create notes service for this user
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	// Get page from query params
 	page := 1
@@ -449,7 +516,7 @@ func (h *WebHandler) HandleCreateNote(w http.ResponseWriter, r *http.Request) {
 	title := r.FormValue("title")
 	content := r.FormValue("content")
 
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	note, err := notesService.Create(notes.CreateNoteParams{
 		Title:   title,
@@ -457,7 +524,7 @@ func (h *WebHandler) HandleCreateNote(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
-			http.Redirect(w, r, "/notes?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB.", float64(notes.StorageLimitBytes)/(1024*1024)), http.StatusFound)
+			http.Redirect(w, r, "/notes?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB. Upgrade to Pro for unlimited storage.", float64(notes.FreeStorageLimitBytes)/(1024*1024)), http.StatusFound)
 			return
 		}
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to create note")
@@ -481,7 +548,7 @@ func (h *WebHandler) HandleViewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	note, err := notesService.Read(noteID)
 	if err != nil {
@@ -524,7 +591,7 @@ func (h *WebHandler) HandleEditNotePage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	note, err := notesService.Read(noteID)
 	if err != nil {
@@ -567,7 +634,7 @@ func (h *WebHandler) HandleUpdateNote(w http.ResponseWriter, r *http.Request) {
 	title := r.FormValue("title")
 	content := r.FormValue("content")
 
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	_, err := notesService.Update(noteID, notes.UpdateNoteParams{
 		Title:   &title,
@@ -575,7 +642,7 @@ func (h *WebHandler) HandleUpdateNote(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
-			http.Redirect(w, r, "/notes/"+noteID+"/edit?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB.", float64(notes.StorageLimitBytes)/(1024*1024)), http.StatusFound)
+			http.Redirect(w, r, "/notes/"+noteID+"/edit?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB. Upgrade to Pro for unlimited storage.", float64(notes.FreeStorageLimitBytes)/(1024*1024)), http.StatusFound)
 			return
 		}
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to update note")
@@ -599,7 +666,7 @@ func (h *WebHandler) HandleDeleteNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	if err := notesService.Delete(noteID); err != nil {
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to delete note")
@@ -623,7 +690,7 @@ func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	notesService := notes.NewService(userDB)
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	// Get current note to check public status
 	note, err := notesService.Read(noteID)
@@ -826,6 +893,341 @@ func (h *WebHandler) HandleConsentDecision(w http.ResponseWriter, r *http.Reques
 	if err := h.renderer.Render(w, "oauth/consent_granted.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
+}
+
+// =============================================================================
+// Billing Handlers
+// =============================================================================
+
+// HandlePricing handles GET /pricing - shows the pricing page.
+func (h *WebHandler) HandlePricing(w http.ResponseWriter, r *http.Request) {
+	data := PricingPageData{
+		PageData: PageData{
+			Title: "Pricing",
+		},
+	}
+
+	if h.billingService != nil {
+		data.StripePublishableKey = h.billingService.PublishableKey()
+		data.IsMockBilling = h.billingService.IsMock()
+	} else {
+		data.IsMockBilling = true
+	}
+
+	if auth.IsAuthenticated(r.Context()) {
+		data.User = getUserWithEmail(r)
+	}
+
+	if err := h.renderer.Render(w, "billing/pricing.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HandleCreateCheckout handles POST /billing/checkout - creates a Stripe checkout session.
+func (h *WebHandler) HandleCreateCheckout(w http.ResponseWriter, r *http.Request) {
+	if h.billingService == nil {
+		http.Error(w, `{"error":"billing not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+		Plan  string `json:"plan"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	var userID, email string
+	if auth.IsAuthenticated(r.Context()) {
+		userID = auth.GetUserID(r.Context())
+		user := getUserWithEmail(r)
+		if user != nil {
+			email = user.Email
+		}
+	} else {
+		if req.Email == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "email is required"})
+			return
+		}
+		email = req.Email
+	}
+
+	clientSecret, err := h.billingService.CreateCheckoutSession(r.Context(), userID, email, req.Plan, h.requestOrigin(r))
+	if err != nil {
+		log.Printf("[BILLING] CreateCheckoutSession error: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "failed to create checkout session"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"clientSecret": clientSecret})
+}
+
+// HandleBillingSuccess handles GET /billing/success - shows the billing success page.
+func (h *WebHandler) HandleBillingSuccess(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session_id")
+
+	data := BillingSuccessData{
+		PageData: PageData{
+			Title: "Payment Result",
+		},
+	}
+
+	if auth.IsAuthenticated(r.Context()) {
+		data.User = getUserWithEmail(r)
+	}
+
+	if sessionID != "" && h.billingService != nil {
+		status, customerEmail, err := h.billingService.GetSessionStatus(r.Context(), sessionID)
+		if err != nil {
+			log.Printf("[BILLING] GetSessionStatus error: %v", err)
+		} else {
+			data.SessionStatus = status
+			data.CustomerEmail = customerEmail
+		}
+	}
+
+	if err := h.renderer.Render(w, "billing/success.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HandleBillingWebhook handles POST /billing/webhook - processes Stripe webhook events.
+func (h *WebHandler) HandleBillingWebhook(w http.ResponseWriter, r *http.Request) {
+	if h.billingService == nil {
+		http.Error(w, "billing not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	sigHeader := r.Header.Get("Stripe-Signature")
+
+	if err := h.billingService.HandleWebhook(body, sigHeader); err != nil {
+		log.Printf("[BILLING] Webhook error: %v", err)
+		http.Error(w, "webhook processing failed", http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// HandleBillingPortal handles POST /billing/portal - redirects to Stripe customer portal.
+func (h *WebHandler) HandleBillingPortal(w http.ResponseWriter, r *http.Request) {
+	if h.billingService == nil {
+		http.Error(w, "billing not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := auth.GetUserID(r.Context())
+
+	// Look up stripe_customer_id from the user's account record
+	var stripeCustomerID string
+	userDB := auth.GetUserDB(r.Context())
+	if userDB != nil {
+		var id sql.NullString
+		err := userDB.DB().QueryRowContext(r.Context(),
+			`SELECT stripe_customer_id FROM account WHERE user_id = ?`, userID,
+		).Scan(&id)
+		if err == nil && id.Valid {
+			stripeCustomerID = id.String
+		}
+	}
+
+	if stripeCustomerID == "" {
+		http.Redirect(w, r, "/pricing", http.StatusFound)
+		return
+	}
+
+	returnURL := h.requestOrigin(r) + "/settings/billing"
+	portalURL, err := h.billingService.CreatePortalSession(r.Context(), stripeCustomerID, returnURL)
+	if err != nil {
+		log.Printf("[BILLING] CreatePortalSession error: %v", err)
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to create billing portal session")
+		return
+	}
+
+	http.Redirect(w, r, portalURL, http.StatusFound)
+}
+
+// HandleBillingSettings handles GET /settings/billing - shows billing settings page.
+func (h *WebHandler) HandleBillingSettings(w http.ResponseWriter, r *http.Request) {
+	user := getUserWithEmail(r)
+
+	data := BillingSettingsData{
+		PageData: PageData{
+			Title: "Billing Settings",
+			User:  user,
+		},
+		SubscriptionStatus: user.SubscriptionStatus,
+	}
+
+	// Get storage usage
+	userDB := auth.GetUserDB(r.Context())
+	if userDB != nil {
+		notesService := notes.NewService(userDB, storageLimitForRequest(r))
+		usage, err := notesService.GetStorageUsage()
+		if err == nil {
+			data.StorageUsage = &usage
+		}
+	}
+
+	if err := h.renderer.Render(w, "billing/settings.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// =============================================================================
+// Account Settings Handlers
+// =============================================================================
+
+// HandleAccountSettings handles GET /settings/account - shows account settings page.
+func (h *WebHandler) HandleAccountSettings(w http.ResponseWriter, r *http.Request) {
+	userID := auth.GetUserID(r.Context())
+	account, err := h.authService.GetAccountInfo(r.Context(), userID)
+	if err != nil {
+		log.Printf("[SETTINGS] GetAccountInfo failed for user=%s: %v", userID, err)
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to load account settings")
+		return
+	}
+
+	data := AccountSettingsData{
+		PageData: PageData{
+			Title: "Account Settings",
+			User:  getUserWithEmail(r),
+		},
+		HasPassword: account.PasswordHash.Valid && account.PasswordHash.String != "",
+		HasGoogle:   account.GoogleSub.Valid && account.GoogleSub.String != "",
+	}
+
+	if success := r.URL.Query().Get("success"); success != "" {
+		switch success {
+		case "google_linked":
+			data.FlashMessage = "Google account linked successfully."
+		case "google_unlinked":
+			data.FlashMessage = "Google account unlinked."
+		case "password_set":
+			data.FlashMessage = "Password updated successfully."
+		default:
+			data.FlashMessage = success
+		}
+		data.FlashType = "success"
+	}
+	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+		data.Error = errMsg
+	}
+
+	if err := h.renderer.Render(w, "settings/account.html", data); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HandleSetPassword handles POST /settings/set-password - sets or changes the user's password.
+func (h *WebHandler) HandleSetPassword(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/settings/account?error=Invalid+form+data", http.StatusSeeOther)
+		return
+	}
+
+	userID := auth.GetUserID(r.Context())
+	currentPassword := r.FormValue("current_password")
+	newPassword := r.FormValue("new_password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	if newPassword == "" {
+		http.Redirect(w, r, "/settings/account?error=New+password+is+required", http.StatusSeeOther)
+		return
+	}
+	if newPassword != confirmPassword {
+		http.Redirect(w, r, "/settings/account?error=Passwords+do+not+match", http.StatusSeeOther)
+		return
+	}
+
+	// Check if user already has a password — if so, verify current password
+	account, err := h.authService.GetAccountInfo(r.Context(), userID)
+	if err != nil {
+		log.Printf("[SETTINGS] GetAccountInfo failed for user=%s: %v", userID, err)
+		http.Redirect(w, r, "/settings/account?error=Failed+to+load+account", http.StatusSeeOther)
+		return
+	}
+
+	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
+		if currentPassword == "" {
+			http.Redirect(w, r, "/settings/account?error=Current+password+is+required", http.StatusSeeOther)
+			return
+		}
+		if !h.authService.VerifyPasswordHash(currentPassword, account.PasswordHash.String) {
+			http.Redirect(w, r, "/settings/account?error=Current+password+is+incorrect", http.StatusSeeOther)
+			return
+		}
+	}
+
+	if err := h.authService.SetPassword(r.Context(), userID, newPassword); err != nil {
+		if errors.Is(err, auth.ErrWeakPassword) {
+			http.Redirect(w, r, "/settings/account?error=Password+must+be+at+least+8+characters", http.StatusSeeOther)
+			return
+		}
+		log.Printf("[SETTINGS] SetPassword failed for user=%s: %v", userID, err)
+		http.Redirect(w, r, "/settings/account?error=Failed+to+set+password", http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/settings/account?success=password_set", http.StatusSeeOther)
+}
+
+// HandleLinkGoogle handles POST /settings/link-google - initiates Google account linking.
+func (h *WebHandler) HandleLinkGoogle(w http.ResponseWriter, r *http.Request) {
+	// Set intent cookie so HandleGoogleCallback knows this is a link flow
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_intent",
+		Value:    "link",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   auth.GetSecureCookies(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   600, // 10 minutes
+	})
+
+	// Redirect to the Google login handler which will start OIDC flow
+	http.Redirect(w, r, "/auth/google?return_to=/settings/account", http.StatusSeeOther)
+}
+
+// HandleUnlinkGoogle handles POST /settings/unlink-google - unlinks Google account.
+func (h *WebHandler) HandleUnlinkGoogle(w http.ResponseWriter, r *http.Request) {
+	userID := auth.GetUserID(r.Context())
+
+	// Verify account has a password before unlinking (prevent lockout)
+	account, err := h.authService.GetAccountInfo(r.Context(), userID)
+	if err != nil {
+		log.Printf("[SETTINGS] GetAccountInfo failed for user=%s: %v", userID, err)
+		http.Redirect(w, r, "/settings/account?error=Failed+to+load+account", http.StatusSeeOther)
+		return
+	}
+
+	if !account.PasswordHash.Valid || account.PasswordHash.String == "" {
+		http.Redirect(w, r, "/settings/account?error=Set+a+password+before+unlinking+Google", http.StatusSeeOther)
+		return
+	}
+
+	if err := h.authService.UnlinkGoogleAccount(r.Context(), userID); err != nil {
+		log.Printf("[SETTINGS] UnlinkGoogleAccount failed for user=%s: %v", userID, err)
+		http.Redirect(w, r, "/settings/account?error=Failed+to+unlink+Google+account", http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/settings/account?success=google_unlinked", http.StatusSeeOther)
 }
 
 // renderAuthError renders the auth error page.

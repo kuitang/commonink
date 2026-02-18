@@ -1,0 +1,42 @@
+{{define "content"}}
+<div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-8">Billing</h1>
+
+    <div class="themed-card border border-gray-200 dark:border-gray-700 p-6 mb-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Current Plan</h2>
+                {{if eq .SubscriptionStatus "active"}}
+                <span class="inline-flex items-center px-3 py-1 mt-2 rounded-badge text-sm font-medium bg-success-100 dark:bg-success-900/30 text-success-800 dark:text-success-200">Pro</span>
+                {{else}}
+                <span class="inline-flex items-center px-3 py-1 mt-2 rounded-badge text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">Free</span>
+                {{end}}
+            </div>
+            {{if eq .SubscriptionStatus "active"}}
+            <form action="/billing/portal" method="POST">
+                <button type="submit" class="themed-btn-primary px-4 py-2 text-sm">Manage Billing</button>
+            </form>
+            {{else}}
+            <a href="/pricing" class="themed-btn-primary px-4 py-2 text-sm">Upgrade to Pro</a>
+            {{end}}
+        </div>
+    </div>
+
+    {{if .StorageUsage}}
+    <div class="themed-card border border-gray-200 dark:border-gray-700 p-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Storage Usage</h2>
+        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 mb-2">
+            <div class="bg-primary-600 h-3 rounded-full transition-all" style="width: {{if eq .SubscriptionStatus "active"}}1{{else}}{{formatFloat .StorageUsage.Percentage 0}}{{end}}%"></div>
+        </div>
+        <p class="text-sm text-gray-600 dark:text-gray-300">
+            {{formatFloat .StorageUsage.UsedMB 1}} MB used
+            {{if ne .SubscriptionStatus "active"}}
+            of {{formatFloat .StorageUsage.LimitMB 0}} MB
+            {{else}}
+            (unlimited)
+            {{end}}
+        </p>
+    </div>
+    {{end}}
+</div>
+{{end}}

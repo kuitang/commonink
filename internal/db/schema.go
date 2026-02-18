@@ -94,6 +94,27 @@ CREATE TABLE IF NOT EXISTS short_urls (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_short_urls_full_path ON short_urls(full_path);
+
+-- Pending subscriptions: tracks Stripe purchases made before account creation
+CREATE TABLE IF NOT EXISTS pending_subscriptions (
+    email TEXT PRIMARY KEY,
+    stripe_customer_id TEXT NOT NULL,
+    subscription_id TEXT NOT NULL,
+    subscription_status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+
+-- Stripe customer map: maps Stripe customer IDs to user IDs
+CREATE TABLE IF NOT EXISTS stripe_customer_map (
+    stripe_customer_id TEXT PRIMARY KEY,
+    user_id TEXT UNIQUE NOT NULL
+);
+
+-- Processed webhook events: idempotency guard for Stripe webhooks
+CREATE TABLE IF NOT EXISTS processed_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    processed_at INTEGER NOT NULL
+);
 `
 
 // UserDBSchema contains all the SQL statements for per-user encrypted databases.
@@ -107,6 +128,7 @@ CREATE TABLE IF NOT EXISTS account (
     created_at INTEGER NOT NULL,
     subscription_status TEXT DEFAULT 'free',
     subscription_id TEXT,
+    stripe_customer_id TEXT,
     db_size_bytes INTEGER DEFAULT 0,
     last_login INTEGER
 );

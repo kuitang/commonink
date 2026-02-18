@@ -23,6 +23,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 
 	"github.com/kuitang/agent-notes/internal/auth"
+	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
@@ -190,6 +191,7 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 		consentService,
 		s3Client,
 		shortURLSvc,
+		billing.NewMockService(),
 		server.URL,
 	)
 
@@ -358,7 +360,7 @@ func apiNotesListHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"notes":[]}`))
 		return
 	}
-	svc := notes.NewService(userDB)
+	svc := notes.NewService(userDB, notes.FreeStorageLimitBytes)
 	result, err := svc.List(50, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -626,7 +628,7 @@ func (env *BrowserTestEnv) CreateNoteForUser(t *testing.T, userID, title, conten
 		t.Fatalf("Failed to open user DB for %s: %v", userID, err)
 	}
 
-	noteSvc := notes.NewService(userDB)
+	noteSvc := notes.NewService(userDB, notes.FreeStorageLimitBytes)
 	created, err := noteSvc.Create(notes.CreateNoteParams{
 		Title:   title,
 		Content: content,
@@ -635,6 +637,29 @@ func (env *BrowserTestEnv) CreateNoteForUser(t *testing.T, userID, title, conten
 		t.Fatalf("Failed to create seeded note for %s: %v", userID, err)
 	}
 	return created.ID
+}
+
+// SetUserSubscription updates a user's subscription status and Stripe customer ID in their encrypted DB.
+func (env *BrowserTestEnv) SetUserSubscription(t *testing.T, userID, status, stripeCustomerID string) {
+	t.Helper()
+
+	dek, err := env.KeyManager.GetUserDEK(userID)
+	if err != nil {
+		t.Fatalf("Failed to get DEK for user %s: %v", userID, err)
+	}
+
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		t.Fatalf("Failed to open user DB for %s: %v", userID, err)
+	}
+
+	_, err = userDB.DB().Exec(
+		`UPDATE account SET subscription_status = ?, stripe_customer_id = ? WHERE user_id = ?`,
+		status, stripeCustomerID, userID,
+	)
+	if err != nil {
+		t.Fatalf("Failed to update subscription for user %s: %v", userID, err)
+	}
 }
 
 // GenerateUniqueEmail generates a unique email for test isolation.

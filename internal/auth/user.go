@@ -32,6 +32,7 @@ var (
 	ErrWeakPassword       = errors.New("password must be at least 8 characters")
 	ErrInvalidToken       = errors.New("invalid or expired token")
 	ErrEmailNotVerified   = errors.New("email not verified")
+	ErrGoogleSubMismatch  = errors.New("google sub mismatch: possible email takeover attempt")
 )
 
 // PasswordHasher abstracts password hashing for dependency injection.
@@ -81,11 +82,13 @@ func (realClock) Now() stdtime.Time { return stdtime.Now() }
 
 // User represents a user account.
 type User struct {
-	ID        string
-	Email     string
-	Name      string
-	GoogleSub string // Google OIDC subject ID if linked
-	CreatedAt stdtime.Time
+	ID                 string
+	Email              string
+	Name               string
+	GoogleSub          string // Google OIDC subject ID if linked
+	SubscriptionStatus string // "free", "active", "past_due", "canceled"
+	StripeCustomerID   string
+	CreatedAt          stdtime.Time
 }
 
 // UserService handles user management operations.
@@ -171,12 +174,20 @@ func (s *UserService) RegisterWithPassword(ctx context.Context, emailAddr, passw
 		return nil, fmt.Errorf("create account: %w", err)
 	}
 
+	// Check and apply any pending subscription (Milestone 2g)
+	user := &User{
+		ID:                 userID,
+		Email:              emailAddr,
+		SubscriptionStatus: "free",
+		CreatedAt:          now,
+	}
+	if pendingStatus, pendingCustID, _ := s.applyPendingSubscription(ctx, userDB, userID, emailAddr); pendingStatus != "" {
+		user.SubscriptionStatus = pendingStatus
+		user.StripeCustomerID = pendingCustID
+	}
+
 	log.Printf("[REGISTER] Total RegisterWithPassword took %s", stdtime.Since(regStart))
-	return &User{
-		ID:        userID,
-		Email:     emailAddr,
-		CreatedAt: now,
-	}, nil
+	return user, nil
 }
 
 // VerifyLogin verifies email/password credentials for an existing account.
@@ -224,10 +235,16 @@ func (s *UserService) VerifyLogin(ctx context.Context, emailAddr, password strin
 	}
 
 	log.Printf("[LOGIN] Total VerifyLogin took %s", stdtime.Since(loginStart))
+	subStatus := "free"
+	if account.SubscriptionStatus.Valid && account.SubscriptionStatus.String != "" {
+		subStatus = account.SubscriptionStatus.String
+	}
 	return &User{
-		ID:        userID,
-		Email:     emailAddr,
-		CreatedAt: stdtime.Unix(account.CreatedAt, 0),
+		ID:                 userID,
+		Email:              emailAddr,
+		SubscriptionStatus: subStatus,
+		StripeCustomerID:   account.StripeCustomerID.String,
+		CreatedAt:          stdtime.Unix(account.CreatedAt, 0),
 	}, nil
 }
 
@@ -251,10 +268,16 @@ func (s *UserService) FindOrCreateByProvider(ctx context.Context, emailAddr stri
 	// Try to get existing account
 	account, err := userDB.Queries().GetAccountByEmail(ctx, emailAddr)
 	if err == nil {
+		subStatus := "free"
+		if account.SubscriptionStatus.Valid && account.SubscriptionStatus.String != "" {
+			subStatus = account.SubscriptionStatus.String
+		}
 		return &User{
-			ID:        userID,
-			Email:     emailAddr,
-			CreatedAt: stdtime.Unix(account.CreatedAt, 0),
+			ID:                 userID,
+			Email:              emailAddr,
+			SubscriptionStatus: subStatus,
+			StripeCustomerID:   account.StripeCustomerID.String,
+			CreatedAt:          stdtime.Unix(account.CreatedAt, 0),
 		}, nil
 	}
 
@@ -274,24 +297,159 @@ func (s *UserService) FindOrCreateByProvider(ctx context.Context, emailAddr stri
 		return nil, fmt.Errorf("create account: %w", err)
 	}
 
-	return &User{
-		ID:        userID,
-		Email:     emailAddr,
-		CreatedAt: now,
-	}, nil
+	// Check and apply any pending subscription (Milestone 2g)
+	user := &User{
+		ID:                 userID,
+		Email:              emailAddr,
+		SubscriptionStatus: "free",
+		CreatedAt:          now,
+	}
+	if pendingStatus, pendingCustID, _ := s.applyPendingSubscription(ctx, userDB, userID, emailAddr); pendingStatus != "" {
+		user.SubscriptionStatus = pendingStatus
+		user.StripeCustomerID = pendingCustID
+	}
+
+	return user, nil
 }
 
-// FindByGoogleSub finds a user by their Google OIDC subject ID.
-func (s *UserService) FindByGoogleSub(ctx context.Context, googleSub string) (*User, error) {
-	// In a full implementation, we'd query the users table
-	// For now, return not found
-	return nil, ErrUserNotFound
+// applyPendingSubscription checks for a pending subscription for the given email
+// and applies it to the newly created account. Returns the subscription status,
+// stripe customer ID, and subscription ID if a pending subscription was applied.
+func (s *UserService) applyPendingSubscription(ctx context.Context, userDB *db.UserDB, userID, emailAddr string) (subStatus, custID, subID string) {
+	pending, err := s.db.Queries().GetPendingSubscription(ctx, emailAddr)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[REGISTER] Warning: failed to check pending subscription for %s: %v", emailAddr, err)
+		}
+		return "", "", ""
+	}
+
+	// Found a pending subscription — apply it to the user's account
+	log.Printf("[REGISTER] Applying pending subscription for %s: customer=%s sub=%s status=%s",
+		emailAddr, pending.StripeCustomerID, pending.SubscriptionID, pending.SubscriptionStatus)
+
+	// Update the user DB account record with subscription info
+	err = userDB.Queries().UpdateAccountSubscriptionFull(ctx, userdb.UpdateAccountSubscriptionFullParams{
+		SubscriptionStatus: sql.NullString{String: pending.SubscriptionStatus, Valid: true},
+		SubscriptionID:     sql.NullString{String: pending.SubscriptionID, Valid: true},
+		StripeCustomerID:   sql.NullString{String: pending.StripeCustomerID, Valid: true},
+		UserID:             userID,
+	})
+	if err != nil {
+		log.Printf("[REGISTER] Warning: failed to update account subscription for %s: %v", emailAddr, err)
+		return "", "", ""
+	}
+
+	// Insert stripe customer map in sessions DB
+	err = s.db.Queries().CreateStripeCustomerMap(ctx, sessions.CreateStripeCustomerMapParams{
+		StripeCustomerID: pending.StripeCustomerID,
+		UserID:           userID,
+	})
+	if err != nil {
+		log.Printf("[REGISTER] Warning: failed to create stripe customer map for %s: %v", emailAddr, err)
+		// Continue — the account update already succeeded
+	}
+
+	// Delete the pending record
+	err = s.db.Queries().DeletePendingSubscription(ctx, emailAddr)
+	if err != nil {
+		log.Printf("[REGISTER] Warning: failed to delete pending subscription for %s: %v", emailAddr, err)
+	}
+
+	return pending.SubscriptionStatus, pending.StripeCustomerID, pending.SubscriptionID
 }
 
 // LinkGoogleAccount links a Google account to an existing user.
+// Returns ErrGoogleSubMismatch if the account is already linked to a different Google sub.
 func (s *UserService) LinkGoogleAccount(ctx context.Context, userID, googleSub string) error {
-	// In a full implementation, we'd update the users table
-	return nil
+	dek, err := s.keyManager.GetUserDEK(userID)
+	if err != nil {
+		return fmt.Errorf("get user DEK: %w", err)
+	}
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return fmt.Errorf("open user DB: %w", err)
+	}
+
+	// Check existing google_sub
+	account, err := userDB.Queries().GetAccount(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get account: %w", err)
+	}
+
+	if account.GoogleSub.Valid && account.GoogleSub.String != "" && account.GoogleSub.String != googleSub {
+		return ErrGoogleSubMismatch
+	}
+
+	// Already linked with same sub — no-op
+	if account.GoogleSub.Valid && account.GoogleSub.String == googleSub {
+		return nil
+	}
+
+	return userDB.Queries().UpdateAccountGoogleSub(ctx, userdb.UpdateAccountGoogleSubParams{
+		GoogleSub: sql.NullString{String: googleSub, Valid: true},
+		UserID:    userID,
+	})
+}
+
+// UnlinkGoogleAccount removes the Google account link from a user.
+func (s *UserService) UnlinkGoogleAccount(ctx context.Context, userID string) error {
+	dek, err := s.keyManager.GetUserDEK(userID)
+	if err != nil {
+		return fmt.Errorf("get user DEK: %w", err)
+	}
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return fmt.Errorf("open user DB: %w", err)
+	}
+	return userDB.Queries().UpdateAccountGoogleSub(ctx, userdb.UpdateAccountGoogleSubParams{
+		GoogleSub: sql.NullString{Valid: false},
+		UserID:    userID,
+	})
+}
+
+// SetPassword sets a new password for a user (used by account settings).
+func (s *UserService) SetPassword(ctx context.Context, userID, newPassword string) error {
+	// Validate
+	if err := ValidatePasswordStrength(newPassword); err != nil {
+		return err
+	}
+	// Hash
+	passwordHash, err := s.hasher.HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	// Open user DB
+	dek, err := s.keyManager.GetUserDEK(userID)
+	if err != nil {
+		return fmt.Errorf("get user DEK: %w", err)
+	}
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return fmt.Errorf("open user DB: %w", err)
+	}
+	// Update
+	return userDB.Queries().UpdateAccountPasswordHash(ctx, userdb.UpdateAccountPasswordHashParams{
+		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
+		UserID:       userID,
+	})
+}
+
+// GetAccountInfo retrieves account information for the settings page.
+func (s *UserService) GetAccountInfo(ctx context.Context, userID string) (*userdb.Account, error) {
+	dek, err := s.keyManager.GetUserDEK(userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user DEK: %w", err)
+	}
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		return nil, fmt.Errorf("open user DB: %w", err)
+	}
+	account, err := userDB.Queries().GetAccount(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get account: %w", err)
+	}
+	return &account, nil
 }
 
 // SendMagicLink generates and sends a magic login link.
@@ -559,6 +717,11 @@ func (s *UserService) ResetPassword(ctx context.Context, token, newPassword stri
 
 func generateUserID(email string) string {
 	return "user-" + uuid.NewSHA1(uuid.NameSpaceDNS, []byte(email)).String()
+}
+
+// GenerateUserID is the exported version of generateUserID for use in tests.
+func GenerateUserID(email string) string {
+	return generateUserID(email)
 }
 
 func generateSecureToken(length int) (string, error) {

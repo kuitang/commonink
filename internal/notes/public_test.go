@@ -59,7 +59,7 @@ func setupPublicTestEnvForT(t *testing.T) *publicTestEnv {
 	s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-%d", testID))
 
 	publicService := NewPublicNoteService(s3Client)
-	noteService := NewService(userDB)
+	noteService := NewService(userDB, FreeStorageLimitBytes)
 
 	env := &publicTestEnv{
 		userDB:        userDB,
@@ -104,7 +104,7 @@ func TestPublic_AccessibleAfterSetPublic_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-pub-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -162,7 +162,7 @@ func FuzzPublic_AccessibleAfterSetPublic_Properties(f *testing.F) {
 		// For fuzz tests, create a simpler S3 mock that doesn't need testing.T
 		// We'll skip S3 verification in fuzz tests since they can't use TestClient
 		publicService := NewPublicNoteService(nil)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -195,7 +195,7 @@ func TestPublic_PrivateReturnsError_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-priv-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -248,7 +248,7 @@ func FuzzPublic_PrivateReturnsError_Properties(f *testing.F) {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
 
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 		ctx := context.Background()
 
 		title := titleGenerator().Draw(rt, "title")
@@ -284,7 +284,7 @@ func TestPublic_OwnerCanToggle_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-toggle-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -339,7 +339,7 @@ func FuzzPublic_OwnerCanToggle_Properties(f *testing.F) {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
 
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		title := titleGenerator().Draw(rt, "title")
 		content := contentGenerator().Draw(rt, "content")
@@ -368,7 +368,7 @@ func TestPublic_ListReturnsOnlyPublic_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-list-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -431,7 +431,7 @@ func FuzzPublic_ListReturnsOnlyPublic_Properties(f *testing.F) {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
 
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		// Create some notes
 		numNotes := rapid.IntRange(0, 5).Draw(rt, "numNotes")
@@ -459,7 +459,7 @@ func TestPublic_S3ObjectCreatedDeleted_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-s3-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -530,7 +530,7 @@ func FuzzPublic_S3ObjectCreatedDeleted_Properties(f *testing.F) {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
 
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		title := titleGenerator().Draw(rt, "title")
 		content := contentGenerator().Draw(rt, "content")
@@ -710,7 +710,7 @@ func TestPublic_GetPublicURL_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-url-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		title := titleGenerator().Draw(rt, "title")
 		content := contentGenerator().Draw(rt, "content")
@@ -744,7 +744,7 @@ func FuzzPublic_GetPublicURL_Properties(f *testing.F) {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
 
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		title := titleGenerator().Draw(rt, "title")
 		content := contentGenerator().Draw(rt, "content")
@@ -772,7 +772,7 @@ func TestPublic_ListPagination_Properties(t *testing.T) {
 
 		s3Client := s3client.TestClient(t, fmt.Sprintf("test-bucket-page-%d", testID))
 		publicService := NewPublicNoteService(s3Client)
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		ctx := context.Background()
 
@@ -831,7 +831,7 @@ func FuzzPublic_ListPagination_Properties(f *testing.F) {
 			rt.Fatalf("failed to create in-memory database: %v", err)
 		}
 
-		noteService := NewService(userDB)
+		noteService := NewService(userDB, FreeStorageLimitBytes)
 
 		// Create some notes with random inputs
 		numNotes := rapid.IntRange(0, 5).Draw(rt, "numNotes")

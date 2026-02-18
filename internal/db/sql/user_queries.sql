@@ -3,23 +3,18 @@
 -- Account operations
 
 -- name: CreateAccount :exec
-INSERT INTO account (user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO account (user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetAccount :one
-SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login
+SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login
 FROM account
 WHERE user_id = ?;
 
 -- name: GetAccountByEmail :one
-SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login
+SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login
 FROM account
 WHERE email = ?;
-
--- name: GetAccountByGoogleSub :one
-SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login
-FROM account
-WHERE google_sub = ?;
 
 -- name: UpdateAccountEmail :exec
 UPDATE account SET email = ? WHERE user_id = ?;
@@ -32,6 +27,17 @@ UPDATE account SET google_sub = ? WHERE user_id = ?;
 
 -- name: UpdateAccountSubscription :exec
 UPDATE account SET subscription_status = ?, subscription_id = ? WHERE user_id = ?;
+
+-- name: UpdateAccountStripeCustomerID :exec
+UPDATE account SET stripe_customer_id = ? WHERE user_id = ?;
+
+-- name: UpdateAccountSubscriptionFull :exec
+UPDATE account SET subscription_status = ?, subscription_id = ?, stripe_customer_id = ? WHERE user_id = ?;
+
+-- name: GetAccountByStripeCustomerID :one
+SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login
+FROM account
+WHERE stripe_customer_id = ?;
 
 -- name: UpdateAccountDBSize :exec
 UPDATE account SET db_size_bytes = ? WHERE user_id = ?;

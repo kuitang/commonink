@@ -30,8 +30,10 @@ type Querier interface {
 	GetAPIKeyByID(ctx context.Context, id string) (ApiKey, error)
 	GetAccount(ctx context.Context, userID string) (Account, error)
 	GetAccountByEmail(ctx context.Context, email string) (Account, error)
-	GetAccountByGoogleSub(ctx context.Context, googleSub sql.NullString) (Account, error)
+	GetAccountByStripeCustomerID(ctx context.Context, stripeCustomerID sql.NullString) (Account, error)
 	GetNote(ctx context.Context, id string) (Note, error)
+	// Storage size tracking
+	GetTotalNotesSize(ctx context.Context) (interface{}, error)
 	ListAPIKeys(ctx context.Context) ([]ListAPIKeysRow, error)
 	ListNotes(ctx context.Context, arg ListNotesParams) ([]Note, error)
 	ListPublicNotes(ctx context.Context, arg ListPublicNotesParams) ([]Note, error)
@@ -42,7 +44,9 @@ type Querier interface {
 	UpdateAccountGoogleSub(ctx context.Context, arg UpdateAccountGoogleSubParams) error
 	UpdateAccountLastLogin(ctx context.Context, arg UpdateAccountLastLoginParams) error
 	UpdateAccountPasswordHash(ctx context.Context, arg UpdateAccountPasswordHashParams) error
+	UpdateAccountStripeCustomerID(ctx context.Context, arg UpdateAccountStripeCustomerIDParams) error
 	UpdateAccountSubscription(ctx context.Context, arg UpdateAccountSubscriptionParams) error
+	UpdateAccountSubscriptionFull(ctx context.Context, arg UpdateAccountSubscriptionFullParams) error
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) error
 	UpdateNoteContent(ctx context.Context, arg UpdateNoteContentParams) error
 	UpdateNotePublic(ctx context.Context, arg UpdateNotePublicParams) error

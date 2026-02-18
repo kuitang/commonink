@@ -78,8 +78,8 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) erro
 const createAccount = `-- name: CreateAccount :exec
 
 
-INSERT INTO account (user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO account (user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateAccountParams struct {
@@ -90,6 +90,7 @@ type CreateAccountParams struct {
 	CreatedAt          int64          `json:"created_at"`
 	SubscriptionStatus sql.NullString `json:"subscription_status"`
 	SubscriptionID     sql.NullString `json:"subscription_id"`
+	StripeCustomerID   sql.NullString `json:"stripe_customer_id"`
 	DbSizeBytes        sql.NullInt64  `json:"db_size_bytes"`
 	LastLogin          sql.NullInt64  `json:"last_login"`
 }
@@ -105,6 +106,7 @@ func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) er
 		arg.CreatedAt,
 		arg.SubscriptionStatus,
 		arg.SubscriptionID,
+		arg.StripeCustomerID,
 		arg.DbSizeBytes,
 		arg.LastLogin,
 	)
@@ -209,7 +211,7 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id string) (ApiKey, error) 
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login
+SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login
 FROM account
 WHERE user_id = ?
 `
@@ -225,6 +227,7 @@ func (q *Queries) GetAccount(ctx context.Context, userID string) (Account, error
 		&i.CreatedAt,
 		&i.SubscriptionStatus,
 		&i.SubscriptionID,
+		&i.StripeCustomerID,
 		&i.DbSizeBytes,
 		&i.LastLogin,
 	)
@@ -232,7 +235,7 @@ func (q *Queries) GetAccount(ctx context.Context, userID string) (Account, error
 }
 
 const getAccountByEmail = `-- name: GetAccountByEmail :one
-SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login
+SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login
 FROM account
 WHERE email = ?
 `
@@ -248,20 +251,21 @@ func (q *Queries) GetAccountByEmail(ctx context.Context, email string) (Account,
 		&i.CreatedAt,
 		&i.SubscriptionStatus,
 		&i.SubscriptionID,
+		&i.StripeCustomerID,
 		&i.DbSizeBytes,
 		&i.LastLogin,
 	)
 	return i, err
 }
 
-const getAccountByGoogleSub = `-- name: GetAccountByGoogleSub :one
-SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, db_size_bytes, last_login
+const getAccountByStripeCustomerID = `-- name: GetAccountByStripeCustomerID :one
+SELECT user_id, email, password_hash, google_sub, created_at, subscription_status, subscription_id, stripe_customer_id, db_size_bytes, last_login
 FROM account
-WHERE google_sub = ?
+WHERE stripe_customer_id = ?
 `
 
-func (q *Queries) GetAccountByGoogleSub(ctx context.Context, googleSub sql.NullString) (Account, error) {
-	row := q.db.QueryRowContext(ctx, getAccountByGoogleSub, googleSub)
+func (q *Queries) GetAccountByStripeCustomerID(ctx context.Context, stripeCustomerID sql.NullString) (Account, error) {
+	row := q.db.QueryRowContext(ctx, getAccountByStripeCustomerID, stripeCustomerID)
 	var i Account
 	err := row.Scan(
 		&i.UserID,
@@ -271,6 +275,7 @@ func (q *Queries) GetAccountByGoogleSub(ctx context.Context, googleSub sql.NullS
 		&i.CreatedAt,
 		&i.SubscriptionStatus,
 		&i.SubscriptionID,
+		&i.StripeCustomerID,
 		&i.DbSizeBytes,
 		&i.LastLogin,
 	)
@@ -295,6 +300,19 @@ func (q *Queries) GetNote(ctx context.Context, id string) (Note, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getTotalNotesSize = `-- name: GetTotalNotesSize :one
+
+SELECT COALESCE(SUM(length(title) + length(content)), 0) AS total_size FROM notes
+`
+
+// Storage size tracking
+func (q *Queries) GetTotalNotesSize(ctx context.Context) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getTotalNotesSize)
+	var total_size interface{}
+	err := row.Scan(&total_size)
+	return total_size, err
 }
 
 const listAPIKeys = `-- name: ListAPIKeys :many
@@ -522,6 +540,20 @@ func (q *Queries) UpdateAccountPasswordHash(ctx context.Context, arg UpdateAccou
 	return err
 }
 
+const updateAccountStripeCustomerID = `-- name: UpdateAccountStripeCustomerID :exec
+UPDATE account SET stripe_customer_id = ? WHERE user_id = ?
+`
+
+type UpdateAccountStripeCustomerIDParams struct {
+	StripeCustomerID sql.NullString `json:"stripe_customer_id"`
+	UserID           string         `json:"user_id"`
+}
+
+func (q *Queries) UpdateAccountStripeCustomerID(ctx context.Context, arg UpdateAccountStripeCustomerIDParams) error {
+	_, err := q.db.ExecContext(ctx, updateAccountStripeCustomerID, arg.StripeCustomerID, arg.UserID)
+	return err
+}
+
 const updateAccountSubscription = `-- name: UpdateAccountSubscription :exec
 UPDATE account SET subscription_status = ?, subscription_id = ? WHERE user_id = ?
 `
@@ -534,6 +566,27 @@ type UpdateAccountSubscriptionParams struct {
 
 func (q *Queries) UpdateAccountSubscription(ctx context.Context, arg UpdateAccountSubscriptionParams) error {
 	_, err := q.db.ExecContext(ctx, updateAccountSubscription, arg.SubscriptionStatus, arg.SubscriptionID, arg.UserID)
+	return err
+}
+
+const updateAccountSubscriptionFull = `-- name: UpdateAccountSubscriptionFull :exec
+UPDATE account SET subscription_status = ?, subscription_id = ?, stripe_customer_id = ? WHERE user_id = ?
+`
+
+type UpdateAccountSubscriptionFullParams struct {
+	SubscriptionStatus sql.NullString `json:"subscription_status"`
+	SubscriptionID     sql.NullString `json:"subscription_id"`
+	StripeCustomerID   sql.NullString `json:"stripe_customer_id"`
+	UserID             string         `json:"user_id"`
+}
+
+func (q *Queries) UpdateAccountSubscriptionFull(ctx context.Context, arg UpdateAccountSubscriptionFullParams) error {
+	_, err := q.db.ExecContext(ctx, updateAccountSubscriptionFull,
+		arg.SubscriptionStatus,
+		arg.SubscriptionID,
+		arg.StripeCustomerID,
+		arg.UserID,
+	)
 	return err
 }
 
