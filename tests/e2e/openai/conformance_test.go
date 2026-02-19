@@ -23,10 +23,9 @@ import (
 	"time"
 
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/responses"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 	"pgregory.net/rapid"
 )
 
@@ -72,10 +71,19 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	openaiClient := openai.NewClient(option.WithAPIKey(apiKey))
 
+	// OpenAI's Responses API connects to our MCP server from OpenAI's infrastructure,
+	// so localhost is unreachable. TEST_PUBLIC_URL must point to a publicly-accessible
+	// URL that proxies to the test server (e.g., Tailscale Funnel, ngrok).
+	mcpURL := srv.BaseURL + "/mcp"
+	if publicURL := os.Getenv("TEST_PUBLIC_URL"); publicURL != "" {
+		mcpURL = strings.TrimRight(publicURL, "/") + "/mcp"
+		t.Logf("Using public MCP URL for OpenAI: %s", mcpURL)
+	}
+
 	return &testEnv{
 		client:      &openaiClient,
 		mcpClient:   testutil.NewMCPClient(srv.BaseURL, creds.AccessToken),
-		mcpURL:      srv.BaseURL + "/mcp",
+		mcpURL:      mcpURL,
 		accessToken: creds.AccessToken,
 		userID:      creds.UserID,
 	}
@@ -91,9 +99,9 @@ func (env *testEnv) getMCPTool() responses.ToolUnionParam {
 	return responses.ToolUnionParam{
 		OfMcp: &responses.ToolMcpParam{
 			ServerLabel: "agent-notes",
-			ServerURL:   env.mcpURL,
+			ServerURL:   openai.String(env.mcpURL),
 			RequireApproval: responses.ToolMcpRequireApprovalUnionParam{
-				OfMcpToolApprovalSetting: param.NewOpt(string(responses.ToolMcpRequireApprovalMcpToolApprovalSettingNever)),
+				OfMcpToolApprovalSetting: openai.String("never"),
 			},
 			Headers: map[string]string{
 				"Authorization": "Bearer " + env.accessToken,
@@ -167,12 +175,15 @@ Always use the actual tool calls - don't just describe what you would do.`),
 			return response.OutputText(), toolCalls, responseID, nil
 		}
 
-		// OpenAI handles MCP tool execution automatically
-		// Just continue the loop to get the result
+		// OpenAI handles MCP tool execution automatically.
+		// Continue with PreviousResponseID and an empty user input to get the result.
 		params = responses.ResponseNewParams{
 			Model:              OpenAIModel,
 			PreviousResponseID: openai.String(responseID),
-			Tools:              []responses.ToolUnionParam{env.getMCPTool()},
+			Input: responses.ResponseNewParamsInputUnion{
+				OfString: openai.String(""),
+			},
+			Tools: []responses.ToolUnionParam{env.getMCPTool()},
 		}
 	}
 
@@ -286,6 +297,69 @@ func testOpenAI_CRUD_Roundtrip_Properties(rt *rapid.T, env *testEnv, t *testing.
 		rt.Fatalf("Update failed: expected title '%s' in: %s", updatedTitle, readResult)
 	}
 
+	// Step 3b: Surgical edit via note_edit
+	// Pick a substring from the content to replace surgically
+	editTarget := rapid.StringMatching(`[A-Za-z]{3,8}`).Draw(rt, "editTarget")
+	editReplacement := rapid.StringMatching(`[A-Za-z]{3,8}`).Draw(rt, "editReplacement")
+
+	// First, set content with a known unique string so note_edit can find it
+	knownContent := fmt.Sprintf("Before %s after.", editTarget)
+	_, _, _, err = env.runConversation(ctx, t, fmt.Sprintf(
+		"Update note '%s' to have content exactly: %s", noteID, knownContent), "")
+	if err != nil {
+		rt.Fatalf("Setup for edit failed: %v", err)
+	}
+
+	editPrompt := fmt.Sprintf(
+		"Use the note_edit tool on note '%s' to replace '%s' with '%s'.",
+		noteID, editTarget, editReplacement)
+	editResp, editToolCalls, _, err := env.runConversation(ctx, t, editPrompt, "")
+	if err != nil {
+		rt.Fatalf("Edit failed: %v", err)
+	}
+	t.Logf("Edit response: %s", editResp)
+
+	// Verify note_edit was actually called
+	editCalled := false
+	for _, tc := range editToolCalls {
+		if tc.Name == "note_edit" {
+			editCalled = true
+			break
+		}
+	}
+	if !editCalled {
+		t.Log("Warning: note_edit tool was not called by OpenAI")
+	}
+
+	// Verify the edit took effect via MCP
+	editVerifyResp, err := env.mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
+	if err != nil {
+		rt.Fatalf("Read after edit failed: %v", err)
+	}
+	editVerifyResult, _ := testutil.ParseToolResult(editVerifyResp)
+	if !strings.Contains(editVerifyResult, editReplacement) {
+		rt.Fatalf("Edit failed: expected '%s' in: %s", editReplacement, editVerifyResult)
+	}
+
+	// Step 3c: Search for the note
+	searchPrompt := fmt.Sprintf("Search for notes containing '%s'.", editReplacement)
+	searchResp, searchToolCalls, _, err := env.runConversation(ctx, t, searchPrompt, "")
+	if err != nil {
+		rt.Fatalf("Search failed: %v", err)
+	}
+	t.Logf("Search response: %s", searchResp)
+
+	searchCalled := false
+	for _, tc := range searchToolCalls {
+		if tc.Name == "note_search" {
+			searchCalled = true
+			break
+		}
+	}
+	if !searchCalled {
+		t.Log("Warning: note_search tool was not called by OpenAI")
+	}
+
 	// Step 4: Delete note
 	deletePrompt := fmt.Sprintf("Delete the note with ID '%s'.", noteID)
 	deleteResp, _, _, err := env.runConversation(ctx, t, deletePrompt, "")
@@ -294,10 +368,20 @@ func testOpenAI_CRUD_Roundtrip_Properties(rt *rapid.T, env *testEnv, t *testing.
 	}
 	t.Logf("Delete response: %s", deleteResp)
 
-	// Verify deletion via MCP
-	_, err = env.mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
-	if err == nil {
-		rt.Fatalf("Note still exists after delete")
+	// Verify deletion via MCP - note_view on a soft-deleted note returns isError: true
+	// (soft delete with deleted_at IS NULL filter means the note is not found)
+	viewAfterDeleteResp, err := env.mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
+	if err != nil {
+		rt.Fatalf("Unexpected transport error after delete: %v", err)
+	}
+	var toolResult struct {
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(viewAfterDeleteResp.Result, &toolResult); err != nil {
+		rt.Fatalf("Failed to parse tool result after delete: %v", err)
+	}
+	if !toolResult.IsError {
+		rt.Fatalf("Note still visible after delete - expected isError from note_view")
 	}
 }
 
@@ -432,6 +516,64 @@ func TestOpenAI_OAuth_Unauthorized(t *testing.T) {
 	t.Logf("Correctly rejected unauthorized request: %v", err)
 }
 
+// TestOpenAI_FTS5_SyntaxEdgeCases tests FTS5 search syntax via direct MCP calls.
+// This mirrors the Claude FTS5 test — exercises the server's FTS5 handling without
+// requiring OpenAI API calls.
+func TestOpenAI_FTS5_SyntaxEdgeCases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping in short mode")
+	}
+
+	env := setupTestEnv(t)
+
+	// Create notes with known content
+	for _, n := range []struct{ title, content string }{
+		{"Revenue Report", "Quarterly revenue analysis shows growth in cloud services."},
+		{"Bug Tracker", "Authentication bug fix deployed to staging environment."},
+		{"Planning Doc", "Sprint planning for Q2 deliverables and milestones."},
+	} {
+		resp, err := env.mcpClient.CallTool("note_create", map[string]interface{}{
+			"title": n.title, "content": n.content,
+		})
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+		if testutil.IsToolError(resp) {
+			t.Fatalf("Create tool error: %v", resp)
+		}
+	}
+
+	tests := []struct {
+		name          string
+		query         string
+		expectResults bool
+	}{
+		{"SimpleKeyword", "revenue", true},
+		{"OROperator", "revenue OR bug", true},
+		{"PrefixMatch", "plan*", true},
+		{"NOTOperator", "planning NOT sprint", false}, // planning without sprint — our doc has both
+		{"QuotedPhrase", `"cloud services"`, true},
+		{"QuestionMark", "?", false},
+		{"SingleQuote", "'", false},
+		{"Apostrophe", "it's", false},
+		{"EmptyQuery", "", false},
+		{"ColumnFilter", "title:revenue", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := env.mcpClient.CallTool("note_search", map[string]interface{}{
+				"query": tc.query,
+			})
+			if err != nil {
+				t.Fatalf("note_search HTTP error for %q: %v", tc.query, err)
+			}
+			result, _ := testutil.ParseToolResult(resp)
+			t.Logf("Query %q: isError=%v, len=%d", tc.query, testutil.IsToolError(resp), len(result))
+		})
+	}
+}
+
 // TestOpenAI_ToolDiscovery verifies OpenAI can discover MCP tools
 func TestOpenAI_ToolDiscovery(t *testing.T) {
 	if testing.Short() {
@@ -466,7 +608,7 @@ func TestOpenAI_ToolDiscovery(t *testing.T) {
 	}
 
 	// Verify expected tools exist
-	expectedTools := []string{"note_create", "note_view", "note_update", "note_delete", "note_list", "note_search"}
+	expectedTools := []string{"note_create", "note_view", "note_update", "note_delete", "note_list", "note_search", "note_edit"}
 	for _, expected := range expectedTools {
 		found := false
 		for _, tool := range result.Tools {

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/kuitang/agent-notes/internal/api"
+	dbtestgen "github.com/kuitang/agent-notes/internal/db/testutil"
 	"github.com/kuitang/agent-notes/internal/notes"
 	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
@@ -868,6 +869,53 @@ func TestNotesAPI_Search_NoMatches_Properties(t *testing.T) {
 func FuzzNotesAPI_Search_NoMatches_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testNotesAPI_Search_NoMatches_Properties))
+}
+
+// =============================================================================
+// Property: Search never returns 500 for arbitrary adversarial queries
+// =============================================================================
+
+func testNotesAPI_Search_ArbitraryQuery_Properties(t *rapid.T) {
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
+
+	// Create a note so the FTS index exists
+	srv.createNote("adversarial test note", "some content for fts index")
+
+	// Draw from the adversarial generator (SQL injection, FTS5 syntax, unicode, etc.)
+	query := dbtestgen.ArbitrarySearchQuery().Draw(t, "query")
+
+	resp, data, err := srv.searchNotes(query)
+	if err != nil {
+		t.Fatalf("HTTP request failed for query %q: %v", query, err)
+	}
+
+	// Property: Never a 500 (server error)
+	if resp.StatusCode == http.StatusInternalServerError {
+		t.Fatalf("Got 500 for query %q: %s", query, string(data))
+	}
+
+	// Property: Response is always valid JSON
+	if resp.StatusCode == http.StatusOK {
+		var searchResp searchResponse
+		if err := json.Unmarshal(data, &searchResp); err != nil {
+			t.Fatalf("Invalid JSON for query %q (status %d): %s", query, resp.StatusCode, string(data))
+		}
+	}
+
+	// Acceptable statuses: 200 (results or empty), 400 (empty query)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Unexpected status %d for query %q: %s", resp.StatusCode, query, string(data))
+	}
+}
+
+func TestNotesAPI_Search_ArbitraryQuery_Properties(t *testing.T) {
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Search_ArbitraryQuery_Properties)
+}
+
+func FuzzNotesAPI_Search_ArbitraryQuery_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testNotesAPI_Search_ArbitraryQuery_Properties))
 }
 
 // =============================================================================

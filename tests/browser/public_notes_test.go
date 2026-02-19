@@ -393,3 +393,109 @@ func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 		t.Error("public note page should show 'Get Started Free' CTA")
 	}
 }
+
+// TestBrowser_CopyShareURL_Regression tests that the copy-to-clipboard button on the
+// public share link actually copies the share URL. This is a regression test for a bug
+// where the inline onclick handler had no .catch() fallback and broke silently.
+func TestBrowser_CopyShareURL_Regression(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
+
+	// Create context with clipboard permissions so we can read back
+	authCtx, err := env.browser.NewContext(playwright.BrowserNewContextOptions{
+		Permissions: []string{"clipboard-read", "clipboard-write"},
+	})
+	if err != nil {
+		t.Fatalf("failed to create browser context: %v", err)
+	}
+	authCtx.SetDefaultTimeout(browserMaxTimeoutMS)
+	authCtx.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+	defer authCtx.Close()
+
+	env.LoginUser(t, authCtx, "copyurl@example.com")
+
+	page, err := authCtx.NewPage()
+	if err != nil {
+		t.Fatalf("failed to create page: %v", err)
+	}
+	defer page.Close()
+
+	// Create note via UI
+	CreateNoteViaUI(t, page, env.BaseURL, "Copy URL Test Note", "Content for clipboard test")
+
+	// Publish: select "Public (Anonymous)" and click "Update Visibility"
+	visSelect := page.Locator("select[name='visibility']")
+	_, err = visSelect.SelectOption(playwright.SelectOptionValues{Values: &[]string{"1"}})
+	if err != nil {
+		t.Fatalf("failed to select Public (Anonymous): %v", err)
+	}
+
+	submitBtn := page.Locator("button:has-text('Update Visibility')")
+	err = submitBtn.Click()
+	if err != nil {
+		t.Fatalf("failed to click Update Visibility: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for page load after publish: %v", err)
+	}
+
+	// Verify share URL input appeared
+	shareURLInput := WaitForSelector(t, page, "input#share-url")
+	shareURL, err := shareURLInput.InputValue()
+	if err != nil {
+		t.Fatalf("failed to get share URL value: %v", err)
+	}
+	if shareURL == "" {
+		t.Fatal("share URL is empty after publishing")
+	}
+	if !strings.Contains(shareURL, "/pub/") {
+		t.Fatalf("share URL must be a short URL (/pub/...), got: %s", shareURL)
+	}
+
+	// Click the copy button
+	copyBtn := page.Locator("button#copy-share-url")
+	err = copyBtn.Click()
+	if err != nil {
+		t.Fatalf("failed to click copy button: %v", err)
+	}
+
+	// Verify clipboard content matches share URL
+	clipboardRaw, err := page.Evaluate("navigator.clipboard.readText()")
+	if err != nil {
+		t.Fatalf("failed to read clipboard: %v", err)
+	}
+	clipboardText, ok := clipboardRaw.(string)
+	if !ok {
+		t.Fatalf("clipboard readText returned non-string: %T", clipboardRaw)
+	}
+	if clipboardText != shareURL {
+		t.Errorf("clipboard content %q does not match share URL %q", clipboardText, shareURL)
+	}
+
+	// Verify visual feedback: copy-icon hidden, check-icon visible
+	checkIcon := page.Locator("#copy-check-icon")
+	isCheckVisible, err := checkIcon.IsVisible()
+	if err != nil {
+		t.Fatalf("failed to check checkmark visibility: %v", err)
+	}
+	if !isCheckVisible {
+		t.Error("checkmark icon should appear after clicking copy button")
+	}
+
+	copyIcon := page.Locator("#copy-icon")
+	isCopyHidden, err := copyIcon.IsHidden()
+	if err != nil {
+		t.Fatalf("failed to check copy icon hidden state: %v", err)
+	}
+	if !isCopyHidden {
+		t.Error("copy icon should be hidden after clicking copy button")
+	}
+}

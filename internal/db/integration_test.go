@@ -156,8 +156,11 @@ func TestMilestone1Setup(t *testing.T) {
 		t.Errorf("Expected content %q, got %q", newContent, note.Content)
 	}
 
-	// Test note deletion using sqlc
-	err = userDB.Queries().DeleteNote(ctx, "note-2")
+	// Test note deletion using sqlc (soft delete)
+	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
+		DeletedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+		ID:        "note-2",
+	})
 	if err != nil {
 		t.Fatalf("Failed to delete note: %v", err)
 	}
@@ -318,8 +321,11 @@ func TestMilestone1QuickStart(t *testing.T) {
 		t.Errorf("Expected 'Updated content', got %q", note.Content)
 	}
 
-	// Delete
-	err = userDB.Queries().DeleteNote(ctx, "quick-start-note")
+	// Delete (soft delete)
+	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
+		DeletedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+		ID:        "quick-start-note",
+	})
 	if err != nil {
 		t.Fatalf("Failed to delete note: %v", err)
 	}

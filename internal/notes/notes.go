@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -213,12 +214,72 @@ func (s *Service) Delete(id string) error {
 		return fmt.Errorf("note not found: %s", id)
 	}
 
-	err = s.userDB.Queries().DeleteNote(ctx, id)
+	err = s.userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
+		DeletedAt: sql.NullInt64{Int64: time.Now().UTC().Unix(), Valid: true},
+		ID:        id,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to delete note: %w", err)
 	}
 
 	return nil
+}
+
+// Purge permanently removes notes that were soft-deleted more than the given duration ago.
+func (s *Service) Purge(olderThan time.Duration) error {
+	ctx := context.Background()
+	cutoff := time.Now().UTC().Add(-olderThan).Unix()
+	return s.userDB.Queries().PurgeDeletedNotes(ctx, sql.NullInt64{Int64: cutoff, Valid: true})
+}
+
+// StrReplace performs exact string replacement in a note's content.
+// When replaceAll is false, old_string must match exactly one location; returns
+// ErrNoMatch if not found, ErrAmbiguousMatch if found multiple times.
+// When replaceAll is true, replaces every occurrence (still returns ErrNoMatch if zero).
+// Returns the updated note, edit metadata (replacement count + first match byte offset), and error.
+func (s *Service) StrReplace(id string, oldStr, newStr string, replaceAll bool) (*Note, *EditMetadata, error) {
+	if id == "" {
+		return nil, nil, fmt.Errorf("note ID is required")
+	}
+	if oldStr == "" {
+		return nil, nil, fmt.Errorf("old_string is required")
+	}
+
+	note, err := s.Read(id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	count := strings.Count(note.Content, oldStr)
+	if count == 0 {
+		return nil, nil, fmt.Errorf("%w. Use note_view to see the current content.", ErrNoMatch)
+	}
+	if count > 1 && !replaceAll {
+		return nil, nil, fmt.Errorf("found %d matches of the string to replace, but replace_all is false: %w. To replace all occurrences, set replace_all to true. To replace only one occurrence, provide more surrounding context to uniquely identify the instance.", count, ErrAmbiguousMatch)
+	}
+
+	// Capture the byte offset of the first match before replacement
+	firstMatchOffset := strings.Index(note.Content, oldStr)
+
+	var newContent string
+	replacementsMade := count
+	if replaceAll {
+		newContent = strings.ReplaceAll(note.Content, oldStr, newStr)
+	} else {
+		newContent = strings.Replace(note.Content, oldStr, newStr, 1)
+		replacementsMade = 1
+	}
+
+	updated, err := s.Update(id, UpdateNoteParams{Content: &newContent})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	meta := &EditMetadata{
+		ReplacementsMade:     replacementsMade,
+		FirstMatchByteOffset: firstMatchOffset,
+	}
+	return updated, meta, nil
 }
 
 // List retrieves a paginated list of notes
@@ -308,5 +369,44 @@ func (s *Service) Search(query string) (*SearchResults, error) {
 		Results:    results,
 		Query:      query,
 		TotalCount: len(results),
+	}, nil
+}
+
+// SearchWithSnippets performs full-text search returning snippets instead of full content.
+// Uses FTS5 snippet() for efficient extraction and supports raw FTS5 query syntax.
+// When the raw query has a syntax error, falls back to an escaped version and includes
+// fallback metadata (original error, corrected query) in the response.
+func (s *Service) SearchWithSnippets(query string) (*SearchSnippetResults, error) {
+	if query == "" {
+		return nil, fmt.Errorf("search query is required")
+	}
+
+	ctx := context.Background()
+
+	dbResult, err := s.userDB.SearchNotesWithSnippets(ctx, query, int64(MaxLimit), 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search notes: %w", err)
+	}
+
+	results := make([]SearchSnippetResult, 0, len(dbResult.Results))
+	for _, r := range dbResult.Results {
+		results = append(results, SearchSnippetResult{
+			ID:        r.ID,
+			Title:     r.Title,
+			Snippet:   r.Snippet,
+			IsPublic:  r.IsPublic,
+			CreatedAt: time.Unix(r.CreatedAt, 0).UTC(),
+			UpdatedAt: time.Unix(r.UpdatedAt, 0).UTC(),
+			Rank:      r.Rank,
+		})
+	}
+
+	return &SearchSnippetResults{
+		Results:         results,
+		Query:           query,
+		TotalCount:      len(results),
+		FallbackApplied: dbResult.FallbackApplied,
+		OriginalError:   dbResult.OriginalError,
+		CorrectedQuery:  dbResult.CorrectedQuery,
 	}, nil
 }

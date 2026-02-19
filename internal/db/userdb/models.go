@@ -43,4 +43,5 @@ type Note struct {
 	IsPublic  sql.NullInt64 `json:"is_public"`
 	CreatedAt int64         `json:"created_at"`
 	UpdatedAt int64         `json:"updated_at"`
+	DeletedAt sql.NullInt64 `json:"deleted_at"`
 }

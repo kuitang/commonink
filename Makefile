@@ -76,12 +76,14 @@ test-all:
 	$(MAKE) test
 	$(MAKE) test-browser
 
-## test-full: Full tests with coverage (requires OPENAI_API_KEY for conformance)
+## test-full: Full tests with coverage (requires OPENAI_API_KEY, claude CLI, + Playwright)
 test-full:
 	@if [ -z "$$OPENAI_API_KEY" ]; then echo "ERROR: OPENAI_API_KEY required. Run: source secrets.sh"; exit 1; fi
+	@if ! command -v claude >/dev/null 2>&1; then echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; fi
+	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
 	@mkdir -p test-results
 	go test $(BUILD_TAGS) -v -parallel $$(nproc 2>/dev/null || echo 4) -coverprofile=test-results/coverage.out -coverpkg=./... \
-		$$(go list ./... | grep -v 'tests/e2e/openai') \
+		./... \
 		2>&1 | tee test-results/full-test.log
 	go tool cover -html=test-results/coverage.out -o test-results/coverage.html
 	go tool cover -func=test-results/coverage.out

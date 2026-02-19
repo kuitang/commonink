@@ -123,6 +123,16 @@ func arbitraryFTS5Syntax() *rapid.Generator[string] {
 		`"phrase query"`,
 		`"unterminated phrase`,
 		`col1:test col2:other`,
+		`?`,
+		`???`,
+		`'`,
+		`'''`,
+		`test?query`,
+		`it's a test`,
+		`?test'`,
+		`!@#$%^&*()`,
+		`test OR ? AND '`,
+		`"test?' query"`,
 	})
 }
 

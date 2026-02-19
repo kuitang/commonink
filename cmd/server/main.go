@@ -565,7 +565,9 @@ func (h *AuthenticatedNotesHandler) getService(r *http.Request) (*notes.Service,
 	if err == nil && account.SubscriptionStatus.Valid {
 		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 	}
-	return notes.NewService(userDB, storageLimit), nil
+	svc := notes.NewService(userDB, storageLimit)
+	_ = svc.Purge(30 * 24 * time.Hour)
+	return svc, nil
 }
 
 // ListNotes handles GET /api/notes - returns a paginated list of notes
@@ -790,6 +792,7 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 	}
 	notesSvc := notes.NewService(userDB, storageLimit)
+	_ = notesSvc.Purge(30 * 24 * time.Hour)
 	mcpServer := mcp.NewServer(notesSvc)
 	mcpServer.ServeHTTP(w, r)
 }

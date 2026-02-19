@@ -165,26 +165,12 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto">
             <!-- Free -->
             <div class="themed-card border border-gray-200 dark:border-gray-700 p-8">
-                <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Free</h3>
-                <p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$0</span><span class="text-gray-500 dark:text-gray-400">/mo</span></p>
-                <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
-                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>100 MB storage</li>
-                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>10 requests/second</li>
-                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Web + MCP access</li>
-                </ul>
+                {{template "pricing-free-features"}}
                 <a href="/register" class="mt-8 block w-full text-center px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-input text-gray-700 dark:text-gray-200 font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">Get Started Free</a>
             </div>
             <!-- Pro -->
-            <div class="themed-card border-2 border-primary-500 p-8 relative">
-                <div class="absolute -top-3 left-1/2 -translate-x-1/2"><span class="bg-primary-600 text-white text-xs font-bold px-3 py-1 rounded-badge uppercase tracking-wide">Recommended</span></div>
-                <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Pro</h3>
-                <p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$2</span><span class="text-gray-500 dark:text-gray-400">/mo</span></p>
-                <p class="text-sm text-gray-500 dark:text-gray-400">or $20/year &mdash; save 17%</p>
-                <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
-                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Unlimited storage</li>
-                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>1,000 requests/second</li>
-                    <li class="flex items-center"><svg class="h-5 w-5 text-success-500 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Priority support</li>
-                </ul>
+            <div class="themed-card border-2 border-primary-500 p-8">
+                {{template "pricing-pro-features"}}
                 <a href="/pricing" class="themed-btn-primary mt-8 block w-full px-6 py-3">View Pricing</a>
             </div>
         </div>

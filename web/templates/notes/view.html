@@ -126,14 +126,48 @@
                                readonly
                                class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-primary-200 dark:border-primary-700 rounded-md text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500">
                         <button type="button"
-                                onclick="navigator.clipboard.writeText(document.getElementById('share-url').value).then(() => { this.innerHTML = '<svg class=\'w-5 h-5\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M5 13l4 4L19 7\'/></svg>'; setTimeout(() => { this.innerHTML = '<svg class=\'w-5 h-5\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3\'/></svg>'; }, 2000); })"
+                                id="copy-share-url"
                                 class="inline-flex items-center justify-center p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
                                 title="Copy to clipboard">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg id="copy-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+                            </svg>
+                            <svg id="copy-check-icon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                             </svg>
                         </button>
                     </div>
+                    <script>
+                    (function() {
+                        var btn = document.getElementById('copy-share-url');
+                        var input = document.getElementById('share-url');
+                        var copyIcon = document.getElementById('copy-icon');
+                        var checkIcon = document.getElementById('copy-check-icon');
+                        if (!btn || !input) return;
+
+                        function showCopied() {
+                            copyIcon.classList.add('hidden');
+                            checkIcon.classList.remove('hidden');
+                            setTimeout(function() {
+                                checkIcon.classList.add('hidden');
+                                copyIcon.classList.remove('hidden');
+                            }, 2000);
+                        }
+
+                        btn.addEventListener('click', function() {
+                            navigator.clipboard.writeText(input.value).then(showCopied).catch(function() {
+                                var textarea = document.createElement('textarea');
+                                textarea.value = input.value;
+                                textarea.style.position = 'fixed';
+                                textarea.style.opacity = '0';
+                                document.body.appendChild(textarea);
+                                textarea.select();
+                                try { document.execCommand('copy'); showCopied(); } catch(e) { /* silent */ }
+                                document.body.removeChild(textarea);
+                            });
+                        });
+                    })();
+                    </script>
                 </div>
                 {{end}}
             </div>

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -81,6 +82,7 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("POST /notes/{id}", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleUpdateNote)))
 	mux.Handle("POST /notes/{id}/delete", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleDeleteNote)))
 	mux.Handle("POST /notes/{id}/publish", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTogglePublish)))
+	mux.Handle("POST /notes/search", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleSearchNotes)))
 
 	// Short URL redirect to S3 (no auth required)
 	mux.HandleFunc("GET /pub/{short_id}", h.HandleShortURLRedirect)
@@ -465,6 +467,42 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.renderer.Render(w, "notes/list.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// HandleSearchNotes handles POST /notes/search - returns HTML fragments of matching note cards.
+func (h *WebHandler) HandleSearchNotes(w http.ResponseWriter, r *http.Request) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	query := r.FormValue("query")
+	if query == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		return
+	}
+
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
+	results, err := notesService.Search(query)
+	if err != nil {
+		http.Error(w, "Search failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	if results.TotalCount == 0 {
+		fmt.Fprintf(w, `<p class="text-center text-gray-500 dark:text-gray-400 py-8 col-span-full">No notes matching "%s"</p>`, template.HTMLEscapeString(query))
+		return
+	}
+
+	for _, result := range results.Results {
+		if err := h.renderer.RenderPartial(w, "notes/list.html", "note-card", result.Note); err != nil {
+			log.Printf("[SEARCH] RenderPartial error: %v", err)
+			return
+		}
 	}
 }
 

@@ -1,7 +1,9 @@
 package notes
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -832,4 +834,249 @@ func TestMultipleNotes_Independence_Properties(t *testing.T) {
 func FuzzMultipleNotes_Independence_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testMultipleNotes_Independence_Properties))
+}
+
+// =============================================================================
+// Property: Delete soft-deletes (Read returns error, List excludes)
+// =============================================================================
+
+func testDelete_SoftDelete_ReadFails_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	title := titleGenerator().Draw(t, "title")
+	content := contentGenerator().Draw(t, "content")
+
+	note, err := svc.Create(CreateNoteParams{Title: title, Content: content})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	err = svc.Delete(note.ID)
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Property: Read returns error after soft-delete
+	_, err = svc.Read(note.ID)
+	if err == nil {
+		t.Fatal("Expected error reading soft-deleted note")
+	}
+}
+
+func TestDelete_SoftDelete_ReadFails_Properties(t *testing.T) {
+	rapid.Check(t, testDelete_SoftDelete_ReadFails_Properties)
+}
+
+func FuzzDelete_SoftDelete_ReadFails_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testDelete_SoftDelete_ReadFails_Properties))
+}
+
+// =============================================================================
+// Property: Delete soft-deletes - List excludes deleted note
+// =============================================================================
+
+func testDelete_SoftDelete_ListExcludes_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	title := titleGenerator().Draw(t, "title")
+	content := contentGenerator().Draw(t, "content")
+
+	note, err := svc.Create(CreateNoteParams{Title: title, Content: content})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	err = svc.Delete(note.ID)
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Property: List does not include deleted note
+	result, err := svc.List(100, 0)
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	for _, n := range result.Notes {
+		if n.ID == note.ID {
+			t.Fatal("Soft-deleted note should not appear in list")
+		}
+	}
+	if result.TotalCount != 0 {
+		t.Fatalf("Expected 0 total count, got %d", result.TotalCount)
+	}
+}
+
+func TestDelete_SoftDelete_ListExcludes_Properties(t *testing.T) {
+	rapid.Check(t, testDelete_SoftDelete_ListExcludes_Properties)
+}
+
+func FuzzDelete_SoftDelete_ListExcludes_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testDelete_SoftDelete_ListExcludes_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace performs exact single replacement
+// =============================================================================
+
+func testStrReplace_ExactMatch_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	// Create note with known content containing a unique marker
+	marker := rapid.StringMatching(`[a-z]{8}`).Draw(t, "marker")
+	prefix := contentGenerator().Draw(t, "prefix")
+	suffix := contentGenerator().Draw(t, "suffix")
+	content := prefix + "UNIQUE_" + marker + suffix
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Property: StrReplace with unique match succeeds
+	replacement := "REPLACED_" + marker
+	updated, _, err := svc.StrReplace(note.ID, "UNIQUE_"+marker, replacement, false)
+	if err != nil {
+		t.Fatalf("StrReplace failed: %v", err)
+	}
+
+	expectedContent := prefix + replacement + suffix
+	if updated.Content != expectedContent {
+		t.Fatalf("Content mismatch: expected %q, got %q", expectedContent, updated.Content)
+	}
+}
+
+func TestStrReplace_ExactMatch_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_ExactMatch_Properties)
+}
+
+func FuzzStrReplace_ExactMatch_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_ExactMatch_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace returns ErrNoMatch when old_str not found
+// =============================================================================
+
+func testStrReplace_NoMatch_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: "some known content",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	_, _, err = svc.StrReplace(note.ID, "nonexistent_text_xyz", "replacement", false)
+	if err == nil {
+		t.Fatal("Expected ErrNoMatch")
+	}
+	if !errors.Is(err, ErrNoMatch) {
+		t.Fatalf("Expected ErrNoMatch, got: %v", err)
+	}
+}
+
+func TestStrReplace_NoMatch_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_NoMatch_Properties)
+}
+
+func FuzzStrReplace_NoMatch_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_NoMatch_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace returns ErrAmbiguousMatch when old_str matches multiple
+// =============================================================================
+
+func testStrReplace_AmbiguousMatch_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	marker := rapid.StringMatching(`[a-z]{6}`).Draw(t, "marker")
+	content := marker + " middle " + marker
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	_, _, err = svc.StrReplace(note.ID, marker, "replacement", false)
+	if err == nil {
+		t.Fatal("Expected ErrAmbiguousMatch")
+	}
+	if !errors.Is(err, ErrAmbiguousMatch) {
+		t.Fatalf("Expected ErrAmbiguousMatch, got: %v", err)
+	}
+}
+
+func TestStrReplace_AmbiguousMatch_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_AmbiguousMatch_Properties)
+}
+
+func FuzzStrReplace_AmbiguousMatch_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_AmbiguousMatch_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace with replace_all=true replaces every occurrence
+// =============================================================================
+
+func testStrReplace_ReplaceAll_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	marker := rapid.StringMatching(`[a-z]{6}`).Draw(t, "marker")
+	repeatCount := rapid.IntRange(2, 5).Draw(t, "repeatCount")
+
+	// Build content with marker repeated N times, separated by unique text
+	var parts []string
+	for i := 0; i < repeatCount; i++ {
+		parts = append(parts, fmt.Sprintf("section_%d_%s_end", i, marker))
+	}
+	content := strings.Join(parts, "\n")
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Property: replace_all=true replaces every occurrence
+	replacement := "REPLACED"
+	updated, _, err := svc.StrReplace(note.ID, marker, replacement, true)
+	if err != nil {
+		t.Fatalf("StrReplace with replace_all=true failed: %v", err)
+	}
+
+	// All occurrences should be replaced
+	remaining := strings.Count(updated.Content, marker)
+	if remaining != 0 {
+		t.Fatalf("Expected 0 remaining occurrences of %q, found %d in %q", marker, remaining, updated.Content)
+	}
+
+	replacedCount := strings.Count(updated.Content, replacement)
+	if replacedCount != repeatCount {
+		t.Fatalf("Expected %d replacements, found %d in %q", repeatCount, replacedCount, updated.Content)
+	}
+}
+
+func TestStrReplace_ReplaceAll_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_ReplaceAll_Properties)
+}
+
+func FuzzStrReplace_ReplaceAll_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_ReplaceAll_Properties))
 }

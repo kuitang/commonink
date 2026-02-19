@@ -57,50 +57,57 @@ VALUES (?, ?, ?, ?, ?, ?);
 -- name: GetNote :one
 SELECT id, title, content, is_public, created_at, updated_at
 FROM notes
-WHERE id = ?;
+WHERE id = ? AND deleted_at IS NULL;
 
 -- name: ListNotes :many
 SELECT id, title, content, is_public, created_at, updated_at
 FROM notes
+WHERE deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?;
 
 -- name: ListPublicNotes :many
 SELECT id, title, content, is_public, created_at, updated_at
 FROM notes
-WHERE is_public >= 1
+WHERE is_public >= 1 AND deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?;
 
 -- name: UpdateNote :exec
 UPDATE notes
 SET title = ?, content = ?, is_public = ?, updated_at = ?
-WHERE id = ?;
+WHERE id = ? AND deleted_at IS NULL;
 
 -- name: UpdateNoteTitle :exec
-UPDATE notes SET title = ?, updated_at = ? WHERE id = ?;
+UPDATE notes SET title = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL;
 
 -- name: UpdateNoteContent :exec
-UPDATE notes SET content = ?, updated_at = ? WHERE id = ?;
+UPDATE notes SET content = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL;
 
 -- name: UpdateNotePublic :exec
-UPDATE notes SET is_public = ?, updated_at = ? WHERE id = ?;
+UPDATE notes SET is_public = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL;
 
 -- name: DeleteNote :exec
-DELETE FROM notes WHERE id = ?;
+UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL;
 
 -- name: CountNotes :one
-SELECT COUNT(*) FROM notes;
+SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL;
 
 -- name: CountPublicNotes :one
-SELECT COUNT(*) FROM notes WHERE is_public >= 1;
+SELECT COUNT(*) FROM notes WHERE is_public >= 1 AND deleted_at IS NULL;
 
 -- name: NoteExists :one
-SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?);
+SELECT EXISTS(SELECT 1 FROM notes WHERE id = ? AND deleted_at IS NULL);
 
 -- FTS5 search operations
 -- Note: FTS5 queries are handled separately in Go code due to sqlc limitations with virtual tables
 -- The fts_notes table is a virtual table that sqlc cannot fully parse
+
+-- name: PurgeDeletedNotes :exec
+DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?;
+
+-- name: RestoreNote :exec
+UPDATE notes SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL;
 
 -- API Key operations
 
@@ -135,4 +142,4 @@ SELECT COUNT(*) FROM api_keys;
 -- Storage size tracking
 
 -- name: GetTotalNotesSize :one
-SELECT COALESCE(SUM(length(title) + length(content)), 0) AS total_size FROM notes;
+SELECT COALESCE(SUM(length(title) + length(content)), 0) AS total_size FROM notes WHERE deleted_at IS NULL;

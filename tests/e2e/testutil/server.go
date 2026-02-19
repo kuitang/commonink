@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -375,8 +376,13 @@ func startServer(t testing.TB) (*ServerFixture, func(), error) {
 		return nil, nil, fmt.Errorf("build failed: %w\n%s", err, out)
 	}
 
-	// Find free port
+	// Use TEST_LISTEN_PORT if set (for Tailscale Funnel / ngrok proxy), otherwise find free port
 	port := findFreePort()
+	if portStr := os.Getenv("TEST_LISTEN_PORT"); portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
 	outboxDir := filepath.Join(dataDir, "email-outbox")
 	if err := os.MkdirAll(outboxDir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("failed to create mock email outbox dir: %w", err)
@@ -534,7 +540,7 @@ func PerformOAuthFlow(t testing.TB, baseURL string, clientName string) *OAuthCre
 	t.Helper()
 
 	client := NewHTTPClient()
-	redirectURI := "http://localhost:8080/callback"
+	redirectURI := "https://localhost:8080/callback"
 
 	// Step 1: Dynamic Client Registration (DCR)
 	// This is server-specific - not part of golang.org/x/oauth2
@@ -894,4 +900,25 @@ func ParseToolResult(resp *MCPResponse) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// IsToolError checks whether an MCP response contains a tool-level error.
+// Tool errors are indicated by the "isError" field in the CallToolResult,
+// which is distinct from JSON-RPC level errors (resp.Error). With soft deletes,
+// operations like note_view on a deleted note return isError: true in the result
+// rather than a JSON-RPC error.
+func IsToolError(resp *MCPResponse) bool {
+	if resp.Error != nil {
+		return true
+	}
+	if resp.Result == nil {
+		return false
+	}
+	var result struct {
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return false
+	}
+	return result.IsError
 }

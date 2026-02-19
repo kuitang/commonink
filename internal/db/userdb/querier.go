@@ -13,9 +13,6 @@ type Querier interface {
 	CountAPIKeys(ctx context.Context) (int64, error)
 	CountNotes(ctx context.Context) (int64, error)
 	CountPublicNotes(ctx context.Context) (int64, error)
-	// FTS5 search operations
-	// Note: FTS5 queries are handled separately in Go code due to sqlc limitations with virtual tables
-	// The fts_notes table is a virtual table that sqlc cannot fully parse
 	// API Key operations
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) error
 	// User database queries (per-user encrypted database)
@@ -25,19 +22,24 @@ type Querier interface {
 	CreateNote(ctx context.Context, arg CreateNoteParams) error
 	DeleteAPIKey(ctx context.Context, id string) error
 	DeleteAccount(ctx context.Context, userID string) error
-	DeleteNote(ctx context.Context, id string) error
+	DeleteNote(ctx context.Context, arg DeleteNoteParams) error
 	GetAPIKeyByHash(ctx context.Context, tokenHash string) (ApiKey, error)
 	GetAPIKeyByID(ctx context.Context, id string) (ApiKey, error)
 	GetAccount(ctx context.Context, userID string) (Account, error)
 	GetAccountByEmail(ctx context.Context, email string) (Account, error)
 	GetAccountByStripeCustomerID(ctx context.Context, stripeCustomerID sql.NullString) (Account, error)
-	GetNote(ctx context.Context, id string) (Note, error)
+	GetNote(ctx context.Context, id string) (GetNoteRow, error)
 	// Storage size tracking
 	GetTotalNotesSize(ctx context.Context) (interface{}, error)
 	ListAPIKeys(ctx context.Context) ([]ListAPIKeysRow, error)
-	ListNotes(ctx context.Context, arg ListNotesParams) ([]Note, error)
-	ListPublicNotes(ctx context.Context, arg ListPublicNotesParams) ([]Note, error)
+	ListNotes(ctx context.Context, arg ListNotesParams) ([]ListNotesRow, error)
+	ListPublicNotes(ctx context.Context, arg ListPublicNotesParams) ([]ListPublicNotesRow, error)
 	NoteExists(ctx context.Context, id string) (int64, error)
+	// FTS5 search operations
+	// Note: FTS5 queries are handled separately in Go code due to sqlc limitations with virtual tables
+	// The fts_notes table is a virtual table that sqlc cannot fully parse
+	PurgeDeletedNotes(ctx context.Context, deletedAt sql.NullInt64) error
+	RestoreNote(ctx context.Context, arg RestoreNoteParams) error
 	UpdateAPIKeyLastUsed(ctx context.Context, arg UpdateAPIKeyLastUsedParams) error
 	UpdateAccountDBSize(ctx context.Context, arg UpdateAccountDBSizeParams) error
 	UpdateAccountEmail(ctx context.Context, arg UpdateAccountEmailParams) error

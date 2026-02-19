@@ -16,7 +16,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
 	github.com/oauth2-proxy/mockoidc v0.0.0-20240214162133-caebfff84d25
-	github.com/openai/openai-go v1.12.0
+	github.com/openai/openai-go/v3 v3.22.0
 	github.com/playwright-community/playwright-go v0.5200.1
 	github.com/resend/resend-go/v3 v3.1.0
 	github.com/stretchr/testify v1.11.1

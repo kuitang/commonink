@@ -132,27 +132,160 @@ type FTSSearchResult struct {
 	Rank      float64 // FTS5 ranking score
 }
 
-// EscapeFTS5Query escapes a user-provided search query for safe use with FTS5 MATCH.
-// FTS5 has special syntax characters (AND, OR, NOT, *, ^, ", :, (, ), -, NEAR, etc.)
-// that can cause parsing errors or unexpected behavior if not properly escaped.
+// FTSSnippetResult represents a single FTS search result with snippet
+type FTSSnippetResult struct {
+	ID        string
+	Title     string
+	Snippet   string
+	IsPublic  bool
+	CreatedAt int64
+	UpdatedAt int64
+	Rank      float64
+}
+
+// FTSSnippetSearchResult wraps snippet results with fallback metadata.
+// When a raw FTS5 query has a syntax error, the search falls back to an
+// escaped version. FallbackApplied is true in that case, with the original
+// error and the corrected query available for the caller to surface.
+type FTSSnippetSearchResult struct {
+	Results        []FTSSnippetResult
+	FallbackApplied bool
+	OriginalError   string // FTS5 syntax error message (empty if no fallback)
+	CorrectedQuery  string // The escaped query used in fallback (empty if no fallback)
+}
+
+// EscapeFTS5Query converts human-friendly search input into safe FTS5 MATCH syntax.
+// Designed for typeahead search bars — supports prefix matching, OR, quoted phrases,
+// and exclusion via - prefix.
 //
-// The function wraps the entire query in double quotes to treat it as a literal phrase,
-// and escapes any embedded double quotes by doubling them (FTS5 escape convention).
+// Syntax supported:
+//   - bare word     → prefix match:  pub → pub*
+//   - OR            → FTS5 OR:       cat OR dog → cat* OR dog*
+//   - "phrase"      → exact phrase:  "hello world" → "hello world"
+//   - -word         → exclusion:     -spam → NOT spam*
+//   - implicit AND for adjacent terms
 //
-// Examples:
-//   - "hello" -> "\"hello\""
-//   - "hello world" -> "\"hello world\""
-//   - "hello \"world\"" -> "\"hello \"\"world\"\"\""
-//   - "AND OR NOT" -> "\"AND OR NOT\""
-//   - "test*" -> "\"test*\""
+// For raw FTS5 syntax (LLM/API callers), use SearchNotesWithSnippets which
+// passes queries through directly and only falls back to this on syntax error.
 func EscapeFTS5Query(query string) string {
-	// Remove null bytes which cause "unterminated string" error in FTS5
-	// (SQLite's FTS5 is written in C where null bytes are string terminators)
 	query = strings.ReplaceAll(query, "\x00", "")
-	// Escape embedded double quotes by doubling them
-	escaped := strings.ReplaceAll(query, `"`, `""`)
-	// Wrap in double quotes to treat as a literal phrase
-	return `"` + escaped + `"`
+	tokens := tokenizeHumanSearch(query)
+
+	// First pass: convert tokens to FTS5 terms
+	var terms []string
+	for _, tok := range tokens {
+		switch {
+		case tok.isPhrase:
+			phrase := sanitizeFTS5Word(tok.text)
+			if phrase != "" {
+				terms = append(terms, `"`+strings.ReplaceAll(tok.text, `"`, `""`)+`"`)
+			}
+		case strings.EqualFold(tok.text, "OR"):
+			terms = append(terms, "OR")
+		case strings.HasPrefix(tok.text, "-") && len(tok.text) > 1:
+			clean := sanitizeFTS5Word(tok.text[1:])
+			if clean != "" {
+				terms = append(terms, "NOT "+clean+"*")
+			}
+		default:
+			clean := sanitizeFTS5Word(tok.text)
+			if clean != "" {
+				terms = append(terms, clean+"*")
+			}
+		}
+	}
+
+	// Check if we have any positive (non-NOT) terms
+	hasPositive := false
+	for _, term := range terms {
+		if term != "OR" && !strings.HasPrefix(term, "NOT ") {
+			hasPositive = true
+			break
+		}
+	}
+
+	// If only NOT terms, NOT is invalid (binary operator in FTS5). Convert to positive.
+	if !hasPositive {
+		for i, term := range terms {
+			if strings.HasPrefix(term, "NOT ") {
+				terms[i] = strings.TrimPrefix(term, "NOT ")
+			}
+		}
+	}
+
+	// Second pass: remove invalid OR positions (leading, trailing, consecutive)
+	var parts []string
+	for _, term := range terms {
+		if term == "OR" {
+			if len(parts) == 0 || parts[len(parts)-1] == "OR" {
+				continue
+			}
+			parts = append(parts, term)
+		} else {
+			parts = append(parts, term)
+		}
+	}
+	// Remove trailing OR
+	for len(parts) > 0 && parts[len(parts)-1] == "OR" {
+		parts = parts[:len(parts)-1]
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
+}
+
+// searchToken represents a parsed token from human search input.
+type searchToken struct {
+	text     string // the token text (without surrounding quotes for phrases)
+	isPhrase bool   // true if this was a "quoted phrase"
+}
+
+// tokenizeHumanSearch splits search input into tokens, preserving quoted phrases.
+func tokenizeHumanSearch(input string) []searchToken {
+	var tokens []searchToken
+	i := 0
+	for i < len(input) {
+		// Skip whitespace
+		if input[i] == ' ' || input[i] == '\t' {
+			i++
+			continue
+		}
+		// Quoted phrase
+		if input[i] == '"' {
+			end := strings.IndexByte(input[i+1:], '"')
+			if end >= 0 {
+				tokens = append(tokens, searchToken{text: input[i+1 : i+1+end], isPhrase: true})
+				i = i + 1 + end + 1
+			} else {
+				// Unclosed quote: treat rest as phrase
+				tokens = append(tokens, searchToken{text: input[i+1:], isPhrase: true})
+				break
+			}
+			continue
+		}
+		// Regular word (until next space or quote)
+		end := i + 1
+		for end < len(input) && input[end] != ' ' && input[end] != '\t' && input[end] != '"' {
+			end++
+		}
+		tokens = append(tokens, searchToken{text: input[i:end]})
+		i = end
+	}
+	return tokens
+}
+
+// sanitizeFTS5Word strips characters that cause FTS5 syntax errors.
+// Keeps letters, digits, and underscore (safe in FTS5 tokens).
+func sanitizeFTS5Word(word string) string {
+	clean := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r > 127 {
+			return r
+		}
+		return -1
+	}, word)
+	return strings.ToLower(clean)
 }
 
 // GetTotalNotesSize returns the total size of all notes (title + content) in bytes.
@@ -160,7 +293,7 @@ func EscapeFTS5Query(query string) string {
 func (u *UserDB) GetTotalNotesSize(ctx context.Context) (int64, error) {
 	var totalSize int64
 	err := u.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(length(title) + length(content)), 0) FROM notes`,
+		`SELECT COALESCE(SUM(length(title) + length(content)), 0) FROM notes WHERE deleted_at IS NULL`,
 	).Scan(&totalSize)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total notes size: %w", err)
@@ -174,12 +307,15 @@ func (u *UserDB) GetTotalNotesSize(ctx context.Context) (int64, error) {
 func (u *UserDB) SearchNotes(ctx context.Context, query string, limit, offset int64) ([]FTSSearchResult, error) {
 	// Escape user input to prevent FTS5 syntax errors from special characters
 	escapedQuery := EscapeFTS5Query(query)
+	if escapedQuery == "" {
+		return nil, nil
+	}
 
 	rows, err := u.db.QueryContext(ctx, `
 		SELECT n.id, n.title, n.content, n.is_public, n.created_at, n.updated_at, rank
 		FROM notes n
 		JOIN fts_notes f ON n.rowid = f.rowid
-		WHERE fts_notes MATCH ?
+		WHERE fts_notes MATCH ? AND n.deleted_at IS NULL
 		ORDER BY rank
 		LIMIT ? OFFSET ?
 	`, escapedQuery, limit, offset)
@@ -214,18 +350,124 @@ func (u *UserDB) SearchNotes(ctx context.Context, query string, limit, offset in
 func (u *UserDB) SearchNotesCount(ctx context.Context, query string) (int64, error) {
 	// Escape user input to prevent FTS5 syntax errors from special characters
 	escapedQuery := EscapeFTS5Query(query)
+	if escapedQuery == "" {
+		return 0, nil
+	}
 
 	var count int64
 	err := u.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM notes n
 		JOIN fts_notes f ON n.rowid = f.rowid
-		WHERE fts_notes MATCH ?
+		WHERE fts_notes MATCH ? AND n.deleted_at IS NULL
 	`, escapedQuery).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("FTS count failed: %w", err)
 	}
 	return count, nil
+}
+
+// isFTS5SyntaxError checks if an error is an FTS5 query syntax error.
+func isFTS5SyntaxError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "fts5: syntax error") ||
+		strings.Contains(msg, "fts5: parse error") ||
+		strings.Contains(msg, "unterminated string") ||
+		strings.Contains(msg, "no such column")
+}
+
+// SearchNotesWithSnippets performs FTS5 search returning snippets instead of full content.
+// Tries raw FTS5 query syntax first (supporting AND/OR/NOT/prefix*/NEAR), falls back
+// to phrase-escaped version on syntax errors.
+// Column weighting: title matches weighted 5x higher than content (bm25 weights 5.0, 1.0).
+// Snippet: auto-selects best column, wraps matches in **bold**, ~32 tokens of context.
+// Returns FTSSnippetSearchResult with fallback metadata when the raw query had a syntax error.
+func (u *UserDB) SearchNotesWithSnippets(ctx context.Context, query string, limit, offset int64) (*FTSSnippetSearchResult, error) {
+	results, err := u.searchWithSnippetQuery(ctx, query, limit, offset)
+	if err != nil && isFTS5SyntaxError(err) {
+		escaped := EscapeFTS5Query(query)
+		if escaped == "" {
+			return &FTSSnippetSearchResult{FallbackApplied: true, OriginalError: err.Error(), CorrectedQuery: ""}, nil
+		}
+		fallbackResults, fallbackErr := u.searchWithSnippetQuery(ctx, escaped, limit, offset)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		return &FTSSnippetSearchResult{
+			Results:         fallbackResults,
+			FallbackApplied: true,
+			OriginalError:   err.Error(),
+			CorrectedQuery:  escaped,
+		}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &FTSSnippetSearchResult{Results: results}, nil
+}
+
+func (u *UserDB) searchWithSnippetQuery(ctx context.Context, query string, limit, offset int64) ([]FTSSnippetResult, error) {
+	rows, err := u.db.QueryContext(ctx, `
+		SELECT n.id, n.title,
+		       snippet(fts_notes, -1, '**', '**', '...', 32) as snippet,
+		       n.is_public, n.created_at, n.updated_at,
+		       bm25(fts_notes, 5.0, 1.0) as rank
+		FROM notes n
+		JOIN fts_notes f ON n.rowid = f.rowid
+		WHERE fts_notes MATCH ? AND n.deleted_at IS NULL
+		ORDER BY rank
+		LIMIT ? OFFSET ?
+	`, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("FTS snippet search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []FTSSnippetResult
+	for rows.Next() {
+		var r FTSSnippetResult
+		var isPublic sql.NullInt64
+		var snippet sql.NullString
+		if err := rows.Scan(&r.ID, &r.Title, &snippet, &isPublic, &r.CreatedAt, &r.UpdatedAt, &r.Rank); err != nil {
+			return nil, fmt.Errorf("failed to scan FTS snippet result: %w", err)
+		}
+		if isPublic.Valid && isPublic.Int64 >= 1 {
+			r.IsPublic = true
+		}
+		if snippet.Valid {
+			r.Snippet = snippet.String
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating FTS snippet results: %w", err)
+	}
+	return results, nil
+}
+
+// MigrateUserDB applies idempotent schema migrations to an existing user database.
+// This handles adding new columns (like deleted_at) to databases created before the schema change.
+// SQLite ADD COLUMN errors if the column exists, so we catch and ignore that specific error.
+func (u *UserDB) MigrateUserDB() error {
+	statements := strings.Split(UserDBMigrations, ";")
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		_, err := u.db.Exec(stmt)
+		if err != nil {
+			// Ignore "duplicate column name" errors from ADD COLUMN
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
+			return fmt.Errorf("migration failed: %w", err)
+		}
+	}
+	return nil
 }
 
 // OpenSessionsDB opens the shared sessions database (unencrypted).
@@ -370,6 +612,13 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	if _, err := db.Exec(UserDBSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to initialize user schema for %s: %w", userID, err)
+	}
+
+	// Apply idempotent migrations for existing databases
+	udb := NewUserDBFromSQL(userID, db)
+	if err := udb.MigrateUserDB(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to migrate user schema for %s: %w", userID, err)
 	}
 
 	// Cache the connection

@@ -62,6 +62,25 @@ func (r *Renderer) Render(w http.ResponseWriter, templateName string, data inter
 	return nil
 }
 
+// RenderPartial executes a named sub-template (e.g. "note-card") without the
+// "base" wrapper. Used by SSR search to stream HTML fragments.
+func (r *Renderer) RenderPartial(w http.ResponseWriter, templateName, blockName string, data interface{}) error {
+	r.mu.RLock()
+	tmpl, ok := r.templates[templateName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("template %q not found", templateName)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.ExecuteTemplate(w, blockName, data); err != nil {
+		return fmt.Errorf("failed to execute partial %q in %q: %w", blockName, templateName, err)
+	}
+
+	return nil
+}
+
 // RenderError renders an error page with the given HTTP status code and message.
 func (r *Renderer) RenderError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
