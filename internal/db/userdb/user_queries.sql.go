@@ -33,7 +33,7 @@ func (q *Queries) CountNotes(ctx context.Context) (int64, error) {
 }
 
 const countPublicNotes = `-- name: CountPublicNotes :one
-SELECT COUNT(*) FROM notes WHERE is_public = 1
+SELECT COUNT(*) FROM notes WHERE is_public >= 1
 `
 
 func (q *Queries) CountPublicNotes(ctx context.Context) (int64, error) {
@@ -405,7 +405,7 @@ func (q *Queries) ListNotes(ctx context.Context, arg ListNotesParams) ([]Note, e
 const listPublicNotes = `-- name: ListPublicNotes :many
 SELECT id, title, content, is_public, created_at, updated_at
 FROM notes
-WHERE is_public = 1
+WHERE is_public >= 1
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?
 `

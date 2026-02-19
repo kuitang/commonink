@@ -87,7 +87,7 @@ func createTestNoteRapid(t *rapid.T, svc *Service, title, content string) *Note 
 }
 
 // =============================================================================
-// Property 1: Public note accessible after SetPublic(true)
+// Property 1: Public note accessible after SetPublic(VisibilityPublicAnonymous)
 // =============================================================================
 
 func TestPublic_AccessibleAfterSetPublic_Properties(t *testing.T) {
@@ -114,22 +114,22 @@ func TestPublic_AccessibleAfterSetPublic_Properties(t *testing.T) {
 		// Create a private note
 		note := createTestNoteRapid(rt, noteService, title, content)
 
-		// Property: Before SetPublic(true), GetPublic should fail
+		// Property: Before SetPublic(VisibilityPublicAnonymous), GetPublic should fail
 		_, err = publicService.GetPublic(ctx, userDB, note.ID)
 		if err == nil {
 			rt.Fatal("GetPublic should fail for private note")
 		}
 
 		// Set note to public
-		err = publicService.SetPublic(ctx, userDB, note.ID, true)
+		err = publicService.SetPublic(ctx, userDB, note.ID, VisibilityPublicAnonymous)
 		if err != nil {
-			rt.Fatalf("SetPublic(true) failed: %v", err)
+			rt.Fatalf("SetPublic(VisibilityPublicAnonymous) failed: %v", err)
 		}
 
-		// Property: After SetPublic(true), GetPublic should succeed
+		// Property: After SetPublic(VisibilityPublicAnonymous), GetPublic should succeed
 		publicNote, err := publicService.GetPublic(ctx, userDB, note.ID)
 		if err != nil {
-			rt.Fatalf("GetPublic failed after SetPublic(true): %v", err)
+			rt.Fatalf("GetPublic failed after SetPublic(VisibilityPublicAnonymous): %v", err)
 		}
 
 		// Property: Retrieved note has correct data
@@ -142,8 +142,8 @@ func TestPublic_AccessibleAfterSetPublic_Properties(t *testing.T) {
 		if publicNote.Content != content {
 			rt.Fatalf("Content mismatch: expected %q, got %q", content, publicNote.Content)
 		}
-		if !publicNote.IsPublic {
-			rt.Fatal("IsPublic should be true")
+		if !publicNote.Visibility.IsPublic() {
+			rt.Fatal("Visibility.IsPublic() should be true")
 		}
 	})
 }
@@ -172,7 +172,7 @@ func FuzzPublic_AccessibleAfterSetPublic_Properties(f *testing.F) {
 		note := createTestNoteRapid(rt, noteService, title, content)
 
 		// Only test the database operations in fuzz mode (skip S3)
-		err = publicService.SetPublic(ctx, userDB, note.ID, true)
+		err = publicService.SetPublic(ctx, userDB, note.ID, VisibilityPublicAnonymous)
 		// This will fail because s3Client is nil, but that's expected in fuzz mode
 		// We're primarily testing the random input generation works
 		_ = err
@@ -180,7 +180,7 @@ func FuzzPublic_AccessibleAfterSetPublic_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property 2: Private note (SetPublic(false)) returns error on GetPublic
+// Property 2: Private note (SetPublic(VisibilityPrivate)) returns error on GetPublic
 // =============================================================================
 
 func TestPublic_PrivateReturnsError_Properties(t *testing.T) {
@@ -212,27 +212,27 @@ func TestPublic_PrivateReturnsError_Properties(t *testing.T) {
 		}
 
 		// Make it public first
-		err = publicService.SetPublic(ctx, userDB, note.ID, true)
+		err = publicService.SetPublic(ctx, userDB, note.ID, VisibilityPublicAnonymous)
 		if err != nil {
-			rt.Fatalf("SetPublic(true) failed: %v", err)
+			rt.Fatalf("SetPublic(VisibilityPublicAnonymous) failed: %v", err)
 		}
 
 		// Verify it's accessible
 		_, err = publicService.GetPublic(ctx, userDB, note.ID)
 		if err != nil {
-			rt.Fatalf("GetPublic should succeed after SetPublic(true): %v", err)
+			rt.Fatalf("GetPublic should succeed after SetPublic(VisibilityPublicAnonymous): %v", err)
 		}
 
 		// Make it private again
-		err = publicService.SetPublic(ctx, userDB, note.ID, false)
+		err = publicService.SetPublic(ctx, userDB, note.ID, VisibilityPrivate)
 		if err != nil {
-			rt.Fatalf("SetPublic(false) failed: %v", err)
+			rt.Fatalf("SetPublic(VisibilityPrivate) failed: %v", err)
 		}
 
-		// Property: After SetPublic(false), GetPublic fails
+		// Property: After SetPublic(VisibilityPrivate), GetPublic fails
 		_, err = publicService.GetPublic(ctx, userDB, note.ID)
 		if err == nil {
-			rt.Fatal("GetPublic should fail after SetPublic(false)")
+			rt.Fatal("GetPublic should fail after SetPublic(VisibilityPrivate)")
 		}
 	})
 }
@@ -297,27 +297,27 @@ func TestPublic_OwnerCanToggle_Properties(t *testing.T) {
 		// Generate a random sequence of toggle operations
 		numToggles := rapid.IntRange(1, 10).Draw(rt, "numToggles")
 
-		expectedPublic := false // Notes start private
+		expectedVis := VisibilityPrivate // Notes start private
 
 		for i := 0; i < numToggles; i++ {
-			newPublicState := rapid.Bool().Draw(rt, "isPublic")
+			newVis := rapid.SampledFrom([]NoteVisibility{VisibilityPrivate, VisibilityPublicAnonymous, VisibilityPublicAttributed}).Draw(rt, "visibility")
 
-			// Property: SetPublic succeeds for any boolean state
-			err := publicService.SetPublic(ctx, userDB, note.ID, newPublicState)
+			// Property: SetPublic succeeds for any visibility state
+			err := publicService.SetPublic(ctx, userDB, note.ID, newVis)
 			if err != nil {
-				rt.Fatalf("SetPublic(%v) failed on toggle %d: %v", newPublicState, i, err)
+				rt.Fatalf("SetPublic(%v) failed on toggle %d: %v", newVis, i, err)
 			}
 
-			expectedPublic = newPublicState
+			expectedVis = newVis
 
 			// Property: GetPublic reflects the expected state
 			publicNote, err := publicService.GetPublic(ctx, userDB, note.ID)
-			if expectedPublic {
+			if expectedVis.IsPublic() {
 				if err != nil {
 					rt.Fatalf("GetPublic failed when note should be public (toggle %d): %v", i, err)
 				}
-				if !publicNote.IsPublic {
-					rt.Fatalf("IsPublic should be true after SetPublic(true) (toggle %d)", i)
+				if !publicNote.Visibility.IsPublic() {
+					rt.Fatalf("Visibility.IsPublic() should be true after SetPublic(%v) (toggle %d)", newVis, i)
 				}
 			} else {
 				if err == nil {
@@ -384,9 +384,9 @@ func TestPublic_ListReturnsOnlyPublic_Properties(t *testing.T) {
 			content := contentGenerator().Draw(rt, "publicContent")
 			note := createTestNoteRapid(rt, noteService, title, content)
 
-			err := publicService.SetPublic(ctx, userDB, note.ID, true)
+			err := publicService.SetPublic(ctx, userDB, note.ID, VisibilityPublicAnonymous)
 			if err != nil {
-				rt.Fatalf("SetPublic(true) failed: %v", err)
+				rt.Fatalf("SetPublic(VisibilityPublicAnonymous) failed: %v", err)
 			}
 			publicNoteIDs[note.ID] = true
 		}
@@ -410,7 +410,7 @@ func TestPublic_ListReturnsOnlyPublic_Properties(t *testing.T) {
 
 		// Property: All returned notes are marked as public
 		for _, note := range publicNotes {
-			if !note.IsPublic {
+			if !note.Visibility.IsPublic() {
 				rt.Fatalf("ListPublicByUser returned a non-public note: %s", note.ID)
 			}
 			if !publicNoteIDs[note.ID] {
@@ -472,25 +472,25 @@ func TestPublic_S3ObjectCreatedDeleted_Properties(t *testing.T) {
 		// Construct the expected S3 key
 		expectedKey := fmt.Sprintf("public/%s/%s.html", userID, note.ID)
 
-		// Property: Before SetPublic(true), S3 object does not exist
+		// Property: Before SetPublic(VisibilityPublicAnonymous), S3 object does not exist
 		_, err = s3Client.GetObject(ctx, expectedKey)
 		if err == nil {
-			rt.Fatal("S3 object should not exist before SetPublic(true)")
+			rt.Fatal("S3 object should not exist before SetPublic(VisibilityPublicAnonymous)")
 		}
 		if err != s3client.ErrObjectNotFound {
 			rt.Fatalf("Expected ErrObjectNotFound, got: %v", err)
 		}
 
 		// Make note public
-		err = publicService.SetPublic(ctx, userDB, note.ID, true)
+		err = publicService.SetPublic(ctx, userDB, note.ID, VisibilityPublicAnonymous)
 		if err != nil {
-			rt.Fatalf("SetPublic(true) failed: %v", err)
+			rt.Fatalf("SetPublic(VisibilityPublicAnonymous) failed: %v", err)
 		}
 
-		// Property: After SetPublic(true), S3 object exists
+		// Property: After SetPublic(VisibilityPublicAnonymous), S3 object exists
 		s3Content, err := s3Client.GetObject(ctx, expectedKey)
 		if err != nil {
-			rt.Fatalf("S3 object should exist after SetPublic(true): %v", err)
+			rt.Fatalf("S3 object should exist after SetPublic(VisibilityPublicAnonymous): %v", err)
 		}
 
 		// Property: S3 object contains the note content (HTML rendered)
@@ -503,15 +503,15 @@ func TestPublic_S3ObjectCreatedDeleted_Properties(t *testing.T) {
 		}
 
 		// Make note private
-		err = publicService.SetPublic(ctx, userDB, note.ID, false)
+		err = publicService.SetPublic(ctx, userDB, note.ID, VisibilityPrivate)
 		if err != nil {
-			rt.Fatalf("SetPublic(false) failed: %v", err)
+			rt.Fatalf("SetPublic(VisibilityPrivate) failed: %v", err)
 		}
 
-		// Property: After SetPublic(false), S3 object is deleted
+		// Property: After SetPublic(VisibilityPrivate), S3 object is deleted
 		_, err = s3Client.GetObject(ctx, expectedKey)
 		if err == nil {
-			rt.Fatal("S3 object should not exist after SetPublic(false)")
+			rt.Fatal("S3 object should not exist after SetPublic(VisibilityPrivate)")
 		}
 		if err != s3client.ErrObjectNotFound {
 			rt.Fatalf("Expected ErrObjectNotFound after unpublish, got: %v", err)
@@ -564,7 +564,7 @@ func TestPublic_SetPublicNonExistent_Properties(t *testing.T) {
 		nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(rt, "nonExistentID")
 
 		// Property: SetPublic fails for non-existent note
-		err = publicService.SetPublic(ctx, userDB, nonExistentID, true)
+		err = publicService.SetPublic(ctx, userDB, nonExistentID, VisibilityPublicAnonymous)
 		if err == nil {
 			rt.Fatal("SetPublic should fail for non-existent note")
 		}
@@ -589,7 +589,7 @@ func FuzzPublic_SetPublicNonExistent_Properties(f *testing.F) {
 		nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(rt, "nonExistentID")
 
 		// SetPublic should fail for non-existent note (even before reaching S3)
-		err = publicService.SetPublic(ctx, userDB, nonExistentID, true)
+		err = publicService.SetPublic(ctx, userDB, nonExistentID, VisibilityPublicAnonymous)
 		if err == nil {
 			rt.Fatal("SetPublic should fail for non-existent note")
 		}
@@ -616,7 +616,7 @@ func TestPublic_SetPublicEmptyID_Properties(t *testing.T) {
 		ctx := context.Background()
 
 		// Property: SetPublic fails for empty ID
-		err = publicService.SetPublic(ctx, userDB, "", true)
+		err = publicService.SetPublic(ctx, userDB, "", VisibilityPublicAnonymous)
 		if err == nil {
 			rt.Fatal("SetPublic should fail for empty ID")
 		}
@@ -638,7 +638,7 @@ func FuzzPublic_SetPublicEmptyID_Properties(f *testing.F) {
 		ctx := context.Background()
 
 		// Property: SetPublic fails for empty ID
-		err = publicService.SetPublic(ctx, userDB, "", true)
+		err = publicService.SetPublic(ctx, userDB, "", VisibilityPublicAnonymous)
 		if err == nil {
 			rt.Fatal("SetPublic should fail for empty ID")
 		}
@@ -784,9 +784,9 @@ func TestPublic_ListPagination_Properties(t *testing.T) {
 			content := contentGenerator().Draw(rt, "content")
 			note := createTestNoteRapid(rt, noteService, title, content)
 
-			err := publicService.SetPublic(ctx, userDB, note.ID, true)
+			err := publicService.SetPublic(ctx, userDB, note.ID, VisibilityPublicAnonymous)
 			if err != nil {
-				rt.Fatalf("SetPublic(true) failed: %v", err)
+				rt.Fatalf("SetPublic(VisibilityPublicAnonymous) failed: %v", err)
 			}
 		}
 

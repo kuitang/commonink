@@ -34,11 +34,11 @@ Code: `internal/auth/handlers.go`, `internal/web/handlers.go`, `internal/notes/n
 Code: `internal/web/apikey_handlers.go`, `internal/auth/apikey.go`.
 
 ### 3. Human User: Publish a Public Note
-1. User toggles publish on `/notes/{id}`.
-2. Server marks `is_public`, renders Markdown to HTML, uploads to object storage, and records short URL mapping.
-3. Public access path is `/public/{user_id}/{note_id}` with optional canonical short path `/pub/{short_id}`.
+1. User selects visibility on `/notes/{id}`: Private, Public (Anonymous), or Public (Show my name).
+2. Server sets `is_public` (0/1/2), renders Markdown to standalone HTML via Go template, uploads to S3, and creates short URL mapping.
+3. Public access via `/pub/{short_id}` which 302-redirects to the S3 public URL.
 
-Code: `internal/web/handlers.go`, `internal/notes/public.go`, `internal/shorturl/shorturl.go`.
+Code: `internal/web/handlers.go`, `internal/notes/public.go`, `internal/notes/render.go`, `internal/shorturl/shorturl.go`.
 
 ### 4. AI Client: Connect via OAuth + MCP
 1. Client discovers metadata (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/.well-known/jwks.json`).
@@ -54,7 +54,7 @@ Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/han
 ### Web Routes
 - Auth pages: `/login`, `/register`, `/password-reset`, `/auth/password-reset-confirm`
 - Notes pages: `/notes`, `/notes/new`, `/notes/{id}`, `/notes/{id}/edit`
-- Public pages: `/public/{user_id}/{note_id}`, `/pub/{short_id}`
+- Public pages: `/pub/{short_id}` (302 redirect to S3)
 - API key pages: `/api-keys`, `/api-keys/new`, `/settings/api-keys`
 - Static markdown-backed pages: `/privacy`, `/terms`, `/about`, `/docs`, `/docs/api`, `/docs/install`
 
@@ -89,8 +89,6 @@ Schema source: `internal/db/schema.go`.
 - Consent persistence used by runtime OAuth handler is placeholder-backed and does not persist grants as expected.
   - `internal/auth/consent.go`
   - Wiring: `cmd/server/main.go`
-- Public note renderer in web handler currently serves placeholder content instead of fetching stored note payload.
-  - `internal/web/handlers.go`
 - Paid-tier rate-limit routing is not wired (`getIsPaid` always returns `false`).
   - `cmd/server/main.go`
 

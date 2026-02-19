@@ -68,7 +68,7 @@ LIMIT ? OFFSET ?;
 -- name: ListPublicNotes :many
 SELECT id, title, content, is_public, created_at, updated_at
 FROM notes
-WHERE is_public = 1
+WHERE is_public >= 1
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?;
 
@@ -93,7 +93,7 @@ DELETE FROM notes WHERE id = ?;
 SELECT COUNT(*) FROM notes;
 
 -- name: CountPublicNotes :one
-SELECT COUNT(*) FROM notes WHERE is_public = 1;
+SELECT COUNT(*) FROM notes WHERE is_public >= 1;
 
 -- name: NoteExists :one
 SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?);

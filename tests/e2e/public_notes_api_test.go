@@ -99,15 +99,20 @@ func setupPublicNotesTestServer(t *testing.T) *publicNotesTestServer {
 
 		// Toggle public status using the public service
 		ctx := r.Context()
-		newPublicStatus := !note.IsPublic
+		var newVisibility notes.NoteVisibility
+		if note.Visibility.IsPublic() {
+			newVisibility = notes.VisibilityPrivate
+		} else {
+			newVisibility = notes.VisibilityPublicAnonymous
+		}
 
-		if err := publicService.SetPublic(ctx, userDB, noteID, newPublicStatus); err != nil {
+		if err := publicService.SetPublic(ctx, userDB, noteID, newVisibility); err != nil {
 			http.Error(w, "Failed to update visibility: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]bool{"is_public": newPublicStatus})
+		json.NewEncoder(w).Encode(map[string]any{"is_public": newVisibility.IsPublic(), "visibility": newVisibility})
 	})
 
 	// Public note access endpoint
@@ -265,10 +270,10 @@ func TestPublicNotesAPI_PublishedAccessible(t *testing.T) {
 
 	// Response should contain note data
 	var note struct {
-		ID       string `json:"id"`
-		Title    string `json:"title"`
-		Content  string `json:"content"`
-		IsPublic bool   `json:"is_public"`
+		ID         string               `json:"id"`
+		Title      string               `json:"title"`
+		Content    string               `json:"content"`
+		Visibility notes.NoteVisibility `json:"visibility"`
 	}
 	if err := json.Unmarshal(data, &note); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
@@ -280,8 +285,8 @@ func TestPublicNotesAPI_PublishedAccessible(t *testing.T) {
 	if note.Title != title {
 		t.Fatalf("Title mismatch: expected %s, got %s", title, note.Title)
 	}
-	if !note.IsPublic {
-		t.Fatal("Expected IsPublic=true")
+	if !note.Visibility.IsPublic() {
+		t.Fatal("Expected Visibility.IsPublic()=true")
 	}
 }
 

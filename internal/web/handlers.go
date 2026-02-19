@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
@@ -83,10 +82,7 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("POST /notes/{id}/delete", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleDeleteNote)))
 	mux.Handle("POST /notes/{id}/publish", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTogglePublish)))
 
-	// Public notes (no auth required)
-	mux.HandleFunc("GET /public/{user_id}/{note_id}", h.HandlePublicNote)
-
-	// Short URL redirect (no auth required)
+	// Short URL redirect to S3 (no auth required)
 	mux.HandleFunc("GET /pub/{short_id}", h.HandleShortURLRedirect)
 
 	// OAuth consent page (auth required - redirect to login for web pages)
@@ -152,20 +148,6 @@ type NoteViewData struct {
 type NoteEditData struct {
 	PageData
 	Note *notes.Note
-}
-
-// PublicNoteViewData contains data for the public note view page.
-type PublicNoteViewData struct {
-	PageData
-	Note     *PublicNote
-	ShareURL string
-}
-
-// PublicNote extends Note with author info for public display.
-type PublicNote struct {
-	notes.Note
-	Author   string
-	AuthorID string
 }
 
 // ConsentData contains data for the OAuth consent page.
@@ -558,7 +540,7 @@ func (h *WebHandler) HandleViewNote(w http.ResponseWriter, r *http.Request) {
 
 	userID := auth.GetUserID(r.Context())
 	shareURL := ""
-	if note.IsPublic && h.publicNotes != nil {
+	if note.Visibility.IsPublic() && h.publicNotes != nil {
 		shareURL = h.publicNotes.GetShortURL(r.Context(), userID, note.ID, h.requestOrigin(r))
 	}
 
@@ -676,7 +658,7 @@ func (h *WebHandler) HandleDeleteNote(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/notes", http.StatusFound)
 }
 
-// HandleTogglePublish handles POST /notes/{id}/publish - toggles public visibility.
+// HandleTogglePublish handles POST /notes/{id}/publish - sets note visibility.
 func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -690,18 +672,22 @@ func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	notesService := notes.NewService(userDB, storageLimitForRequest(r))
-
-	// Get current note to check public status
-	note, err := notesService.Read(noteID)
-	if err != nil {
-		h.renderer.RenderError(w, http.StatusNotFound, "Note not found")
+	if err := r.ParseForm(); err != nil {
+		h.renderer.RenderError(w, http.StatusBadRequest, "Invalid form data")
 		return
 	}
 
-	// Toggle public status
+	// Parse visibility from form
+	vis := notes.VisibilityPrivate
+	switch r.FormValue("visibility") {
+	case "1":
+		vis = notes.VisibilityPublicAnonymous
+	case "2":
+		vis = notes.VisibilityPublicAttributed
+	}
+
 	if h.publicNotes != nil {
-		if err := h.publicNotes.SetPublic(r.Context(), userDB, noteID, !note.IsPublic); err != nil {
+		if err := h.publicNotes.SetPublic(r.Context(), userDB, noteID, vis); err != nil {
 			h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to update note visibility")
 			return
 		}
@@ -710,7 +696,7 @@ func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/notes/"+noteID, http.StatusFound)
 }
 
-// HandleShortURLRedirect handles GET /pub/{short_id} - renders public note inline (no redirect).
+// HandleShortURLRedirect handles GET /pub/{short_id} - 302 redirects to S3 public URL.
 func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Request) {
 	shortID := r.PathValue("short_id")
 	if shortID == "" {
@@ -738,61 +724,13 @@ func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Reque
 	userID := parts[1]
 	noteID := parts[2]
 
-	// Render the public note inline at /pub/{short_id}
-	h.renderPublicNote(w, r, userID, noteID, urlutil.BuildAbsolute(h.requestOrigin(r), "/pub/"+shortID))
-}
-
-// HandlePublicNote handles GET /public/{user_id}/{note_id} - redirects to short URL if available.
-func (h *WebHandler) HandlePublicNote(w http.ResponseWriter, r *http.Request) {
-	userID := r.PathValue("user_id")
-	noteID := r.PathValue("note_id")
-
-	if userID == "" || noteID == "" {
-		h.renderer.RenderError(w, http.StatusNotFound, "Note not found")
-		return
-	}
-
-	// If a short URL exists, 301 redirect to /pub/{short_id} so the user sees the short URL
-	fullPath := "/public/" + userID + "/" + noteID
-	if h.shortURLSvc != nil {
-		shortURLObj, err := h.shortURLSvc.GetByFullPath(r.Context(), fullPath)
-		if err == nil && shortURLObj != nil {
-			http.Redirect(w, r, "/pub/"+shortURLObj.ShortID, http.StatusMovedPermanently)
-			return
-		}
-	}
-
-	// Fallback: render inline if no short URL exists
-	h.renderPublicNote(w, r, userID, noteID, urlutil.BuildAbsolute(h.requestOrigin(r), fullPath))
+	// 302 redirect to S3 public URL
+	s3URL := h.publicNotes.GetPublicURL(userID, noteID)
+	http.Redirect(w, r, s3URL, http.StatusFound)
 }
 
 func (h *WebHandler) requestOrigin(r *http.Request) string {
 	return urlutil.OriginFromRequest(r, h.baseURL)
-}
-
-// renderPublicNote renders a public note page with the minimal-chrome template.
-func (h *WebHandler) renderPublicNote(w http.ResponseWriter, r *http.Request, userID, noteID, shareURL string) {
-	data := PublicNoteViewData{
-		PageData: PageData{
-			Title: "Public Note",
-		},
-		Note: &PublicNote{
-			Note: notes.Note{
-				ID:        noteID,
-				Title:     "Public Note",
-				Content:   "This is a public note.",
-				IsPublic:  true,
-				UpdatedAt: time.Now(),
-			},
-			Author:   "Anonymous",
-			AuthorID: userID,
-		},
-		ShareURL: shareURL,
-	}
-
-	if err := h.renderer.RenderPublic(w, "notes/public_view.html", data); err != nil {
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
 }
 
 // HandleConsentPage handles GET /oauth/consent - shows OAuth consent screen.

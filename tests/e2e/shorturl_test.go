@@ -119,9 +119,14 @@ func setupShortURLTestServer(t *testing.T) *shortURLTestServer {
 
 		// Toggle public status
 		ctx := r.Context()
-		newPublicStatus := !note.IsPublic
+		var newVisibility notes.NoteVisibility
+		if note.Visibility.IsPublic() {
+			newVisibility = notes.VisibilityPrivate
+		} else {
+			newVisibility = notes.VisibilityPublicAnonymous
+		}
 
-		if err := publicService.SetPublic(ctx, userDB, noteID, newPublicStatus); err != nil {
+		if err := publicService.SetPublic(ctx, userDB, noteID, newVisibility); err != nil {
 			http.Error(w, "Failed to update visibility: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -131,7 +136,7 @@ func setupShortURLTestServer(t *testing.T) *shortURLTestServer {
 
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{
-			"is_public": newPublicStatus,
+			"is_public": newVisibility.IsPublic(),
 			"short_url": shortURL,
 		})
 	})
