@@ -24,7 +24,7 @@ jobs:
           check-latest: true
       - name: Install Claude Code CLI
         run: |
-          curl -fsSL https://code.claude.com/install.sh | bash
+          curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/claude" --version
       - name: Load Claude OAuth credentials
