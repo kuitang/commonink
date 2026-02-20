@@ -3,10 +3,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kuitang/agent-notes/internal/db/sessions"
@@ -17,6 +19,12 @@ import (
 
 func drawUnixEpoch(t *rapid.T, label string) int64 {
 	return rapid.Int64Range(946684800, 4102444800).Draw(t, label) // 2000-01-01 .. 2100-01-01 UTC
+}
+
+var testNoteIDCounter uint64
+
+func nextTestNoteID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, atomic.AddUint64(&testNoteIDCounter, 1))
 }
 
 // closeOnCleanup registers a cleanup function on rapid.T that closes a UserDB.
@@ -1455,13 +1463,13 @@ func testEscapeFTS5Query_BareWordsHavePrefix_Properties(t *rapid.T) {
 		return
 	}
 
-	parts := strings.Split(result, " ")
-	for _, part := range parts {
-		if part == "OR" || part == "NOT" || part == "" {
+	tokens := tokenizeHumanSearch(result)
+	for _, tok := range tokens {
+		if tok.isPhrase {
 			continue
 		}
-		// Quoted phrases are enclosed in "..."
-		if strings.HasPrefix(part, `"`) {
+		part := tok.text
+		if part == "OR" || part == "NOT" || part == "" {
 			continue
 		}
 		// Every bare word (including those after NOT) must end with *
@@ -1556,7 +1564,7 @@ func testEscapeFTS5Query_ValidFTS5Syntax_Properties(t *rapid.T) {
 
 	// Create a note so we have an FTS index to query against
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
-		ID:        "fts-syntax-test-note",
+		ID:        nextTestNoteID("fts-syntax-test-note"),
 		Title:     "Test Note for FTS5 syntax validation",
 		Content:   "Hello world this is searchable content with various words",
 		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
@@ -1577,11 +1585,12 @@ func testEscapeFTS5Query_ValidFTS5Syntax_Properties(t *rapid.T) {
 
 	// Property: the escaped query must be valid FTS5 MATCH syntax
 	// (no syntax errors when executed against a real FTS5 table)
-	_, err = userDB.db.QueryContext(ctx, `
+	var matchCount int
+	err = userDB.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM fts_notes
 		WHERE fts_notes MATCH ?
-	`, escaped)
+	`, escaped).Scan(&matchCount)
 	if err != nil {
 		t.Fatalf("EscapeFTS5Query(%q) = %q produced FTS5 error: %v", input, escaped, err)
 	}
