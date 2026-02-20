@@ -105,6 +105,7 @@ make test-full
 - Runs coverage instrumentation and writes coverage artifacts
 - **Requires**: `OPENAI_API_KEY`, `NGROK_AUTHTOKEN`, `claude` CLI, `ngrok` CLI
 - Uses an auto-selected free local port for the ngrok tunnel
+- Rapid checks: non-conformance packages use `RAPID_CHECKS_FULL` (default 100), conformance packages use `RAPID_CHECKS_CONFORMANCE` (default 3)
 - **Output**: `test-results/coverage.html`, `test-results/full-test.log`
 - **When to run**: before opening/updating a PR, or after changing MCP tool definitions/descriptions
 

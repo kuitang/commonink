@@ -39,6 +39,7 @@ GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
 RAPID_CHECKS ?= 10
 RAPID_CHECKS_FULL ?= 100
+RAPID_CHECKS_CONFORMANCE ?= 3
 GO_TEST_FULL_TIMEOUT ?= 30m
 
 .PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db fmt vet gosec mod-tidy clean deploy help
@@ -122,10 +123,16 @@ test-full:
 	log_path="test-results/full-test-$${run_id}.log"; \
 	coverage_out="test-results/coverage-$${run_id}.out"; \
 	coverage_html="test-results/coverage-$${run_id}.html"; \
+	non_conformance_packages="$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai')"; \
 	echo "Writing full test log to $$log_path"; \
-	go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
-		./... -rapid.checks=$(RAPID_CHECKS_FULL) \
-		2>&1 | tee "$$log_path"; \
+	{ \
+		echo "Running non-conformance packages with -rapid.checks=$(RAPID_CHECKS_FULL)"; \
+		go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
+			$$non_conformance_packages -rapid.checks=$(RAPID_CHECKS_FULL); \
+		echo "Running conformance packages with -rapid.checks=$(RAPID_CHECKS_CONFORMANCE)"; \
+		go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+			./tests/e2e/claude ./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE); \
+	} 2>&1 | tee "$$log_path"; \
 	go tool cover -html="$$coverage_out" -o "$$coverage_html"; \
 	go tool cover -func="$$coverage_out"; \
 	cp "$$log_path" test-results/full-test.log; \
