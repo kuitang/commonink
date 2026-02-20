@@ -8,13 +8,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/kuitang/agent-notes/internal/db/sessions"
 	"github.com/kuitang/agent-notes/internal/db/testutil"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"pgregory.net/rapid"
 )
+
+func drawUnixEpoch(t *rapid.T, label string) int64 {
+	return rapid.Int64Range(946684800, 4102444800).Draw(t, label) // 2000-01-01 .. 2100-01-01 UTC
+}
 
 // closeOnCleanup registers a cleanup function on rapid.T that closes a UserDB.
 // rapid.T does not have Cleanup(), so we use a pattern where the caller defers this.
@@ -341,7 +344,7 @@ func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
 	}
 
 	// Property: Each user's database is independent
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixIsolation")
 	for i, userID := range userIDs {
 		userDB := dbs[userID]
 
@@ -408,7 +411,7 @@ func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixFTSSync")
 
 	// Generate arbitrary note content (including special chars, unicode, etc.)
 	title := testutil.ArbitraryNoteTitle().Draw(t, "title")
@@ -468,7 +471,7 @@ func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
 
 	// Delete note using sqlc (soft delete)
 	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
-		DeletedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
 		ID:        noteID,
 	})
 	if err != nil {
@@ -508,7 +511,7 @@ func testUserDB_ContentSizeLimit_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixSizeLimit")
 
 	// Property: Content at exactly 1MB succeeds
 	content1MB := make([]byte, 1048576)
@@ -703,7 +706,7 @@ func testUserDB_Encryption_Roundtrip_Properties(t *rapid.T) {
 	sensitiveContent := rapid.StringMatching("[A-Za-z0-9 ]{10,100}").Draw(t, "sensitiveContent")
 	title := rapid.StringMatching("[A-Za-z ]{5,30}").Draw(t, "title")
 	noteID := "encrypted-note-" + rapid.StringMatching("[a-z0-9]{8}").Draw(t, "noteID")
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixEncryption")
 
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 		ID:        noteID,
@@ -765,7 +768,7 @@ func testSessionsDB_CRUD_Properties(t *rapid.T) {
 	// Generate random session data
 	sessionID := "session-" + rapid.StringMatching("[a-z0-9]{16}").Draw(t, "sessionID")
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixSessionsCRUD")
 	expiresAt := now + int64(rapid.IntRange(3600, 86400).Draw(t, "expiresIn"))
 
 	// Property: Create session succeeds
@@ -839,7 +842,7 @@ func testUserDB_FTS5_ArbitraryQuery_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixArbitraryQuery")
 
 	// Create a note so there's something to search
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
@@ -958,7 +961,7 @@ func testUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixSnippetQuery")
 
 	// Create a note so there's something to search
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
@@ -1549,7 +1552,7 @@ func testEscapeFTS5Query_ValidFTS5Syntax_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixEscapeSyntax")
 
 	// Create a note so we have an FTS index to query against
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{

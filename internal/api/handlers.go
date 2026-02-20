@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -121,6 +122,14 @@ func (h *Handler) UpdateNote(w http.ResponseWriter, r *http.Request) {
 
 	note, err := h.notesService.Update(id, params)
 	if err != nil {
+		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, notes.ErrRevisionConflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, "Note not found")
 			return

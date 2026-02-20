@@ -35,7 +35,7 @@ func TestMilestone1Setup(t *testing.T) {
 	}
 
 	// Insert a test session using sqlc
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	expires := now + 86400 // 24 hours
 	sessionID := "test-session-123"
 
@@ -158,7 +158,7 @@ func TestMilestone1Setup(t *testing.T) {
 
 	// Test note deletion using sqlc (soft delete)
 	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
-		DeletedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
 		ID:        "note-2",
 	})
 	if err != nil {
@@ -198,7 +198,7 @@ func TestDatabaseEncryption(t *testing.T) {
 
 	// Insert sensitive data using sqlc
 	sensitiveData := "This is highly sensitive information that must be encrypted."
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 		ID:        "sensitive-note",
@@ -276,7 +276,7 @@ func TestMilestone1QuickStart(t *testing.T) {
 	}
 
 	// Step 3: Verify it works by doing a simple CRUD operation using sqlc
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 
 	// Create
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
@@ -323,7 +323,7 @@ func TestMilestone1QuickStart(t *testing.T) {
 
 	// Delete (soft delete)
 	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
-		DeletedAt: sql.NullInt64{Int64: time.Now().Unix(), Valid: true},
+		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
 		ID:        "quick-start-note",
 	})
 	if err != nil {
@@ -373,7 +373,7 @@ func TestMilestone1FTS5Search(t *testing.T) {
 		{"note-4", "Go Concurrency", "Deep dive into Go goroutines and channels."},
 	}
 
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	for _, n := range notes {
 		err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 			ID:        n.id,
@@ -464,7 +464,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 			defer wg.Done()
 			localSuccess := 0
 			for j := 0; j < operationsPerGoroutine; j++ {
-				now := time.Now().Unix()
+				now := time.Now().UTC().Unix()
 				noteID := fmt.Sprintf("note-%d-%d", workerID, j)
 				title := fmt.Sprintf("Note from worker %d, op %d", workerID, j)
 				content := fmt.Sprintf("Content %d-%d", workerID, j)

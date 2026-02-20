@@ -607,7 +607,7 @@ func TestLifecycle_JSONAPI_CRUD_Properties(t *testing.T) {
 
 	// Auth once for all iterations
 	client := newClient(srv.baseURL)
-	authEmail := "jsontest-" + fmt.Sprintf("%d", time.Now().UnixNano()) + "@example.com"
+	authEmail := "jsontest@example.com"
 	authCursor := srv.outbox.Cursor()
 
 	resp, _ := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {authEmail}})

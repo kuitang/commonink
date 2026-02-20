@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -223,7 +224,16 @@ func (s *apiKeyTestServer) createTestUser(t testHelper, emailAddr string, userNu
 
 	user, err := s.userService.RegisterWithPassword(ctx, emailAddr, password)
 	if err != nil {
-		t.Fatalf("Failed to register user: %v", err)
+		// Property tests can draw duplicate emails across iterations against the
+		// shared fixture. In that case, authenticate the existing account.
+		if errors.Is(err, auth.ErrAccountExists) {
+			user, err = s.userService.VerifyLogin(ctx, emailAddr, password)
+			if err != nil {
+				t.Fatalf("Failed to login existing user after duplicate register: %v", err)
+			}
+		} else {
+			t.Fatalf("Failed to register user: %v", err)
+		}
 	}
 
 	sessionID, err := s.sessionService.Create(ctx, user.ID)
@@ -1023,19 +1033,16 @@ func testAPIKeyAPI_Expiration_Properties(t *rapid.T, server *apiKeyTestServer) {
 	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key (expires in 3600 seconds = 1 hour)
-	now := time.Now()
 	tokenID, _ := server.createAPIKey(t, sessionCookie, tokenName, "read_write", emailAddr, password)
 
-	// Property: Expiration is approximately 1 hour from now
+	// Property: Expiration metadata is internally consistent.
+	// Avoid wall-clock assertions by checking TTL directly.
 	tokens := server.listAPIKeys(t, sessionCookie)
 	for _, tok := range tokens {
 		if tok.ID == tokenID {
-			// Allow 10 second tolerance for test execution time
-			expectedExpiry := now.Add(3600 * time.Second)
-			diff := tok.ExpiresAt.Sub(expectedExpiry)
-			if diff < -10*time.Second || diff > 10*time.Second {
-				t.Fatalf("Expiration time mismatch: expected ~%v, got %v (diff: %v)",
-					expectedExpiry, tok.ExpiresAt, diff)
+			ttlSeconds := tok.ExpiresAt.Unix() - tok.CreatedAt.Unix()
+			if ttlSeconds != 3600 {
+				t.Fatalf("Expiration TTL mismatch: expected 3600s, got %ds", ttlSeconds)
 			}
 			return
 		}
@@ -1241,15 +1248,21 @@ func (s *apiKeyTestServer) createAPIKeyWithExpiry(t testHelper, sessionCookie *h
 }
 
 func testAPIKeyAPI_ExpirationEnforcement_Properties(t *rapid.T, server *apiKeyTestServer) {
+	// Shared fixture reuses middleware across rapid iterations. Reset clock to
+	// a property-drawn baseline that is never ahead of wall time.
+	//
+	// API key creation currently uses wall time while auth middleware reads its
+	// injected clock; allowing future baselines can make fresh keys appear
+	// immediately expired.
+	baseOffsetSec := rapid.Int64Range(-3600, 0).Draw(t, "baseOffsetSec")
+	baseTime := time.Now().UTC().Add(time.Duration(baseOffsetSec) * time.Second)
+	server.authMiddleware.SetClock(auth.NewFakeClock(baseTime))
+
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
 	tokenName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(t, "tokenName")
 	expirySeconds := rapid.Int64Range(10, 3600).Draw(t, "expirySeconds")
 
-	_, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
-
-	// Inject fake clock into middleware — starts at real time
-	clk := auth.NewFakeClock(time.Now())
-	server.authMiddleware.SetClock(clk)
+	userID, password, sessionCookie := server.createTestUser(t, emailAddr, 1)
 
 	// Create API Key with random expiry
 	tokenID, tokenValue := server.createAPIKeyWithExpiry(t, sessionCookie, tokenName, "read_write", emailAddr, password, expirySeconds)
@@ -1264,8 +1277,22 @@ func testAPIKeyAPI_ExpirationEnforcement_Properties(t *rapid.T, server *apiKeyTe
 		t.Fatalf("Fresh token should work: expected 200, got %d", status)
 	}
 
-	// Advance clock past expiry — no wall-clock sleep
-	clk.Advance(time.Duration(expirySeconds+1) * time.Second)
+	// Advance middleware clock past the persisted token expiry.
+	// Using DB timestamp avoids flakes from creation-time drift.
+	dek, err := server.keyManager.GetOrCreateUserDEK(userID)
+	if err != nil {
+		t.Fatalf("Failed to get user DEK: %v", err)
+	}
+	userDB, err := db.OpenUserDBWithDEK(userID, dek)
+	if err != nil {
+		t.Fatalf("Failed to open user DB: %v", err)
+	}
+	key, err := userDB.Queries().GetAPIKeyByID(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("Failed to load API key by ID: %v", err)
+	}
+	clk := auth.NewFakeClock(time.Unix(key.ExpiresAt+1, 0).UTC())
+	server.authMiddleware.SetClock(clk)
 
 	// Property 2: Token is rejected after expiry
 	status = server.authenticateWithAPIKey(t, tokenValue)

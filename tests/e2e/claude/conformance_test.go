@@ -103,6 +103,8 @@ type ToolCall struct {
 	ServerID string
 }
 
+const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash."
+
 // filterEnv returns a copy of env with the named variable removed.
 func filterEnv(env []string, name string) []string {
 	prefix := name + "="
@@ -187,7 +189,7 @@ func (c *Conversation) SendMessage(t *testing.T, message string) (string, []Tool
 		"type": "user",
 		"message": map[string]string{
 			"role":    "user",
-			"content": message,
+			"content": requiredPriorHashInstruction + "\n\n" + message,
 		},
 	}
 	msgBytes, _ := json.Marshal(userMsg)
@@ -286,7 +288,7 @@ func runOneShotClaude(t *testing.T, mcpConfig, prompt string) (string, []ToolCal
 		t.Fatal("claude CLI not found")
 	}
 
-	cmd := exec.Command("claude", "-p", prompt,
+	cmd := exec.Command("claude", "-p", requiredPriorHashInstruction+"\n\n"+prompt,
 		"--verbose",
 		"--output-format", "stream-json",
 		"--mcp-config", mcpConfig,

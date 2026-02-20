@@ -34,6 +34,9 @@ export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccc
 # Optional regex for go test -skip (CI-friendly filtering)
 TEST_SKIP_PATTERNS ?=
 BROWSER_TEST_SKIP_PATTERNS ?=
+CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
+GO_TEST_PARALLEL ?= $(CPU_COUNT)
+GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
 
 .PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
@@ -62,7 +65,7 @@ run-email: build
 
 ## test: Quick tests (rapid property tests, excludes e2e conformance + browser)
 test:
-	go test $(BUILD_TAGS) -v -timeout 120s -parallel $$(nproc 2>/dev/null || echo 4) \
+	go test $(BUILD_TAGS) -v -timeout 120s -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
 		-run 'Test' -rapid.checks=10 $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
 
@@ -82,11 +85,23 @@ test-full:
 	@if ! command -v claude >/dev/null 2>&1; then echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; fi
 	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
 	@mkdir -p test-results
-	go test $(BUILD_TAGS) -v -parallel $$(nproc 2>/dev/null || echo 4) -coverprofile=test-results/coverage.out -coverpkg=./... \
+	@set -euo pipefail; \
+	run_id="$$(date -u +%Y%m%dT%H%M%S)-$$-$$RANDOM"; \
+	log_path="test-results/full-test-$${run_id}.log"; \
+	coverage_out="test-results/coverage-$${run_id}.out"; \
+	coverage_html="test-results/coverage-$${run_id}.html"; \
+	echo "Writing full test log to $$log_path"; \
+	go test $(BUILD_TAGS) -v -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
 		./... \
-		2>&1 | tee test-results/full-test.log
-	go tool cover -html=test-results/coverage.out -o test-results/coverage.html
-	go tool cover -func=test-results/coverage.out
+		2>&1 | tee "$$log_path"; \
+	go tool cover -html="$$coverage_out" -o "$$coverage_html"; \
+	go tool cover -func="$$coverage_out"; \
+	cp "$$log_path" test-results/full-test.log; \
+	cp "$$coverage_out" test-results/coverage.out; \
+	cp "$$coverage_html" test-results/coverage.html; \
+	ln -sfn "$$(basename "$$log_path")" test-results/full-test.latest.log; \
+	ln -sfn "$$(basename "$$coverage_out")" test-results/coverage.latest.out; \
+	ln -sfn "$$(basename "$$coverage_html")" test-results/coverage.latest.html
 
 ## test-fuzz: Fuzz testing (30+ min, coverage-guided)
 test-fuzz:

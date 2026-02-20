@@ -37,16 +37,26 @@ var (
 
 	// ErrAmbiguousMatch is returned when old_string matches multiple locations
 	ErrAmbiguousMatch = errors.New("found multiple matches of the string to replace")
+
+	// ErrRevisionConflict is returned when a prior_hash precondition fails.
+	ErrRevisionConflict = errors.New("note revision conflict")
+
+	// ErrInvalidPriorHash is returned when prior_hash is malformed.
+	ErrInvalidPriorHash = errors.New("invalid prior_hash")
+
+	// ErrPriorHashRequired is returned when a mutation is missing prior_hash.
+	ErrPriorHashRequired = errors.New("prior_hash is required")
 )
 
 // Note represents a user's note with metadata
 type Note struct {
-	ID         string         `json:"id"`
-	Title      string         `json:"title"`
-	Content    string         `json:"content"`
-	Visibility NoteVisibility `json:"visibility"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
+	ID           string         `json:"id"`
+	Title        string         `json:"title"`
+	Content      string         `json:"content"`
+	RevisionHash string         `json:"revision_hash,omitempty"`
+	Visibility   NoteVisibility `json:"visibility"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // NoteListResult represents a paginated list of notes
@@ -79,20 +89,22 @@ type CreateNoteParams struct {
 // UpdateNoteParams contains parameters for updating a note
 // Both Title and Content are optional (pointer to distinguish empty string from omitted)
 type UpdateNoteParams struct {
-	Title   *string `json:"title,omitempty"`
-	Content *string `json:"content,omitempty"`
+	Title     *string `json:"title,omitempty"`
+	Content   *string `json:"content,omitempty"`
+	PriorHash *string `json:"prior_hash,omitempty"`
 }
 
 // NoteViewResult represents a note formatted for viewing with line numbers
 type NoteViewResult struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	Content    string    `json:"content"`
-	TotalLines int       `json:"total_lines"`
-	LineRange  [2]int    `json:"line_range,omitempty"`
-	IsPublic   bool      `json:"is_public"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Content      string    `json:"content"`
+	TotalLines   int       `json:"total_lines"`
+	LineRange    [2]int    `json:"line_range,omitempty"`
+	IsPublic     bool      `json:"is_public"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	RevisionHash string    `json:"revision_hash"`
 }
 
 // NoteListItem represents a note in a list with preview instead of full content
@@ -130,20 +142,22 @@ type SearchSnippetResult struct {
 
 // NoteCreateResult is the minimal response for note_create (omits content the LLM already knows)
 type NoteCreateResult struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	TotalLines int       `json:"total_lines"`
-	IsPublic   bool      `json:"is_public"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	TotalLines   int       `json:"total_lines"`
+	IsPublic     bool      `json:"is_public"`
+	CreatedAt    time.Time `json:"created_at"`
+	RevisionHash string    `json:"revision_hash"`
 }
 
 // NoteUpdateResult is the minimal response for note_update (omits content the LLM already knows)
 type NoteUpdateResult struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	TotalLines int       `json:"total_lines"`
-	IsPublic   bool      `json:"is_public"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	TotalLines   int       `json:"total_lines"`
+	IsPublic     bool      `json:"is_public"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	RevisionHash string    `json:"revision_hash"`
 }
 
 // NoteEditResult is the minimal response for note_edit with a snippet around the edit site
@@ -156,6 +170,7 @@ type NoteEditResult struct {
 	ReplacementsMade int       `json:"replacements_made"`
 	IsPublic         bool      `json:"is_public"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	RevisionHash     string    `json:"revision_hash"`
 }
 
 // EditMetadata contains metadata about a str_replace operation
@@ -166,10 +181,10 @@ type EditMetadata struct {
 
 // SearchSnippetResults represents search results with snippets and optional fallback metadata
 type SearchSnippetResults struct {
-	Results        []SearchSnippetResult `json:"results"`
-	Query          string                `json:"query"`
-	TotalCount     int                   `json:"total_count"`
-	FallbackApplied bool                 `json:"fallback_applied,omitempty"`
-	OriginalError   string               `json:"original_error,omitempty"`
-	CorrectedQuery  string               `json:"corrected_query,omitempty"`
+	Results         []SearchSnippetResult `json:"results"`
+	Query           string                `json:"query"`
+	TotalCount      int                   `json:"total_count"`
+	FallbackApplied bool                  `json:"fallback_applied,omitempty"`
+	OriginalError   string                `json:"original_error,omitempty"`
+	CorrectedQuery  string                `json:"corrected_query,omitempty"`
 }

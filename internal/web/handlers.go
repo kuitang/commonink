@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -84,7 +85,7 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("POST /notes/{id}/publish", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTogglePublish)))
 	mux.Handle("POST /notes/search", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleSearchNotes)))
 
-	// Short URL redirect to S3 (no auth required)
+	// Short URL public note route (no auth required)
 	mux.HandleFunc("GET /pub/{short_id}", h.HandleShortURLRedirect)
 
 	// OAuth consent page (auth required - redirect to login for web pages)
@@ -149,7 +150,8 @@ type NoteViewData struct {
 // NoteEditData contains data for the note edit page.
 type NoteEditData struct {
 	PageData
-	Note *notes.Note
+	Note      *notes.Note
+	PriorHash string
 }
 
 // ConsentData contains data for the OAuth consent page.
@@ -491,19 +493,78 @@ func (h *WebHandler) HandleSearchNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fallback for stemming edge cases (e.g., "runs" -> "running"):
+	// if escaped prefix search finds nothing, retry with raw FTS syntax and
+	// hydrate matching note IDs back into full notes for the card partial.
+	renderNotes := make([]notes.Note, 0, len(results.Results))
+	for _, result := range results.Results {
+		renderNotes = append(renderNotes, result.Note)
+	}
+	if len(renderNotes) == 0 {
+		snippetResults, snippetErr := notesService.SearchWithSnippets(query)
+		if snippetErr == nil {
+			for _, snippet := range snippetResults.Results {
+				note, readErr := notesService.Read(snippet.ID)
+				if readErr != nil {
+					continue
+				}
+				renderNotes = append(renderNotes, *note)
+			}
+		}
+	}
+	// Fallback for simple English plural terms where suffix-based prefix matching can miss
+	// inflected forms (e.g., "runs*" won't match "running", but "run*" will).
+	if len(renderNotes) == 0 {
+		if singular := singularTokenFallbackQuery(query); singular != "" {
+			altResults, altErr := notesService.Search(singular)
+			if altErr == nil {
+				for _, result := range altResults.Results {
+					renderNotes = append(renderNotes, result.Note)
+				}
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	if results.TotalCount == 0 {
+	if len(renderNotes) == 0 {
 		fmt.Fprintf(w, `<p class="text-center text-gray-500 dark:text-gray-400 py-8 col-span-full">No notes matching "%s"</p>`, template.HTMLEscapeString(query))
 		return
 	}
 
-	for _, result := range results.Results {
-		if err := h.renderer.RenderPartial(w, "notes/list.html", "note-card", result.Note); err != nil {
+	for _, note := range renderNotes {
+		if err := h.renderer.RenderPartial(w, "notes/list.html", "note-card", note); err != nil {
 			log.Printf("[SEARCH] RenderPartial error: %v", err)
 			return
 		}
 	}
+}
+
+func singularTokenFallbackQuery(query string) string {
+	normalized := strings.TrimSpace(strings.ToLower(query))
+	if normalized == "" {
+		return ""
+	}
+	parts := strings.Fields(normalized)
+	if len(parts) != 1 {
+		return ""
+	}
+	token := parts[0]
+	if len(token) <= 3 || !strings.HasSuffix(token, "s") {
+		return ""
+	}
+	for _, r := range token {
+		isLower := r >= 'a' && r <= 'z'
+		isDigit := r >= '0' && r <= '9'
+		if !isLower && !isDigit && r != '_' {
+			return ""
+		}
+	}
+	singular := strings.TrimSuffix(token, "s")
+	if singular == "" || singular == token {
+		return ""
+	}
+	return singular
 }
 
 // HandleNewNotePage handles GET /notes/new - shows new note form.
@@ -618,13 +679,18 @@ func (h *WebHandler) HandleEditNotePage(w http.ResponseWriter, r *http.Request) 
 		h.renderer.RenderError(w, http.StatusNotFound, "Note not found")
 		return
 	}
+	if note.RevisionHash == "" {
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to read note revision hash")
+		return
+	}
 
 	data := NoteEditData{
 		PageData: PageData{
 			Title: "Edit: " + note.Title,
 			User:  getUserWithEmail(r),
 		},
-		Note: note,
+		Note:      note,
+		PriorHash: note.RevisionHash,
 	}
 
 	if err := h.renderer.Render(w, "notes/edit.html", data); err != nil {
@@ -653,16 +719,22 @@ func (h *WebHandler) HandleUpdateNote(w http.ResponseWriter, r *http.Request) {
 
 	title := r.FormValue("title")
 	content := r.FormValue("content")
+	priorHash := r.FormValue("prior_hash")
 
 	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 
 	_, err := notesService.Update(noteID, notes.UpdateNoteParams{
-		Title:   &title,
-		Content: &content,
+		Title:     &title,
+		Content:   &content,
+		PriorHash: &priorHash,
 	})
 	if err != nil {
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
 			http.Redirect(w, r, "/notes/"+noteID+"/edit?error="+fmt.Sprintf("Storage limit exceeded. Free tier is limited to %.0f MB. Upgrade to Pro for unlimited storage.", float64(notes.FreeStorageLimitBytes)/(1024*1024)), http.StatusFound)
+			return
+		}
+		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
+			http.Redirect(w, r, "/notes/"+noteID+"/edit?error="+url.QueryEscape(err.Error()), http.StatusFound)
 			return
 		}
 		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to update note")
@@ -734,7 +806,7 @@ func (h *WebHandler) HandleTogglePublish(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/notes/"+noteID, http.StatusFound)
 }
 
-// HandleShortURLRedirect handles GET /pub/{short_id} - 302 redirects to S3 public URL.
+// HandleShortURLRedirect handles GET /pub/{short_id} by serving the public note HTML inline.
 func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Request) {
 	shortID := r.PathValue("short_id")
 	if shortID == "" {
@@ -742,7 +814,7 @@ func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if h.shortURLSvc == nil {
+	if h.shortURLSvc == nil || h.s3Client == nil {
 		http.Error(w, "Short URL service not configured", http.StatusInternalServerError)
 		return
 	}
@@ -762,9 +834,22 @@ func (h *WebHandler) HandleShortURLRedirect(w http.ResponseWriter, r *http.Reque
 	userID := parts[1]
 	noteID := parts[2]
 
-	// 302 redirect to S3 public URL
-	s3URL := h.publicNotes.GetPublicURL(userID, noteID)
-	http.Redirect(w, r, s3URL, http.StatusFound)
+	// Serve rendered HTML directly so the browser URL remains /pub/{short_id}
+	// rather than exposing backing object storage URLs.
+	key := fmt.Sprintf("public/%s/%s.html", userID, noteID)
+	html, err := h.s3Client.GetObject(r.Context(), key)
+	if err != nil {
+		if errors.Is(err, s3client.ErrObjectNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "Failed to load public note", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(html)
 }
 
 func (h *WebHandler) requestOrigin(r *http.Request) string {

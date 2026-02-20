@@ -1964,6 +1964,7 @@ func testIntegration_MCPFullCRUD_PropertiesWithServer(t *rapid.T, ts *fullAppSer
 		Title      string `json:"title"`
 		Content    string `json:"content"`
 		TotalLines int    `json:"total_lines"`
+		Revision   string `json:"revision_hash"`
 	}
 	json.Unmarshal([]byte(viewText), &viewedNote)
 	if viewedNote.Title != noteTitle {
@@ -1989,8 +1990,9 @@ func testIntegration_MCPFullCRUD_PropertiesWithServer(t *rapid.T, ts *fullAppSer
 	updateResult, _ := makeMCPCall("tools/call", map[string]interface{}{
 		"name": "note_update",
 		"arguments": map[string]interface{}{
-			"id":      noteID,
-			"content": updatedContent,
+			"id":         noteID,
+			"content":    updatedContent,
+			"prior_hash": viewedNote.Revision,
 		},
 	}, 5)
 	if errObj, ok := updateResult["error"]; ok {

@@ -1,8 +1,11 @@
 {
   "mcpServers": {
     "agent-notes": {
-      "type": "streamableHttp",
-      "url": "http://localhost:18080/mcp"
+      "type": "http",
+      "url": "http://localhost:18080/mcp",
+      "headers": {
+        "Authorization": "Bearer agentnotes_key_user-c63a7a40-f73e-5839-922c-074f4d5adbde_Zuvw137A8igRqh2nQX-3HDuNCNiY9ZsQvQsCOupAKEULlS5d5H5iGYFdn45eseid"
+      }
     }
   }
 }

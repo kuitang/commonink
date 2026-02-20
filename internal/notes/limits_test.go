@@ -344,8 +344,16 @@ func testUpdateShrink_AlwaysSucceeds_Properties(t *rapid.T) {
 
 	// Update with shorter content
 	shorterContent := content[:len(content)/2]
+	readNote, err := svc.Read(note.ID)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if readNote.RevisionHash == "" {
+		t.Fatal("Read missing revision_hash")
+	}
 	_, err = svc.Update(note.ID, UpdateNoteParams{
-		Content: &shorterContent,
+		Content:   &shorterContent,
+		PriorHash: &readNote.RevisionHash,
 	})
 	if err != nil {
 		t.Fatalf("Update with shorter content should succeed: %v", err)

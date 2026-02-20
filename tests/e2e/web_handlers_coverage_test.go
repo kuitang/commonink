@@ -23,7 +23,6 @@ import (
 
 	"pgregory.net/rapid"
 
-	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
@@ -469,51 +468,50 @@ func TestWebHandler_ShortURLRedirect_Properties(t *testing.T) {
 // =============================================================================
 
 func TestWebHandler_ShortURLRedirectWithService_Properties(t *testing.T) {
-	ts := setupWebFormServerWithShortURL(t)
+	ts := setupShortURLWebServer(t)
 	defer ts.cleanup()
 
 	rapid.Check(t, func(rt *rapid.T) {
-		client := ts.Client()
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
+		email := testutil.EmailGenerator().Draw(rt, "email")
+		title := testutil.NoteTitleGenerator().Draw(rt, "title")
+		content := testutil.NoteContentGenerator().Draw(rt, "content")
 
-		// Create a short URL mapping in the database
-		fullPath := "/public/user123/note456"
-		shortURLSvc := shorturl.NewService(ts.sessionsDB.Queries())
-		surl, err := shortURLSvc.Create(context.Background(), fullPath)
+		jar, userID := ts.authenticateTestUser(email)
+		client := ts.noFollowClient(jar)
+		noteID := ts.createNote(client, title, content)
+
+		pubResp, err := client.PostForm(ts.URL+"/notes/"+noteID+"/publish", url.Values{"visibility": {"1"}})
 		if err != nil {
-			rt.Fatalf("Failed to create short URL: %v", err)
+			rt.Fatalf("Publish request failed: %v", err)
+		}
+		pubResp.Body.Close()
+
+		fullPath := fmt.Sprintf("/public/%s/%s", userID, noteID)
+		surl, err := ts.shortURLSvc.GetByFullPath(context.Background(), fullPath)
+		if err != nil {
+			rt.Fatalf("Failed to get short URL after publish: %v", err)
 		}
 
-		// Property: GET /pub/{short_id} returns 302 redirect to S3
+		// Property: GET /pub/{short_id} returns inline HTML.
 		resp, err := client.Get(ts.URL + "/pub/" + surl.ShortID)
 		if err != nil {
 			rt.Fatalf("Request failed: %v", err)
 		}
-		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
-		if resp.StatusCode != http.StatusFound {
-			body, _ := io.ReadAll(resp.Body)
-			rt.Fatalf("Expected 302 (redirect to S3), got %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode != http.StatusOK {
+			rt.Fatalf("Expected 200 (inline public HTML), got %d: %s", resp.StatusCode, string(body))
 		}
 
-		// Property: Location header contains the S3 public URL
-		location := resp.Header.Get("Location")
-		if location == "" {
-			rt.Fatal("302 redirect should have a Location header")
+		html := string(body)
+		if !strings.Contains(html, "<html") && !strings.Contains(html, "<HTML") {
+			rt.Fatal("Expected HTML response for short URL")
 		}
-		// The S3 URL should contain the user and note IDs from the full path
-		if !strings.Contains(location, "user123") || !strings.Contains(location, "note456") {
-			rt.Fatalf("Location header should contain user/note IDs, got %s", location)
+		if !strings.Contains(html, noteID) {
+			rt.Fatalf("Expected HTML body to include note ID %s", noteID)
 		}
 	})
-}
-
-// setupWebFormServerWithShortURL creates a webFormServer with shortURL service enabled.
-func setupWebFormServerWithShortURL(t testing.TB) *webFormServer {
-	t.Helper()
-	return setupWebFormServer(t)
 }
 
 // =============================================================================

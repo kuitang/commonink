@@ -74,11 +74,12 @@ func setupTestEnv(t *testing.T) *testEnv {
 	// OpenAI's Responses API connects to our MCP server from OpenAI's infrastructure,
 	// so localhost is unreachable. TEST_PUBLIC_URL must point to a publicly-accessible
 	// URL that proxies to the test server (e.g., Tailscale Funnel, ngrok).
-	mcpURL := srv.BaseURL + "/mcp"
-	if publicURL := os.Getenv("TEST_PUBLIC_URL"); publicURL != "" {
-		mcpURL = strings.TrimRight(publicURL, "/") + "/mcp"
-		t.Logf("Using public MCP URL for OpenAI: %s", mcpURL)
+	publicURL := strings.TrimSpace(os.Getenv("TEST_PUBLIC_URL"))
+	if publicURL == "" {
+		t.Skip("TEST_PUBLIC_URL not set; OpenAI MCP connector cannot reach localhost test servers")
 	}
+	mcpURL := strings.TrimRight(publicURL, "/") + "/mcp"
+	t.Logf("Using public MCP URL for OpenAI: %s", mcpURL)
 
 	return &testEnv{
 		client:      &openaiClient,
@@ -130,7 +131,8 @@ func (env *testEnv) runConversation(ctx context.Context, t *testing.T, prompt st
 		Instructions: openai.String(`You are a helpful assistant that manages notes.
 You have access to an MCP server with note management tools.
 Use the tools when asked to create, read, update, delete, list, or search notes.
-Always use the actual tool calls - don't just describe what you would do.`),
+Always use the actual tool calls - don't just describe what you would do.
+For note_update and note_edit, you MUST call note_view first and pass revision_hash as prior_hash.`),
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openai.String(prompt),
 		},

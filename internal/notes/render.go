@@ -94,13 +94,21 @@ const htmlTemplate = `<!DOCTYPE html>
 <body class="bg-warmgray-50 dark:bg-warmgray-950 text-warmgray-900 dark:text-warmgray-100 font-serif antialiased">
     <div class="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
 
+        <!-- Minimal public header -->
+        <header class="mb-6 border-b border-warmgray-200 dark:border-warmgray-800 pb-4">
+            <div class="flex items-center justify-between gap-4">
+                <a href="/" class="text-lg font-bold tracking-tight text-warmgray-900 dark:text-warmgray-50">common.ink</a>
+                <span class="inline-flex items-center rounded-full bg-terracotta-100 text-terracotta-900 dark:bg-terracotta-900/50 dark:text-terracotta-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide">Public Note</span>
+            </div>
+        </header>
+
         <!-- Article header -->
-        <header class="mb-8 border-b border-warmgray-200 dark:border-warmgray-800 pb-6">
+        <section class="mb-8 border-b border-warmgray-200 dark:border-warmgray-800 pb-6">
             <h1 class="text-3xl sm:text-4xl font-bold leading-tight text-warmgray-900 dark:text-warmgray-50 mb-3">{{.Title}}</h1>
             <p class="text-sm text-warmgray-500 dark:text-warmgray-400">
                 By <span class="font-medium text-terracotta-600 dark:text-terracotta-400">{{if .Author}}{{.Author}}{{else}}Anonymous{{end}}</span>
             </p>
-        </header>
+        </section>
 
         <!-- Article body -->
         <article class="
@@ -125,11 +133,15 @@ const htmlTemplate = `<!DOCTYPE html>
 
         <!-- Share section -->
         {{if .CanonicalURL}}
-        <footer class="mt-12 pt-6 border-t border-warmgray-200 dark:border-warmgray-800">
+        <section class="mt-12 pt-6 border-t border-warmgray-200 dark:border-warmgray-800">
             <p class="text-xs text-warmgray-400 dark:text-warmgray-500 uppercase tracking-wider mb-2">Share this note</p>
             <p class="text-sm text-warmgray-600 dark:text-warmgray-400 font-mono break-all select-all bg-warmgray-100 dark:bg-warmgray-900 rounded px-3 py-2 border border-warmgray-200 dark:border-warmgray-800">{{.CanonicalURL}}</p>
-        </footer>
+        </section>
         {{end}}
+
+        <div class="mt-8">
+            <a href="/register" class="inline-flex items-center justify-center rounded-md bg-terracotta-600 px-4 py-2 text-sm font-semibold text-white hover:bg-terracotta-700 transition-colors">Get Started Free</a>
+        </div>
 
     </div>
 </body>

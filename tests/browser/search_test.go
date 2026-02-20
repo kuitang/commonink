@@ -13,7 +13,6 @@ package browser
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/playwright-community/playwright-go"
 )
@@ -51,14 +50,14 @@ func TestBrowser_Search_PorterStemming(t *testing.T) {
 
 	// Verify search bar is present
 	searchInput := WaitForSelector(t, page, "input#search-input")
+	lastResultsHTML := ""
 
 	// === Test 1: Porter stemming — "runs" should match "running" ===
 	err = searchInput.Fill("runs")
 	if err != nil {
 		t.Fatalf("failed to fill search: %v", err)
 	}
-	// Wait for debounce (250ms) + network
-	time.Sleep(500 * time.Millisecond)
+	lastResultsHTML = waitForSearchResultsUpdated(t, page, lastResultsHTML)
 
 	results := page.Locator("#notes-search-results")
 	err = results.WaitFor(playwright.LocatorWaitForOptions{
@@ -92,7 +91,7 @@ func TestBrowser_Search_PorterStemming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to fill search: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	lastResultsHTML = waitForSearchResultsUpdated(t, page, lastResultsHTML)
 
 	resultCards = results.Locator("article.themed-card")
 	count, err = resultCards.Count()
@@ -116,7 +115,7 @@ func TestBrowser_Search_PorterStemming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to fill search: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	lastResultsHTML = waitForSearchResultsUpdated(t, page, lastResultsHTML)
 
 	noResultsMsg := results.Locator("p")
 	isVisible, err := noResultsMsg.IsVisible()
@@ -139,7 +138,7 @@ func TestBrowser_Search_PorterStemming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to fill search: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	lastResultsHTML = waitForSearchResultsUpdated(t, page, lastResultsHTML)
 
 	resultCards = results.Locator("article.themed-card")
 	count, err = resultCards.Count()
@@ -166,7 +165,7 @@ func TestBrowser_Search_PorterStemming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to fill search: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	lastResultsHTML = waitForSearchResultsUpdated(t, page, lastResultsHTML)
 
 	resultCards = results.Locator("article.themed-card")
 	count, err = resultCards.Count()
@@ -233,7 +232,8 @@ func TestBrowser_Search_RestoreOnClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to fill search: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	waitForSearchResultsUpdated(t, page, "")
+	waitForOriginalGridHidden(t, page)
 
 	// Original grid should be hidden
 	isOrigHidden, err := originalGrid.IsHidden()
@@ -249,7 +249,7 @@ func TestBrowser_Search_RestoreOnClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to clear search: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
+	waitForSearchClearedAndRestored(t, page)
 
 	// Original grid should be restored
 	isOrigVisible, err := originalGrid.IsVisible()
@@ -315,7 +315,7 @@ func TestBrowser_Search_KeyboardShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to type query: %v", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	waitForSearchResultsUpdated(t, page, "")
 
 	// Verify search results appeared
 	results := page.Locator("#notes-search-results")
@@ -332,7 +332,7 @@ func TestBrowser_Search_KeyboardShortcuts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to press Escape: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
+	waitForSearchClearedAndRestored(t, page)
 
 	// Verify input is cleared
 	inputValue, err := page.Locator("#search-input").InputValue()
@@ -359,5 +359,71 @@ func TestBrowser_Search_KeyboardShortcuts(t *testing.T) {
 	}
 	if focused == "search-input" {
 		t.Error("search input should be blurred after Escape")
+	}
+}
+
+func waitForSearchResultsUpdated(t *testing.T, page playwright.Page, previousHTML string) string {
+	t.Helper()
+	_, err := page.WaitForFunction(`(arg) => {
+		const results = document.getElementById('notes-search-results');
+		if (!results || results.classList.contains('hidden')) return false;
+		const html = (results.innerHTML || '').trim();
+		if (!html) return false;
+		const prev = (arg && typeof arg.prev === 'string') ? arg.prev.trim() : '';
+		if (prev && html === prev) return false;
+		const hasCards = results.querySelectorAll('article.themed-card').length > 0;
+		const msg = results.querySelector('p');
+		const hasNoResults = !!msg && msg.textContent.includes('No notes matching');
+		return hasCards || hasNoResults;
+	}`, map[string]any{"prev": previousHTML}, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("search results did not update for the latest query: %v", err)
+	}
+
+	htmlValue, err := page.Evaluate(`() => {
+		const results = document.getElementById('notes-search-results');
+		if (!results) return '';
+		return results.innerHTML || '';
+	}`)
+	if err != nil {
+		t.Fatalf("failed to read rendered search results HTML: %v", err)
+	}
+	html, ok := htmlValue.(string)
+	if !ok {
+		t.Fatalf("expected rendered search results HTML as string, got %T", htmlValue)
+	}
+	return html
+}
+
+func waitForOriginalGridHidden(t *testing.T, page playwright.Page) {
+	t.Helper()
+	_, err := page.WaitForFunction(`() => {
+		const original = document.getElementById('notes-original');
+		const results = document.getElementById('notes-search-results');
+		if (!original || !results) return false;
+		return original.classList.contains('hidden') && !results.classList.contains('hidden');
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("original grid did not hide during search: %v", err)
+	}
+}
+
+func waitForSearchClearedAndRestored(t *testing.T, page playwright.Page) {
+	t.Helper()
+	_, err := page.WaitForFunction(`() => {
+		const input = document.getElementById('search-input');
+		const original = document.getElementById('notes-original');
+		const results = document.getElementById('notes-search-results');
+		if (!input || !original || !results) return false;
+		return input.value === '' && !original.classList.contains('hidden') && results.classList.contains('hidden');
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("search UI did not restore cleared state: %v", err)
 	}
 }

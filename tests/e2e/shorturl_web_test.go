@@ -391,28 +391,21 @@ func TestShortURLWeb_FullFlow_Properties(t *testing.T) {
 		if err != nil {
 			rt.Fatalf("Short URL request failed: %v", err)
 		}
+		shortBody, _ := io.ReadAll(shortResp.Body)
 		shortResp.Body.Close()
 
-		// Property 3: Short URL returns 302 redirect to S3
-		if shortResp.StatusCode != http.StatusFound {
-			rt.Fatalf("Short URL should return 302 redirect to S3, got %d", shortResp.StatusCode)
+		// Property 3: Short URL serves HTML inline at /pub/{short_id}
+		if shortResp.StatusCode != http.StatusOK {
+			rt.Fatalf("Short URL should return 200 with inline HTML, got %d", shortResp.StatusCode)
 		}
 
-		// Property 4: Redirect Location contains S3 URL with note key
-		s3Location := shortResp.Header.Get("Location")
-		if !strings.Contains(s3Location, noteID) {
-			rt.Fatalf("Short URL redirect should point to S3 URL containing note ID, got: %s", s3Location)
+		// Property 4: Response body is HTML and contains note content metadata.
+		html := string(shortBody)
+		if !strings.Contains(html, "<html") && !strings.Contains(html, "<HTML") {
+			rt.Fatal("Short URL should return HTML content")
 		}
-
-		// Step 5: Follow redirect to verify S3 content is accessible
-		s3Resp, err := http.Get(s3Location)
-		if err != nil {
-			rt.Fatalf("S3 URL request failed: %v", err)
-		}
-		s3Resp.Body.Close()
-
-		if s3Resp.StatusCode != http.StatusOK {
-			rt.Fatalf("S3 URL should return 200, got %d", s3Resp.StatusCode)
+		if !strings.Contains(html, noteID) {
+			rt.Fatalf("Short URL HTML should reference note ID %s", noteID)
 		}
 
 		// Step 6: Unpublish via setting visibility to private
@@ -474,10 +467,14 @@ func TestShortURLWeb_MultipleCycles_Properties(t *testing.T) {
 			if err != nil {
 				rt.Fatalf("Cycle %d: short URL request failed: %v", cycle, err)
 			}
+			shortBody, _ := io.ReadAll(shortResp.Body)
 			shortResp.Body.Close()
 
-			if shortResp.StatusCode != http.StatusFound {
-				rt.Fatalf("Cycle %d: short URL should return 302 redirect to S3, got %d", cycle, shortResp.StatusCode)
+			if shortResp.StatusCode != http.StatusOK {
+				rt.Fatalf("Cycle %d: short URL should return 200 with inline HTML, got %d", cycle, shortResp.StatusCode)
+			}
+			if !strings.Contains(string(shortBody), "<html") && !strings.Contains(string(shortBody), "<HTML") {
+				rt.Fatalf("Cycle %d: short URL should return HTML content", cycle)
 			}
 
 			// Unpublish (visibility=0 for private)
@@ -585,7 +582,7 @@ func TestShortURLWeb_PublicNoteAccessAnonymous_Properties(t *testing.T) {
 			rt.Fatalf("Short URL should exist: %v", err)
 		}
 
-		// Property 1: Anonymous user (no cookies) can access short URL (302 redirect to S3)
+		// Property 1: Anonymous user (no cookies) can access short URL and receive inline HTML.
 		anonClient := &http.Client{
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -596,24 +593,17 @@ func TestShortURLWeb_PublicNoteAccessAnonymous_Properties(t *testing.T) {
 		if err != nil {
 			rt.Fatalf("Anonymous short URL request failed: %v", err)
 		}
+		body, _ := io.ReadAll(anonResp.Body)
 		anonResp.Body.Close()
 
-		if anonResp.StatusCode != http.StatusFound {
-			rt.Fatalf("Anonymous short URL should return 302 redirect to S3, got %d", anonResp.StatusCode)
+		if anonResp.StatusCode != http.StatusOK {
+			rt.Fatalf("Anonymous short URL should return 200 with inline HTML, got %d", anonResp.StatusCode)
 		}
 
-		// Property 2: Follow redirect to S3 and verify HTML content
-		s3Location := anonResp.Header.Get("Location")
-		s3Resp, err := http.Get(s3Location)
-		if err != nil {
-			rt.Fatalf("S3 URL request failed: %v", err)
-		}
-		defer s3Resp.Body.Close()
-
-		body, _ := io.ReadAll(s3Resp.Body)
+		// Property 2: Inline response body is HTML.
 		html := string(body)
 		if !strings.Contains(html, "<html") && !strings.Contains(html, "<HTML") {
-			rt.Fatal("S3 page should return HTML content")
+			rt.Fatal("Short URL should return HTML content")
 		}
 	})
 }
@@ -796,21 +786,24 @@ func TestShortURLWeb_MultipleNotesIndependent_Properties(t *testing.T) {
 			seen[n.shortID] = true
 		}
 
-		// Property 2: Each short URL returns 302 redirect to S3
+		// Property 2: Each short URL returns inline HTML (200 OK)
 		for _, n := range publishedNotes {
 			resp, err := client.Get(ts.URL + "/pub/" + n.shortID)
 			if err != nil {
 				rt.Fatalf("Short URL %s request failed: %v", n.shortID, err)
 			}
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
-			if resp.StatusCode != http.StatusFound {
-				rt.Fatalf("Short URL %s should return 302 redirect to S3, got %d", n.shortID, resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				rt.Fatalf("Short URL %s should return 200 with inline HTML, got %d", n.shortID, resp.StatusCode)
 			}
-
-			s3Location := resp.Header.Get("Location")
-			if !strings.Contains(s3Location, n.id) {
-				rt.Fatalf("Short URL %s redirect should contain note ID %s, got: %s", n.shortID, n.id, s3Location)
+			html := string(body)
+			if !strings.Contains(html, "<html") && !strings.Contains(html, "<HTML") {
+				rt.Fatalf("Short URL %s should return HTML content", n.shortID)
+			}
+			if !strings.Contains(html, n.id) {
+				rt.Fatalf("Short URL %s HTML should contain note ID %s", n.shortID, n.id)
 			}
 		}
 
@@ -827,11 +820,11 @@ func TestShortURLWeb_MultipleNotesIndependent_Properties(t *testing.T) {
 				rt.Fatalf("Unpublished note's short URL should return 404, got %d", resp0.StatusCode)
 			}
 
-			// Second note's short URL should still work (302 redirect to S3)
+			// Second note's short URL should still work
 			resp1, _ := client.Get(ts.URL + "/pub/" + publishedNotes[1].shortID)
 			resp1.Body.Close()
-			if resp1.StatusCode != http.StatusFound {
-				rt.Fatalf("Other note's short URL should still return 302, got %d", resp1.StatusCode)
+			if resp1.StatusCode != http.StatusOK {
+				rt.Fatalf("Other note's short URL should still return 200, got %d", resp1.StatusCode)
 			}
 		}
 	})

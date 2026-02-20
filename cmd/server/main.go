@@ -684,6 +684,14 @@ func (h *AuthenticatedNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Re
 
 	note, err := svc.Update(id, params)
 	if err != nil {
+		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, notes.ErrRevisionConflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return

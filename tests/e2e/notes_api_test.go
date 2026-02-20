@@ -164,6 +164,7 @@ type noteResponse struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Content   string `json:"content"`
+	Revision  string `json:"revision_hash"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -231,13 +232,16 @@ func (s *notesTestServer) listNotes(limit, offset int) (*http.Response, []byte, 
 }
 
 // updateNote updates a note via HTTP PUT
-func (s *notesTestServer) updateNote(id string, title, content *string) (*http.Response, []byte, error) {
+func (s *notesTestServer) updateNote(id string, title, content, priorHash *string) (*http.Response, []byte, error) {
 	body := make(map[string]string)
 	if title != nil {
 		body["title"] = *title
 	}
 	if content != nil {
 		body["content"] = *content
+	}
+	if priorHash != nil {
+		body["prior_hash"] = *priorHash
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -441,7 +445,13 @@ func testNotesAPI_Update_Properties(t *rapid.T) {
 	newContent := testutil.NoteContentGenerator().Draw(t, "newContent")
 
 	// Property: PUT /notes/{id} updates the note
-	resp, data, err = srv.updateNote(created.ID, &newTitle, &newContent)
+	resp, data, _ = srv.getNote(created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 on pre-update read, got %d", resp.StatusCode)
+	}
+	var current noteResponse
+	json.Unmarshal(data, &current)
+	resp, data, err = srv.updateNote(created.ID, &newTitle, &newContent, &current.Revision)
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -493,7 +503,7 @@ func testNotesAPI_Update_NonExistent_Properties(t *rapid.T) {
 	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
 
 	// Property: PUT /notes/{id} for non-existent note returns 404
-	resp, data, err := srv.updateNote(nonExistentID, &newTitle, nil)
+	resp, data, err := srv.updateNote(nonExistentID, &newTitle, nil, nil)
 	if err != nil {
 		t.Fatalf("HTTP request failed: %v", err)
 	}
@@ -757,7 +767,13 @@ func testNotesAPI_CRUD_Workflow_Properties(t *rapid.T) {
 	}
 
 	// Update
-	resp, data, _ = srv.updateNote(created.ID, &newTitle, &newContent)
+	resp, data, _ = srv.getNote(created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Read before update failed: %d", resp.StatusCode)
+	}
+	var current noteResponse
+	json.Unmarshal(data, &current)
+	resp, data, _ = srv.updateNote(created.ID, &newTitle, &newContent, &current.Revision)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Update failed: %d", resp.StatusCode)
 	}
@@ -1049,7 +1065,13 @@ func testNotesAPI_Update_PartialUpdate_Properties(t *rapid.T) {
 
 	// Update only title
 	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
-	resp, data, _ = srv.updateNote(created.ID, &newTitle, nil)
+	resp, data, _ = srv.getNote(created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Read before partial update failed: %d", resp.StatusCode)
+	}
+	var current noteResponse
+	json.Unmarshal(data, &current)
+	resp, data, _ = srv.updateNote(created.ID, &newTitle, nil, &current.Revision)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Update failed: %d", resp.StatusCode)
 	}

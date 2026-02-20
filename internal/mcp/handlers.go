@@ -82,6 +82,9 @@ func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, erro
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to read note: %v", err)), nil
 	}
+	if note.RevisionHash == "" {
+		return newToolResultError("failed to read note revision_hash"), nil
+	}
 
 	// Parse optional line_range
 	start, end := 0, -1
@@ -98,13 +101,14 @@ func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, erro
 	formatted, totalLines := notes.FormatWithLineNumbers(note.Content, start, end)
 
 	result := notes.NoteViewResult{
-		ID:         note.ID,
-		Title:      note.Title,
-		Content:    formatted,
-		TotalLines: totalLines,
-		IsPublic:   note.Visibility.IsPublic(),
-		CreatedAt:  note.CreatedAt,
-		UpdatedAt:  note.UpdatedAt,
+		ID:           note.ID,
+		Title:        note.Title,
+		Content:      formatted,
+		TotalLines:   totalLines,
+		IsPublic:     note.Visibility.IsPublic(),
+		CreatedAt:    note.CreatedAt,
+		UpdatedAt:    note.UpdatedAt,
+		RevisionHash: note.RevisionHash,
 	}
 	if start > 0 || end > 0 {
 		result.LineRange = [2]int{start, end}
@@ -139,13 +143,17 @@ func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, er
 		}
 		return newToolResultError(fmt.Sprintf("failed to create note: %v", err)), nil
 	}
+	if note.RevisionHash == "" {
+		return newToolResultError("failed to read created note revision_hash"), nil
+	}
 
 	result := notes.NoteCreateResult{
-		ID:         note.ID,
-		Title:      note.Title,
-		TotalLines: notes.CountLines(note.Content),
-		IsPublic:   note.Visibility.IsPublic(),
-		CreatedAt:  note.CreatedAt,
+		ID:           note.ID,
+		Title:        note.Title,
+		TotalLines:   notes.CountLines(note.Content),
+		IsPublic:     note.Visibility.IsPublic(),
+		CreatedAt:    note.CreatedAt,
+		RevisionHash: note.RevisionHash,
 	}
 
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
@@ -171,21 +179,37 @@ func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, er
 	if content, ok := args["content"].(string); ok {
 		params.Content = &content
 	}
+	priorHashRaw, exists := args["prior_hash"]
+	if !exists {
+		return newToolResultError("prior_hash is required; call note_view first and pass revision_hash"), nil
+	}
+	priorHash, ok := priorHashRaw.(string)
+	if !ok {
+		return newToolResultError("prior_hash must be a string"), nil
+	}
+	params.PriorHash = &priorHash
 
 	note, err := h.notesSvc.Update(id, params)
 	if err != nil {
+		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
+			return newToolResultError(err.Error()), nil
+		}
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
 			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
 		}
 		return newToolResultError(fmt.Sprintf("failed to update note: %v", err)), nil
 	}
+	if note.RevisionHash == "" {
+		return newToolResultError("failed to read updated note revision_hash"), nil
+	}
 
 	result := notes.NoteUpdateResult{
-		ID:         note.ID,
-		Title:      note.Title,
-		TotalLines: notes.CountLines(note.Content),
-		IsPublic:   note.Visibility.IsPublic(),
-		UpdatedAt:  note.UpdatedAt,
+		ID:           note.ID,
+		Title:        note.Title,
+		TotalLines:   notes.CountLines(note.Content),
+		IsPublic:     note.Visibility.IsPublic(),
+		UpdatedAt:    note.UpdatedAt,
+		RevisionHash: note.RevisionHash,
 	}
 
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
@@ -295,17 +319,38 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 		return newToolResultError("new_string must be a string"), nil
 	}
 
-	replaceAll, _ := args["replace_all"].(bool)
+	replaceAll := false
+	if replaceAllRaw, exists := args["replace_all"]; exists {
+		parsed, ok := replaceAllRaw.(bool)
+		if !ok {
+			return newToolResultError("replace_all must be a boolean"), nil
+		}
+		replaceAll = parsed
+	}
 
-	note, meta, err := h.notesSvc.StrReplace(id, oldStr, newStr, replaceAll)
+	priorHashRaw, exists := args["prior_hash"]
+	if !exists {
+		return newToolResultError("prior_hash is required; call note_view first and pass revision_hash"), nil
+	}
+	parsed, ok := priorHashRaw.(string)
+	if !ok {
+		return newToolResultError("prior_hash must be a string"), nil
+	}
+	priorHash := &parsed
+
+	note, meta, err := h.notesSvc.StrReplace(id, oldStr, newStr, replaceAll, priorHash)
 	if err != nil {
-		if errors.Is(err, notes.ErrNoMatch) || errors.Is(err, notes.ErrAmbiguousMatch) {
+		if errors.Is(err, notes.ErrNoMatch) || errors.Is(err, notes.ErrAmbiguousMatch) ||
+			errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
 			return newToolResultError(err.Error()), nil
 		}
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
 			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
 		}
 		return newToolResultError(fmt.Sprintf("failed to edit note: %v", err)), nil
+	}
+	if note.RevisionHash == "" {
+		return newToolResultError("failed to read edited note revision_hash"), nil
 	}
 
 	// Return minimal response with a snippet around the edit site
@@ -321,6 +366,7 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 		ReplacementsMade: meta.ReplacementsMade,
 		IsPublic:         note.Visibility.IsPublic(),
 		UpdatedAt:        note.UpdatedAt,
+		RevisionHash:     note.RevisionHash,
 	}
 
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
@@ -330,4 +376,3 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 
 	return newToolResultText(string(resultJSON)), nil
 }
-

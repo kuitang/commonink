@@ -10,9 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	// Import SQLCipher driver with "sqlite3" driver name
-	_ "github.com/mutecomm/go-sqlcipher/v4"
-
 	"github.com/kuitang/agent-notes/internal/db/sessions"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
@@ -148,9 +145,9 @@ type FTSSnippetResult struct {
 // escaped version. FallbackApplied is true in that case, with the original
 // error and the corrected query available for the caller to surface.
 type FTSSnippetSearchResult struct {
-	Results        []FTSSnippetResult
+	Results         []FTSSnippetResult
 	FallbackApplied bool
-	OriginalError   string // FTS5 syntax error message (empty if no fallback)
+	OriginalError   string // coarse error code (empty if no fallback)
 	CorrectedQuery  string // The escaped query used in fallback (empty if no fallback)
 }
 
@@ -376,7 +373,8 @@ func isFTS5SyntaxError(err error) bool {
 	return strings.Contains(msg, "fts5: syntax error") ||
 		strings.Contains(msg, "fts5: parse error") ||
 		strings.Contains(msg, "unterminated string") ||
-		strings.Contains(msg, "no such column")
+		strings.Contains(msg, "no such column") ||
+		strings.Contains(msg, "unknown special query")
 }
 
 // SearchNotesWithSnippets performs FTS5 search returning snippets instead of full content.
@@ -390,7 +388,7 @@ func (u *UserDB) SearchNotesWithSnippets(ctx context.Context, query string, limi
 	if err != nil && isFTS5SyntaxError(err) {
 		escaped := EscapeFTS5Query(query)
 		if escaped == "" {
-			return &FTSSnippetSearchResult{FallbackApplied: true, OriginalError: err.Error(), CorrectedQuery: ""}, nil
+			return &FTSSnippetSearchResult{FallbackApplied: true, OriginalError: "fts_query_syntax_error", CorrectedQuery: ""}, nil
 		}
 		fallbackResults, fallbackErr := u.searchWithSnippetQuery(ctx, escaped, limit, offset)
 		if fallbackErr != nil {
@@ -399,7 +397,7 @@ func (u *UserDB) SearchNotesWithSnippets(ctx context.Context, query string, limi
 		return &FTSSnippetSearchResult{
 			Results:         fallbackResults,
 			FallbackApplied: true,
-			OriginalError:   err.Error(),
+			OriginalError:   "fts_query_syntax_error",
 			CorrectedQuery:  escaped,
 		}, nil
 	}
@@ -489,7 +487,7 @@ func OpenSessionsDB() (*SessionsDB, error) {
 		dsn := appendSQLiteParams(dbPath, sqliteCommonParams())
 
 		// Open unencrypted SQLite database
-		db, err := sql.Open("sqlite3", dsn)
+		db, err := sql.Open(SQLiteDriverName, dsn)
 		if err != nil {
 			sessionsDBErr = fmt.Errorf("failed to open sessions database: %w", err)
 			return
@@ -591,7 +589,7 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	dsn = appendSQLiteParams(dsn, sqliteCommonParams())
 
 	// Open encrypted SQLite database
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open(SQLiteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user database for %s: %w", userID, err)
 	}

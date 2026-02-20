@@ -29,9 +29,33 @@ type Service struct {
 	storageLimit int64
 }
 
+func validatePriorHash(precondition *string, currentHash string) (string, error) {
+	if precondition == nil {
+		return "", fmt.Errorf("%w: call note_view and pass revision_hash as prior_hash", ErrPriorHashRequired)
+	}
+	normalized, ok := normalizePriorHash(*precondition)
+	if !ok {
+		return "", fmt.Errorf("%w: expected 64-character hex string", ErrInvalidPriorHash)
+	}
+	if normalized != currentHash {
+		return "", fmt.Errorf("%w: prior_hash mismatch (current_revision_hash=%s)", ErrRevisionConflict, currentHash)
+	}
+	return normalized, nil
+}
+
 // NewService creates a new notes service. storageLimit of 0 means unlimited (paid users).
 func NewService(userDB *db.UserDB, storageLimit int64) *Service {
 	return &Service{userDB: userDB, storageLimit: storageLimit}
+}
+
+func (s *Service) revisionHashFromState(ctx context.Context, title, content string) (string, error) {
+	var hash string
+	if err := s.userDB.DB().QueryRowContext(ctx, `
+		SELECT lower(hex(sha3(CAST(? || char(0) || ? AS BLOB), 256)))
+	`, title, content).Scan(&hash); err != nil {
+		return "", fmt.Errorf("failed to compute revision hash: %w", err)
+	}
+	return hash, nil
 }
 
 // NewServiceForHardcodedUser creates a new notes service for the hardcoded test user
@@ -89,12 +113,13 @@ func (s *Service) Create(params CreateNoteParams) (*Note, error) {
 	}
 
 	return &Note{
-		ID:         noteID,
-		Title:      params.Title,
-		Content:    params.Content,
-		Visibility: VisibilityPrivate,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           noteID,
+		Title:        params.Title,
+		Content:      params.Content,
+		RevisionHash: RevisionHash(params.Title, params.Content),
+		Visibility:   VisibilityPrivate,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}, nil
 }
 
@@ -115,9 +140,10 @@ func (s *Service) Read(id string) (*Note, error) {
 	}
 
 	return &Note{
-		ID:      dbNote.ID,
-		Title:   dbNote.Title,
-		Content: dbNote.Content,
+		ID:           dbNote.ID,
+		Title:        dbNote.Title,
+		Content:      dbNote.Content,
+		RevisionHash: RevisionHash(dbNote.Title, dbNote.Content),
 		Visibility: func() NoteVisibility {
 			if dbNote.IsPublic.Valid {
 				return NoteVisibility(dbNote.IsPublic.Int64)
@@ -146,6 +172,15 @@ func (s *Service) Update(id string, params UpdateNoteParams) (*Note, error) {
 		return nil, fmt.Errorf("failed to read note: %w", err)
 	}
 
+	currentHash, err := s.revisionHashFromState(ctx, existing.Title, existing.Content)
+	if err != nil {
+		return nil, err
+	}
+	expectedHash, err := validatePriorHash(params.PriorHash, currentHash)
+	if err != nil {
+		return nil, err
+	}
+
 	// Apply updates
 	newTitle := existing.Title
 	newContent := existing.Content
@@ -171,29 +206,44 @@ func (s *Service) Update(id string, params UpdateNoteParams) (*Note, error) {
 
 	nowUnix := time.Now().UTC().Unix()
 
-	err = s.userDB.Queries().UpdateNote(ctx, userdb.UpdateNoteParams{
-		ID:        id,
-		Title:     newTitle,
-		Content:   newContent,
-		IsPublic:  existing.IsPublic,
-		UpdatedAt: nowUnix,
-	})
+	// Compare-and-swap update prevents lost updates: only updates when current
+	// title/content hash matches the caller's prior_hash.
+	res, err := s.userDB.DB().ExecContext(ctx, `
+		UPDATE notes
+		SET title = ?, content = ?, updated_at = ?
+		WHERE id = ?
+		  AND deleted_at IS NULL
+		  AND lower(hex(sha3(CAST(title || char(0) || content AS BLOB), 256))) = ?
+	`, newTitle, newContent, nowUnix, id, expectedHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update note: %w", err)
 	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine update result: %w", err)
+	}
+	if affected == 0 {
+		return nil, fmt.Errorf("%w: note changed during update; call note_view and retry", ErrRevisionConflict)
+	}
+
+	updatedDBNote, err := s.userDB.Queries().GetNote(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read updated note: %w", err)
+	}
 
 	return &Note{
-		ID:      id,
-		Title:   newTitle,
-		Content: newContent,
+		ID:           updatedDBNote.ID,
+		Title:        updatedDBNote.Title,
+		Content:      updatedDBNote.Content,
+		RevisionHash: RevisionHash(updatedDBNote.Title, updatedDBNote.Content),
 		Visibility: func() NoteVisibility {
-			if existing.IsPublic.Valid {
-				return NoteVisibility(existing.IsPublic.Int64)
+			if updatedDBNote.IsPublic.Valid {
+				return NoteVisibility(updatedDBNote.IsPublic.Int64)
 			}
 			return VisibilityPrivate
 		}(),
-		CreatedAt: time.Unix(existing.CreatedAt, 0).UTC(),
-		UpdatedAt: time.Unix(nowUnix, 0).UTC(),
+		CreatedAt: time.Unix(updatedDBNote.CreatedAt, 0).UTC(),
+		UpdatedAt: time.Unix(updatedDBNote.UpdatedAt, 0).UTC(),
 	}, nil
 }
 
@@ -236,8 +286,9 @@ func (s *Service) Purge(olderThan time.Duration) error {
 // When replaceAll is false, old_string must match exactly one location; returns
 // ErrNoMatch if not found, ErrAmbiguousMatch if found multiple times.
 // When replaceAll is true, replaces every occurrence (still returns ErrNoMatch if zero).
+// priorHash must match the current note revision hash before edit.
 // Returns the updated note, edit metadata (replacement count + first match byte offset), and error.
-func (s *Service) StrReplace(id string, oldStr, newStr string, replaceAll bool) (*Note, *EditMetadata, error) {
+func (s *Service) StrReplace(id string, oldStr, newStr string, replaceAll bool, priorHash *string) (*Note, *EditMetadata, error) {
 	if id == "" {
 		return nil, nil, fmt.Errorf("note ID is required")
 	}
@@ -245,7 +296,17 @@ func (s *Service) StrReplace(id string, oldStr, newStr string, replaceAll bool) 
 		return nil, nil, fmt.Errorf("old_string is required")
 	}
 
+	ctx := context.Background()
+
 	note, err := s.Read(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	currentHash, err := s.revisionHashFromState(ctx, note.Title, note.Content)
+	if err != nil {
+		return nil, nil, err
+	}
+	expectedHash, err := validatePriorHash(priorHash, currentHash)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -270,7 +331,38 @@ func (s *Service) StrReplace(id string, oldStr, newStr string, replaceAll bool) 
 		replacementsMade = 1
 	}
 
-	updated, err := s.Update(id, UpdateNoteParams{Content: &newContent})
+	oldSize := int64(len(note.Title) + len(note.Content))
+	newSize := int64(len(note.Title) + len(newContent))
+	if newSize > oldSize {
+		currentTotalSize, err := s.userDB.GetTotalNotesSize(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to check storage: %w", err)
+		}
+		if err := CheckStorageLimitForUpdate(currentTotalSize, oldSize, newSize, s.storageLimit); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	nowUnix := time.Now().UTC().Unix()
+	res, err := s.userDB.DB().ExecContext(ctx, `
+		UPDATE notes
+		SET content = ?, updated_at = ?
+		WHERE id = ?
+		  AND deleted_at IS NULL
+		  AND lower(hex(sha3(CAST(title || char(0) || content AS BLOB), 256))) = ?
+	`, newContent, nowUnix, id, expectedHash)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to update note: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to determine update result: %w", err)
+	}
+	if affected == 0 {
+		return nil, nil, fmt.Errorf("%w: note changed during edit; call note_view and retry", ErrRevisionConflict)
+	}
+
+	updated, err := s.Read(id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -314,9 +406,10 @@ func (s *Service) List(limit, offset int) (*NoteListResult, error) {
 	notes := make([]Note, 0, len(dbNotes))
 	for _, dbNote := range dbNotes {
 		notes = append(notes, Note{
-			ID:      dbNote.ID,
-			Title:   dbNote.Title,
-			Content: dbNote.Content,
+			ID:           dbNote.ID,
+			Title:        dbNote.Title,
+			Content:      dbNote.Content,
+			RevisionHash: RevisionHash(dbNote.Title, dbNote.Content),
 			Visibility: func() NoteVisibility {
 				if dbNote.IsPublic.Valid {
 					return NoteVisibility(dbNote.IsPublic.Int64)
@@ -354,12 +447,13 @@ func (s *Service) Search(query string) (*SearchResults, error) {
 	for _, dbResult := range dbResults {
 		results = append(results, SearchResult{
 			Note: Note{
-				ID:         dbResult.ID,
-				Title:      dbResult.Title,
-				Content:    dbResult.Content,
-				Visibility: NoteVisibility(dbResult.IsPublic),
-				CreatedAt:  time.Unix(dbResult.CreatedAt, 0).UTC(),
-				UpdatedAt:  time.Unix(dbResult.UpdatedAt, 0).UTC(),
+				ID:           dbResult.ID,
+				Title:        dbResult.Title,
+				Content:      dbResult.Content,
+				RevisionHash: RevisionHash(dbResult.Title, dbResult.Content),
+				Visibility:   NoteVisibility(dbResult.IsPublic),
+				CreatedAt:    time.Unix(dbResult.CreatedAt, 0).UTC(),
+				UpdatedAt:    time.Unix(dbResult.UpdatedAt, 0).UTC(),
 			},
 			Rank: dbResult.Rank,
 		})
