@@ -489,12 +489,16 @@ When a user asks to deploy to staging preview, run this exact flow:
 ./scripts/bootstrap-staging-preview.sh staging-2-commonink
 ./scripts/bootstrap-staging-preview.sh staging-3-commonink
 
-# 2) Deploy the slot for the PR number (slot = ((PR_NUMBER-1)%3)+1)
-PR_NUMBER=<pr-number> FLY_API_TOKEN="$(~/.fly/bin/flyctl auth token)" \
-  bash ./scripts/deploy-staging-preview.sh
+# 2) Deploy by pushing branch updates to an open PR
+#    (GitHub Actions CI job `deploy-preview` runs scripts/deploy-staging-preview.sh)
+git push
+gh run watch --workflow CI
 ```
 
-Final step after deploy: run a manual Playwright smoke check against the deployed URL and verify both:
+Do NOT run `scripts/deploy-staging-preview.sh` manually for normal staging deploy requests.
+Use PR + GitHub CI deploy-preview, then do the final manual Playwright check.
+
+Final step after deploy-preview succeeds: run a manual Playwright smoke check against the deployed URL and verify both:
 - Stripe checkout shows test-mode behavior/indicator.
 - Google OIDC flow reaches a Google sign-in page.
 
