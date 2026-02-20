@@ -102,10 +102,17 @@ make test
 make test-full
 ```
 - Everything in `make test` PLUS Claude conformance, OpenAI conformance, and browser tests
-- Coverage report generation
-- **Requires**: `OPENAI_API_KEY` in environment (for OpenAI conformance), `claude` CLI installed (for Claude conformance), Playwright/Chromium (auto-installed)
+- Delegates to `make test-coverage` for coverage/report generation
+- **Requires**: `OPENAI_API_KEY` in environment (for OpenAI conformance), `claude` CLI installed (for Claude conformance), Playwright/Chromium installed via `make test-browser-install`
 - **Output**: `test-results/coverage.html`, `test-results/full-test.log`
 - **When to run**: before opening/updating a PR, or after changing MCP tool definitions/descriptions
+
+### Coverage Run (same full suite, explicit target)
+```bash
+make test-coverage
+```
+- Runs the full suite with coverage instrumentation
+- Writes timestamped artifacts under `test-results/` and updates stable aliases (`coverage.out`, `coverage.html`, `full-test.log`)
 
 ### Fuzz Testing (30+ min) - Run Nightly or When Changing Security Code
 ```bash
@@ -416,7 +423,7 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 | Level | Command | When | Duration | What it runs | Requirements |
 |-------|---------|------|----------|--------------|--------------|
 | **quick** | `make test` | Before every commit | ~45s | Unit, property, e2e API/MCP (excludes conformance + browser) | None (deterministic secrets auto-injected) |
-| **full** | `make test-full` | Before PR, after MCP tool changes | ~5min | Everything: quick + OpenAI conformance + Claude conformance + browser | `OPENAI_API_KEY`, `claude` CLI, Chromium |
+| **full** | `make test-full` (`make test-coverage`) | Before PR, after MCP tool changes | ~5min | Everything: quick + OpenAI conformance + Claude conformance + browser + coverage artifacts | `OPENAI_API_KEY`, `claude` CLI, Chromium (run `make test-browser-install`) |
 | **fuzz** | `make test-fuzz` | Nightly, after security changes | 30+ min | Coverage-guided fuzzing of all `Fuzz*` functions | None |
 
 ## Coverage Targets
@@ -466,7 +473,8 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 | Run (all mocks) | `make run-test` (uses `--test` flag) |
 | Run (real email only) | `make run-email` (mock OIDC + S3) |
 | Run tests | `make test` |
-| Full tests + coverage | `make test-full` |
+| Install browser deps | `make test-browser-install` |
+| Full tests + coverage | `make test-full` (alias of `make test-coverage`) |
 | Fuzz | `make test-fuzz` |
 | Format | `make fmt` |
 | Lint | `make vet` |

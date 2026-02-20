@@ -38,9 +38,10 @@ CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
 GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
 RAPID_CHECKS ?= 10
+RAPID_CHECKS_FULL ?= 100
 GO_TEST_FULL_TIMEOUT ?= 30m
 
-.PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
+.PHONY: all build run run-test run-email test test-browser-install test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
@@ -71,9 +72,13 @@ test:
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
 		-run 'Test' -rapid.checks=$(RAPID_CHECKS) $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
 
+## test-browser-install: Install Playwright Chromium dependencies
+test-browser-install:
+	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+
 ## test-browser: Run browser tests (Playwright)
 test-browser:
-	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+	$(MAKE) test-browser-install
 	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip '$(BROWSER_TEST_SKIP_PATTERNS)',)
 
 ## test-all: Run test + browser test suite
@@ -81,11 +86,14 @@ test-all:
 	$(MAKE) test
 	$(MAKE) test-browser
 
-## test-full: Full tests with coverage (requires OPENAI_API_KEY, claude CLI, + Playwright)
+## test-full: Full test suite alias (delegates to test-coverage)
 test-full:
+	$(MAKE) test-coverage
+
+## test-coverage: Full tests with coverage artifacts (requires OPENAI_API_KEY, claude CLI, + Playwright)
+test-coverage:
 	@if [ -z "$$OPENAI_API_KEY" ]; then echo "ERROR: OPENAI_API_KEY required. Run: source secrets.sh"; exit 1; fi
 	@if ! command -v claude >/dev/null 2>&1; then echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; fi
-	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
 	@mkdir -p test-results
 	@set -euo pipefail; \
 	run_id="$$(date -u +%Y%m%dT%H%M%S)-$$-$$RANDOM"; \
@@ -94,7 +102,7 @@ test-full:
 	coverage_html="test-results/coverage-$${run_id}.html"; \
 	echo "Writing full test log to $$log_path"; \
 	go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
-		./... -rapid.checks=$(RAPID_CHECKS) \
+		./... -rapid.checks=$(RAPID_CHECKS_FULL) \
 		2>&1 | tee "$$log_path"; \
 	go tool cover -html="$$coverage_out" -o "$$coverage_html"; \
 	go tool cover -func="$$coverage_out"; \
@@ -113,13 +121,6 @@ test-fuzz:
 test-db:
 	@echo "Running database layer tests with FTS5 support..."
 	go test $(BUILD_TAGS) -v -count=1 ./internal/db/
-
-## test-coverage: Run tests with coverage report
-test-coverage:
-	@echo "Running tests with coverage..."
-	go test $(BUILD_TAGS) -v -count=1 -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
 
 ## fmt: Format Go code
 fmt:

@@ -84,7 +84,9 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GO_TEST_PACKAGE_PARALLEL: "1"
-        run: make test-full
+        run: |
+          make test-browser-install
+          make test-full
       - name: Stop ngrok
         if: always()
         run: |
