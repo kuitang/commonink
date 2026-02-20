@@ -66,17 +66,7 @@ jobs:
           echo "TEST_LISTEN_PORT=${TEST_LISTEN_PORT}" >> "$GITHUB_ENV"
           for _ in $(seq 1 40); do
             if curl -fsS http://127.0.0.1:4040/api/tunnels >/tmp/ngrok-tunnels.json 2>/dev/null; then
-              TEST_PUBLIC_URL="$(python3 - <<'PY'
-                import json
-                from pathlib import Path
-
-                data = json.loads(Path('/tmp/ngrok-tunnels.json').read_text())
-                for tunnel in data.get('tunnels', []):
-                    if tunnel.get('proto') == 'https':
-                        print(tunnel.get('public_url', ''))
-                        break
-          PY
-              )"
+              TEST_PUBLIC_URL="$(python3 -c "import json; from pathlib import Path; data=json.loads(Path('/tmp/ngrok-tunnels.json').read_text()); print(next((t.get('public_url','') for t in data.get('tunnels',[]) if t.get('proto')=='https'), ''))")"
               if [ -n "$TEST_PUBLIC_URL" ]; then
                 echo "TEST_PUBLIC_URL=${TEST_PUBLIC_URL}" >> "$GITHUB_ENV"
                 echo "ngrok tunnel URL: $TEST_PUBLIC_URL"
