@@ -34,6 +34,7 @@ export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccc
 # Optional regex for go test -skip (CI-friendly filtering)
 TEST_SKIP_PATTERNS ?=
 BROWSER_TEST_SKIP_PATTERNS ?=
+CI_BROWSER_SKIP_PATTERNS ?= TestBrowser_NotesCRUD_Pagination|TestScreenshot_AllThemes
 CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
 GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
@@ -42,7 +43,7 @@ RAPID_CHECKS_FULL ?= 100
 RAPID_CHECKS_CONFORMANCE ?= 3
 GO_TEST_FULL_TIMEOUT ?= 30m
 
-.PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db fmt vet gosec mod-tidy clean deploy help
+.PHONY: all build run run-test run-email test test-browser test-all ci test-full test-fuzz test-db fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
@@ -81,6 +82,11 @@ test-browser:
 test-all:
 	$(MAKE) test
 	$(MAKE) test-browser
+
+## ci: CI suite (skips conformance + pagination/screenshot browser tests)
+ci:
+	$(MAKE) test
+	$(MAKE) test-browser BROWSER_TEST_SKIP_PATTERNS='$(CI_BROWSER_SKIP_PATTERNS)'
 
 ## test-full: Full tests with coverage artifacts (strict prerequisites, no fallbacks)
 test-full:
