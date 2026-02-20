@@ -37,6 +37,8 @@ BROWSER_TEST_SKIP_PATTERNS ?=
 CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
 GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
+RAPID_CHECKS ?= 10
+GO_TEST_FULL_TIMEOUT ?= 30m
 
 .PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
 
@@ -67,7 +69,7 @@ run-email: build
 test:
 	go test $(BUILD_TAGS) -v -timeout 120s -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
-		-run 'Test' -rapid.checks=10 $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
+		-run 'Test' -rapid.checks=$(RAPID_CHECKS) $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
 
 ## test-browser: Run browser tests (Playwright)
 test-browser:
@@ -91,7 +93,7 @@ test-full:
 	coverage_out="test-results/coverage-$${run_id}.out"; \
 	coverage_html="test-results/coverage-$${run_id}.html"; \
 	echo "Writing full test log to $$log_path"; \
-	go test $(BUILD_TAGS) -v -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
+	go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -rapid.checks=$(RAPID_CHECKS) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
 		./... \
 		2>&1 | tee "$$log_path"; \
 	go tool cover -html="$$coverage_out" -o "$$coverage_html"; \
