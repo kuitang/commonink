@@ -93,8 +93,8 @@ test-full:
 	coverage_out="test-results/coverage-$${run_id}.out"; \
 	coverage_html="test-results/coverage-$${run_id}.html"; \
 	echo "Writing full test log to $$log_path"; \
-	go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -rapid.checks=$(RAPID_CHECKS) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
-		./... \
+	go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
+		./... -rapid.checks=$(RAPID_CHECKS) \
 		2>&1 | tee "$$log_path"; \
 	go tool cover -html="$$coverage_out" -o "$$coverage_html"; \
 	go tool cover -func="$$coverage_out"; \
