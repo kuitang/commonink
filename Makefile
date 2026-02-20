@@ -41,7 +41,7 @@ RAPID_CHECKS ?= 10
 RAPID_CHECKS_FULL ?= 100
 GO_TEST_FULL_TIMEOUT ?= 30m
 
-.PHONY: all build run run-test run-email test test-browser-install test-browser test-all test-full test-fuzz test-db test-coverage fmt vet gosec mod-tidy clean deploy help
+.PHONY: all build run run-test run-email test test-browser test-all test-full test-fuzz test-db fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
@@ -72,13 +72,8 @@ test:
 		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
 		-run 'Test' -rapid.checks=$(RAPID_CHECKS) $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
 
-## test-browser-install: Install Playwright Chromium dependencies
-test-browser-install:
-	go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
-
 ## test-browser: Run browser tests (Playwright)
 test-browser:
-	$(MAKE) test-browser-install
 	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip '$(BROWSER_TEST_SKIP_PATTERNS)',)
 
 ## test-all: Run test + browser test suite
@@ -86,16 +81,43 @@ test-all:
 	$(MAKE) test
 	$(MAKE) test-browser
 
-## test-full: Full test suite alias (delegates to test-coverage)
+## test-full: Full tests with coverage artifacts (strict prerequisites, no fallbacks)
 test-full:
-	$(MAKE) test-coverage
-
-## test-coverage: Full tests with coverage artifacts (requires OPENAI_API_KEY, claude CLI, + Playwright)
-test-coverage:
-	@if [ -z "$$OPENAI_API_KEY" ]; then echo "ERROR: OPENAI_API_KEY required. Run: source secrets.sh"; exit 1; fi
-	@if ! command -v claude >/dev/null 2>&1; then echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; fi
+	@: "$${OPENAI_API_KEY:?ERROR: OPENAI_API_KEY required. Run: source secrets.sh}"
+	@: "$${NGROK_AUTHTOKEN:?ERROR: NGROK_AUTHTOKEN required}"
+	@command -v claude >/dev/null 2>&1 || { echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; }
+	@command -v ngrok >/dev/null 2>&1 || { echo "ERROR: ngrok CLI not found"; exit 1; }
 	@mkdir -p test-results
 	@set -euo pipefail; \
+	test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	ngrok_log="$$(mktemp -t ngrok-log-XXXXXX)"; \
+	tunnels_json="$$(mktemp -t ngrok-tunnels-XXXXXX)"; \
+	ngrok config add-authtoken "$$NGROK_AUTHTOKEN"; \
+	ngrok http "$$test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
+	ngrok_pid="$$!"; \
+	cleanup() { \
+		kill "$$ngrok_pid" >/dev/null 2>&1 || true; \
+		tail -n 200 "$$ngrok_log" || true; \
+		rm -f "$$ngrok_log" "$$tunnels_json"; \
+	}; \
+	trap cleanup EXIT; \
+	public_url=""; \
+	for _ in $$(seq 1 40); do \
+		if curl -fsS http://127.0.0.1:4040/api/tunnels >"$$tunnels_json" 2>/dev/null; then \
+			public_url="$$(python3 -c "import json,sys; data=json.load(open(sys.argv[1])); print(next((t.get('public_url','') for t in data.get('tunnels',[]) if t.get('proto')=='https'), ''))" "$$tunnels_json")"; \
+			if [ -n "$$public_url" ]; then \
+				break; \
+			fi; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	if [ -z "$$public_url" ]; then \
+		echo "ERROR: failed to discover ngrok public URL"; \
+		exit 1; \
+	fi; \
+	echo "ngrok tunnel URL: $$public_url"; \
+	export TEST_PUBLIC_URL="$$public_url"; \
+	export TEST_LISTEN_PORT="$$test_port"; \
 	run_id="$$(date -u +%Y%m%dT%H%M%S)-$$-$$RANDOM"; \
 	log_path="test-results/full-test-$${run_id}.log"; \
 	coverage_out="test-results/coverage-$${run_id}.out"; \

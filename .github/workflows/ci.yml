@@ -22,6 +22,19 @@ jobs:
         with:
           go-version: "1.25.6"
           check-latest: true
+      - name: Install ngrok
+        run: |
+          if command -v ngrok >/dev/null 2>&1; then
+            ngrok version
+            exit 0
+          fi
+          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" \
+            | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update
+          sudo apt-get install -y ngrok
+          ngrok version
       - name: Install Claude Code CLI
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
@@ -38,62 +51,14 @@ jobs:
           mkdir -p "$HOME/.claude"
           printf '%s' "$CLAUDE_CODE_OAUTH_JSON" > "$HOME/.claude/.credentials.json"
           chmod 600 "$HOME/.claude/.credentials.json"
-      - name: Install ngrok
-        run: |
-          if command -v ngrok >/dev/null 2>&1; then
-            ngrok version
-            exit 0
-          fi
-          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc \
-            | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" \
-            | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt-get update
-          sudo apt-get install -y ngrok
-          ngrok version
-      - name: Start ngrok tunnel for MCP conformance
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          TEST_LISTEN_PORT: "48080"
-        run: |
-          if [ -z "$NGROK_AUTHTOKEN" ]; then
-            echo "ERROR: NGROK_AUTHTOKEN secret is required for OpenAI MCP conformance tests"
-            exit 1
-          fi
-          ngrok config add-authtoken "$NGROK_AUTHTOKEN"
-          ngrok http "${TEST_LISTEN_PORT}" --log stdout --log-format=json >/tmp/ngrok.log 2>&1 &
-          echo "NGROK_PID=$!" >> "$GITHUB_ENV"
-          echo "TEST_LISTEN_PORT=${TEST_LISTEN_PORT}" >> "$GITHUB_ENV"
-          for _ in $(seq 1 40); do
-            if curl -fsS http://127.0.0.1:4040/api/tunnels >/tmp/ngrok-tunnels.json 2>/dev/null; then
-              TEST_PUBLIC_URL="$(python3 -c "import json; from pathlib import Path; data=json.loads(Path('/tmp/ngrok-tunnels.json').read_text()); print(next((t.get('public_url','') for t in data.get('tunnels',[]) if t.get('proto')=='https'), ''))")"
-              if [ -n "$TEST_PUBLIC_URL" ]; then
-                echo "TEST_PUBLIC_URL=${TEST_PUBLIC_URL}" >> "$GITHUB_ENV"
-                echo "ngrok tunnel URL: $TEST_PUBLIC_URL"
-                break
-              fi
-            fi
-            sleep 0.5
-          done
-          if [ -z "${TEST_PUBLIC_URL:-}" ]; then
-            echo "ERROR: failed to discover ngrok public URL"
-            tail -n 200 /tmp/ngrok.log || true
-            exit 1
-          fi
+      - name: Install Playwright Chromium
+        run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
       - name: Run full test suite (includes MCP conformance + browser)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           GO_TEST_PACKAGE_PARALLEL: "1"
-        run: |
-          make test-browser-install
-          make test-full
-      - name: Stop ngrok
-        if: always()
-        run: |
-          if [ -n "${NGROK_PID:-}" ]; then
-            kill "${NGROK_PID}" || true
-          fi
-          tail -n 200 /tmp/ngrok.log || true
+        run: make test-full
 
   deploy-preview:
     name: deploy-preview
