@@ -476,6 +476,32 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 | Deploy | `make deploy` |
 | Show targets | `make help` |
 
+## Staging Deploy Checklist (Mandatory)
+
+When a user asks to deploy to staging preview, run this exact flow:
+
+```bash
+# 0) Ensure Fly auth is active (local)
+~/.fly/bin/flyctl auth whoami
+
+# 1) One-time/bootstrap (or after secret rotation) for all preview slots
+./scripts/bootstrap-staging-preview.sh staging-1-commonink
+./scripts/bootstrap-staging-preview.sh staging-2-commonink
+./scripts/bootstrap-staging-preview.sh staging-3-commonink
+
+# 2) Deploy the slot for the PR number (slot = ((PR_NUMBER-1)%3)+1)
+PR_NUMBER=<pr-number> FLY_API_TOKEN="$(~/.fly/bin/flyctl auth token)" \
+  bash ./scripts/deploy-staging-preview.sh
+```
+
+Final step after deploy: run a manual Playwright smoke check against the deployed URL and verify both:
+- Stripe checkout shows test-mode behavior/indicator.
+- Google OIDC flow reaches a Google sign-in page.
+
+Recommended Playwright smoke flow:
+1. Open `https://staging-<slot>-commonink.fly.dev/pricing`, exercise upgrade/checkout path, confirm Stripe test-mode indicator.
+2. Trigger `/auth/google` from the UI and confirm redirect to Google Accounts sign-in.
+
 ---
 
 **Remember**: Property-based tests > Example-based tests. If you're tempted to write a unit test, ask: "Can this be a property instead?"
