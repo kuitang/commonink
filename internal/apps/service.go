@@ -32,48 +32,6 @@ type Service struct {
 	client      *sprites.Client
 }
 
-func looksLikeFlyToken(token string) bool {
-	token = strings.TrimSpace(token)
-	return strings.HasPrefix(token, "FlyV1 ") ||
-		strings.HasPrefix(token, "fm2_") ||
-		strings.HasPrefix(token, "fo1_")
-}
-
-// ResolveSpriteToken returns a usable Sprites bearer token from either:
-// 1) a direct sprite token, or
-// 2) a Fly token (SPRITE_FLY_TOKEN / FLY_API_TOKEN / FlyV1 token) exchanged via Sprites API.
-func ResolveSpriteToken(ctx context.Context, spriteToken, flyToken, orgSlug, inviteCode string) (string, error) {
-	spriteToken = strings.TrimSpace(spriteToken)
-	flyToken = strings.TrimSpace(flyToken)
-	orgSlug = strings.TrimSpace(orgSlug)
-	inviteCode = strings.TrimSpace(inviteCode)
-
-	if orgSlug == "" {
-		orgSlug = "personal"
-	}
-
-	// Direct sprite token path.
-	if spriteToken != "" && !looksLikeFlyToken(spriteToken) {
-		return spriteToken, nil
-	}
-
-	// Fly token exchange path.
-	rawFly := flyToken
-	if rawFly == "" && looksLikeFlyToken(spriteToken) {
-		rawFly = spriteToken
-	}
-	rawFly = strings.TrimPrefix(strings.TrimSpace(rawFly), "FlyV1 ")
-	if rawFly == "" {
-		return "", nil
-	}
-
-	resolved, err := sprites.CreateToken(ctx, rawFly, orgSlug, inviteCode)
-	if err != nil {
-		return "", fmt.Errorf("failed to exchange fly token for sprite token: %w", err)
-	}
-	return strings.TrimSpace(resolved), nil
-}
-
 // NewService creates a new apps service for a user-scoped database.
 func NewService(userDB *db.UserDB, userID, spriteToken string) *Service {
 	svc := &Service{

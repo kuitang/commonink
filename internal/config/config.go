@@ -69,10 +69,7 @@ type Config struct {
 	StripePriceAnnual    string
 
 	// Fly Sprites
-	SpriteToken      string
-	SpriteFlyToken   string
-	SpriteOrgSlug    string
-	SpriteInviteCode string
+	SpriteToken string
 }
 
 // ValidationError represents a configuration validation error with multiple issues.
@@ -170,14 +167,8 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	cfg.StripePriceMonthly = trimEnv("STRIPE_PRICE_MONTHLY")
 	cfg.StripePriceAnnual = trimEnv("STRIPE_PRICE_ANNUAL")
 
-	// Fly Sprites
+	// Fly Sprites (resolve token externally via scripts/resolve-sprite-token.sh)
 	cfg.SpriteToken = trimEnv("SPRITE_TOKEN")
-	cfg.SpriteFlyToken = trimEnv("SPRITE_FLY_TOKEN")
-	if cfg.SpriteFlyToken == "" {
-		cfg.SpriteFlyToken = trimEnv("FLY_API_TOKEN")
-	}
-	cfg.SpriteOrgSlug = getEnvOrDefault("SPRITE_ORG_SLUG", "personal")
-	cfg.SpriteInviteCode = trimEnv("SPRITE_INVITE_CODE")
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -264,9 +255,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, "OAUTH_SIGNING_KEY must be 64 hex characters (ed25519 seed)")
 	}
 
-	// Sprites: require at least one token
-	if c.SpriteToken == "" && c.SpriteFlyToken == "" {
-		errs = append(errs, "SPRITE_TOKEN or SPRITE_FLY_TOKEN is required (set env var for Fly Sprites)")
+	// Sprites: require token
+	if c.SpriteToken == "" {
+		errs = append(errs, "SPRITE_TOKEN is required (set env var or use scripts/resolve-sprite-token.sh)")
 	}
 
 	// Validate rate limit config
@@ -339,14 +330,10 @@ func (c *Config) PrintStartupSummary() {
 	}
 
 	// Sprites
-	if c.SpriteToken == "" {
-		if c.SpriteFlyToken == "" {
-			fmt.Fprintln(os.Stderr, "  Sprites: Disabled (SPRITE_TOKEN/SPRITE_FLY_TOKEN unset)")
-		} else {
-			fmt.Fprintf(os.Stderr, "  Sprites: Enabled (Fly token exchange, org: %s)\n", c.SpriteOrgSlug)
-		}
+	if c.SpriteToken != "" {
+		fmt.Fprintln(os.Stderr, "  Sprites: Enabled")
 	} else {
-		fmt.Fprintln(os.Stderr, "  Sprites: Enabled (Fly Sprites token configured)")
+		fmt.Fprintln(os.Stderr, "  Sprites: Disabled (SPRITE_TOKEN unset)")
 	}
 
 	// Master key

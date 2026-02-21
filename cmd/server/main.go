@@ -90,19 +90,7 @@ func main() {
 	// Step 3: Print startup summary
 	cfg.PrintStartupSummary()
 
-	resolvedSpriteToken, spriteErr := apps.ResolveSpriteToken(
-		context.Background(),
-		cfg.SpriteToken,
-		cfg.SpriteFlyToken,
-		cfg.SpriteOrgSlug,
-		cfg.SpriteInviteCode,
-	)
-	if spriteErr != nil {
-		log.Printf("Sprites token resolution failed: %v", spriteErr)
-	}
-	if resolvedSpriteToken != "" && resolvedSpriteToken != cfg.SpriteToken {
-		log.Printf("Sprites token resolved from Fly credentials (org=%s)", cfg.SpriteOrgSlug)
-	}
+	resolvedSpriteToken := cfg.SpriteToken
 
 	// Wire DatabasePath to db package before any DB operations
 	db.DataDirectory = cfg.DatabasePath
