@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
@@ -103,7 +104,7 @@ type ToolCall struct {
 	ServerID string
 }
 
-const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash."
+const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash. For app requests with unspecified stack (for example 'make me a todo list app'), default to a minimal Flask app (app.py + requirements.txt), then register sprite-env service on port 8080."
 
 // filterEnv returns a copy of env with the named variable removed.
 func filterEnv(env []string, name string) []string {
@@ -145,6 +146,7 @@ func NewConversation(t *testing.T, mcpConfig string) *Conversation {
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--mcp-config", mcpConfig,
+		"--strict-mcp-config",
 		"--dangerously-skip-permissions",
 	)
 
@@ -292,6 +294,7 @@ func runOneShotClaude(t *testing.T, mcpConfig, prompt string) (string, []ToolCal
 		"--verbose",
 		"--output-format", "stream-json",
 		"--mcp-config", mcpConfig,
+		"--strict-mcp-config",
 		"--dangerously-skip-permissions")
 
 	// Allow running inside a Claude Code session by removing the nesting guard
@@ -845,4 +848,69 @@ func TestClaude_OAuth_Integration(t *testing.T) {
 
 		t.Log("OAuth metadata endpoints verified")
 	})
+}
+
+func hasClaudeToolCall(calls []ToolCall, name string) bool {
+	for _, call := range calls {
+		if call.Name == name || strings.HasSuffix(call.Name, "__"+name) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestClaude_AppTools_Targeted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping in short mode")
+	}
+	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
+		t.Skip("SPRITE_TOKEN not set")
+	}
+
+	srv := testutil.GetServer(t)
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "ClaudeAppTargeted")
+	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
+
+	base := fmt.Sprintf("cl-target-%d", time.Now().UnixNano()%1000000)
+	nameA := base + "-a"
+	nameB := base + "-b"
+	prompt := fmt.Sprintf(
+		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_bash with command 'echo tool-check'; 4) app_delete for the created app.",
+		nameA, nameB,
+	)
+
+	resp, toolCalls := runOneShotClaude(t, mcpConfig, prompt)
+	t.Logf("Response: %s", resp)
+	t.Logf("Tool calls: %d", len(toolCalls))
+
+	for _, expected := range []string{"app_create", "app_list", "app_bash", "app_delete"} {
+		if !hasClaudeToolCall(toolCalls, expected) {
+			t.Fatalf("Expected Claude to call %s, calls=%+v", expected, toolCalls)
+		}
+	}
+}
+
+func TestClaude_AppWorkflow_OneShot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping in short mode")
+	}
+	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
+		t.Skip("SPRITE_TOKEN not set")
+	}
+
+	srv := testutil.GetServer(t)
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "ClaudeAppWorkflow")
+	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
+
+	prompt := "make me a todo list app"
+
+	resp, toolCalls := runOneShotClaude(t, mcpConfig, prompt)
+	t.Logf("Response: %s", resp)
+	t.Logf("Tool calls: %d", len(toolCalls))
+
+	for _, expected := range []string{"app_create", "app_write", "app_bash"} {
+		if !hasClaudeToolCall(toolCalls, expected) {
+			t.Fatalf("Expected Claude to call %s, calls=%+v", expected, toolCalls)
+		}
+	}
 }

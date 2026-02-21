@@ -8,6 +8,7 @@ flowchart LR
 
     S --> AM[Auth Middleware\ninternal/auth/middleware.go]
     AM --> NS[Notes Service\ninternal/notes]
+    AM --> AS[Apps Service\ninternal/apps]
     AM --> OAS[OAuth Provider\ninternal/oauth]
     AM --> M[MCP Server\ninternal/mcp]
     S --> WH[Web Handlers\ninternal/web]
@@ -36,6 +37,7 @@ flowchart TB
     SDB --> OAUTH[oauth_clients/oauth_tokens/oauth_codes/oauth_consents]
     SDB --> MAGIC[magic_tokens]
     SDB --> SHORT[short_urls]
+    UDB[(data/{user_id}.db)] --> APPS[apps metadata]
 ```
 
 ## Request Path (Authenticated API/MCP)
@@ -66,6 +68,7 @@ sequenceDiagram
 - Session/API-key/OAuth bearer auth: `internal/auth`
 - OAuth authorization server and metadata: `internal/oauth`
 - MCP tool surface and transport: `internal/mcp`
+- App deployment runtime integration (Fly Sprites): `internal/apps`
 - Notes business logic (CRUD/search/storage): `internal/notes`
 - Persistence and SQLCipher connection management: `internal/db`
 - Web UX and static markdown pages: `internal/web`
@@ -78,4 +81,8 @@ sequenceDiagram
 - Per-user DB handles are cached in-process.
 - `sessions.db` is shared and currently unencrypted.
 - Rate limiting is per-user in memory (free/paid tiers configured, paid detection currently stubbed).
-- MCP is mounted in stateless POST mode at top-level router (`GET`/`DELETE` intentionally `405`).
+- MCP is mounted in stateless POST mode at top-level router:
+- `POST /mcp` (all tools)
+- `POST /mcp/notes` (notes toolset)
+- `POST /mcp/apps` (apps toolset)
+- `GET`/`DELETE` are intentionally `405` for all MCP routes.

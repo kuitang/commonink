@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -16,9 +17,9 @@ type Server struct {
 	httpHandler http.Handler
 }
 
-// NewServer creates a new MCP server for notes
-func NewServer(notesSvc *notes.Service) *Server {
-	handler := NewHandler(notesSvc)
+// NewServer creates a new MCP server for the selected toolset.
+func NewServer(notesSvc *notes.Service, appsSvc *apps.Service, toolset Toolset) *Server {
+	handler := NewHandler(notesSvc, appsSvc)
 
 	// Create MCP server with metadata
 	mcpServer := mcp.NewServer(
@@ -29,8 +30,8 @@ func NewServer(notesSvc *notes.Service) *Server {
 		nil, // Use default options
 	)
 
-	// Register all tools
-	tools := ToolDefinitions()
+	// Register requested toolset
+	tools := ToolDefinitions(toolset)
 	for _, tool := range tools {
 		toolCopy := tool // avoid closure issues
 		mcp.AddTool(mcpServer, toolCopy, handler.createToolHandler(toolCopy.Name))

@@ -67,6 +67,12 @@ type Config struct {
 	StripeWebhookSecret  string
 	StripePriceMonthly   string
 	StripePriceAnnual    string
+
+	// Fly Sprites
+	SpriteToken      string
+	SpriteFlyToken   string
+	SpriteOrgSlug    string
+	SpriteInviteCode string
 }
 
 // ValidationError represents a configuration validation error with multiple issues.
@@ -163,6 +169,15 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	cfg.StripeWebhookSecret = trimEnv("STRIPE_WEBHOOK_SECRET")
 	cfg.StripePriceMonthly = trimEnv("STRIPE_PRICE_MONTHLY")
 	cfg.StripePriceAnnual = trimEnv("STRIPE_PRICE_ANNUAL")
+
+	// Fly Sprites
+	cfg.SpriteToken = trimEnv("SPRITE_TOKEN")
+	cfg.SpriteFlyToken = trimEnv("SPRITE_FLY_TOKEN")
+	if cfg.SpriteFlyToken == "" {
+		cfg.SpriteFlyToken = trimEnv("FLY_API_TOKEN")
+	}
+	cfg.SpriteOrgSlug = getEnvOrDefault("SPRITE_ORG_SLUG", "personal")
+	cfg.SpriteInviteCode = trimEnv("SPRITE_INVITE_CODE")
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -316,6 +331,17 @@ func (c *Config) PrintStartupSummary() {
 		fmt.Fprintln(os.Stderr, "  Billing: Mock (--test)")
 	} else {
 		fmt.Fprintln(os.Stderr, "  Billing: Stripe (real)")
+	}
+
+	// Sprites
+	if c.SpriteToken == "" {
+		if c.SpriteFlyToken == "" {
+			fmt.Fprintln(os.Stderr, "  Sprites: Disabled (SPRITE_TOKEN/SPRITE_FLY_TOKEN unset)")
+		} else {
+			fmt.Fprintf(os.Stderr, "  Sprites: Enabled (Fly token exchange, org: %s)\n", c.SpriteOrgSlug)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "  Sprites: Enabled (Fly Sprites token configured)")
 	}
 
 	// Master key

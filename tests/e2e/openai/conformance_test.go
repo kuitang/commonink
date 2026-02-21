@@ -128,11 +128,11 @@ func (env *testEnv) runConversation(ctx context.Context, t *testing.T, prompt st
 
 	params := responses.ResponseNewParams{
 		Model: OpenAIModel,
-		Instructions: openai.String(`You are a helpful assistant that manages notes.
-You have access to an MCP server with note management tools.
-Use the tools when asked to create, read, update, delete, list, or search notes.
+		Instructions: openai.String(`You are a helpful assistant that manages notes and deployable apps.
+You have access to an MCP server with note_* and app_* tools.
 Always use the actual tool calls - don't just describe what you would do.
-For note_update and note_edit, you MUST call note_view first and pass revision_hash as prior_hash.`),
+For note_update and note_edit, you MUST call note_view first and pass revision_hash as prior_hash.
+For app requests with unspecified stack (for example "make me a todo list app"), default to a minimal Flask app (app.py + requirements.txt), then register a persistent sprite-env service on port 8080.`),
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openai.String(prompt),
 		},
@@ -610,7 +610,10 @@ func TestOpenAI_ToolDiscovery(t *testing.T) {
 	}
 
 	// Verify expected tools exist
-	expectedTools := []string{"note_create", "note_view", "note_update", "note_delete", "note_list", "note_search", "note_edit"}
+	expectedTools := []string{
+		"note_create", "note_view", "note_update", "note_delete", "note_list", "note_search", "note_edit",
+		"app_create", "app_write", "app_read", "app_bash", "app_list", "app_delete",
+	}
 	for _, expected := range expectedTools {
 		found := false
 		for _, tool := range result.Tools {
@@ -621,6 +624,77 @@ func TestOpenAI_ToolDiscovery(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("Expected tool not found: %s", expected)
+		}
+	}
+}
+
+func hasOpenAIToolCall(calls []ToolCall, name string) bool {
+	for _, call := range calls {
+		if call.Name == name || strings.HasSuffix(call.Name, "__"+name) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOpenAI_AppTools_Targeted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping OpenAI test in short mode")
+	}
+	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
+		t.Skip("SPRITE_TOKEN not set")
+	}
+
+	env := setupTestEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	base := fmt.Sprintf("oa-target-%d", time.Now().UnixNano()%1000000)
+	nameA := base + "-a"
+	nameB := base + "-b"
+	prompt := fmt.Sprintf(
+		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_bash with command 'echo tool-check'; 4) app_delete for the created app.",
+		nameA, nameB,
+	)
+
+	resp, toolCalls, _, err := env.runConversation(ctx, t, prompt, "")
+	if err != nil {
+		t.Fatalf("Targeted app tool test failed: %v", err)
+	}
+	t.Logf("Response: %s", resp)
+	t.Logf("Tool calls: %d", len(toolCalls))
+
+	for _, expected := range []string{"app_create", "app_list", "app_bash", "app_delete"} {
+		if !hasOpenAIToolCall(toolCalls, expected) {
+			t.Fatalf("Expected OpenAI to call %s, calls=%+v", expected, toolCalls)
+		}
+	}
+}
+
+func TestOpenAI_AppWorkflow_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping OpenAI test in short mode")
+	}
+	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
+		t.Skip("SPRITE_TOKEN not set")
+	}
+
+	env := setupTestEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+
+	prompt := "make me a todo list app"
+
+	resp, toolCalls, _, err := env.runConversation(ctx, t, prompt, "")
+	if err != nil {
+		t.Fatalf("App workflow failed: %v", err)
+	}
+	t.Logf("Response: %s", resp)
+	t.Logf("Tool calls: %d", len(toolCalls))
+
+	for _, expected := range []string{"app_create", "app_write", "app_bash"} {
+		if !hasOpenAIToolCall(toolCalls, expected) {
+			t.Fatalf("Expected OpenAI to call %s, calls=%+v", expected, toolCalls)
 		}
 	}
 }

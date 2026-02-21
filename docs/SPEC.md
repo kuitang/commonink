@@ -4,6 +4,7 @@
 common.ink is an MCP-first notes service with a web UI. It supports:
 
 - Personal notes CRUD and full-text search.
+- App deployment workflows on Fly Sprites via MCP (`app_*` tools).
 - AI access over MCP (`POST /mcp`) using OAuth Bearer tokens, API keys, or session cookies.
 - OAuth 2.1 provider endpoints for external MCP clients (ChatGPT, Claude, local clients).
 - Public note publishing with short-link support.
@@ -45,7 +46,11 @@ Code: `internal/web/handlers.go`, `internal/notes/public.go`, `internal/notes/re
 2. Client registers with `POST /oauth/register`.
 3. User authorizes at `GET /oauth/authorize` with PKCE (`S256`) and consent.
 4. Client exchanges code at `POST /oauth/token`.
-5. Client calls `POST /mcp` with Bearer token and uses note tools.
+5. Client calls one MCP endpoint with Bearer token:
+- `POST /mcp` for all tools
+- `POST /mcp/notes` for notes-only toolset
+- `POST /mcp/apps` for apps-only toolset
+6. For app workflows, client uses `app_create` (candidate names), `app_write`, and `app_bash`.
 
 Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/handlers.go`, `internal/mcp/server.go`, `internal/mcp/handlers.go`.
 
@@ -70,8 +75,11 @@ Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/han
 - Token: `POST /oauth/token`
 
 ### MCP
-- Supported: `POST /mcp`
-- Explicitly rejected in top-level server mode: `GET /mcp`, `DELETE /mcp` return `405`
+- Supported:
+- `POST /mcp` (all tools)
+- `POST /mcp/notes` (notes toolset)
+- `POST /mcp/apps` (apps toolset)
+- Explicitly rejected in top-level server mode: `GET`/`DELETE` for each MCP route return `405`
 
 ## Data Model Summary
 
@@ -81,7 +89,7 @@ Stores sessions, magic tokens, user key envelopes, OAuth clients/tokens/codes, c
 Schema source: `internal/db/schema.go`.
 
 ### Per-user DB (`{user_id}.db`, SQLCipher encrypted)
-Stores account row, notes table, FTS5 index/triggers, API keys.
+Stores account row, notes table, FTS5 index/triggers, API keys, and app metadata (`apps` table with sprite name/URL/status/timestamps).
 
 Schema source: `internal/db/schema.go`.
 

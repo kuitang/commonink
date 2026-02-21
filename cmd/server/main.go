@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
+	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/config"
@@ -88,6 +89,20 @@ func main() {
 
 	// Step 3: Print startup summary
 	cfg.PrintStartupSummary()
+
+	resolvedSpriteToken, spriteErr := apps.ResolveSpriteToken(
+		context.Background(),
+		cfg.SpriteToken,
+		cfg.SpriteFlyToken,
+		cfg.SpriteOrgSlug,
+		cfg.SpriteInviteCode,
+	)
+	if spriteErr != nil {
+		log.Printf("Sprites token resolution failed: %v", spriteErr)
+	}
+	if resolvedSpriteToken != "" && resolvedSpriteToken != cfg.SpriteToken {
+		log.Printf("Sprites token resolved from Fly credentials (org=%s)", cfg.SpriteOrgSlug)
+	}
 
 	// Wire DatabasePath to db package before any DB operations
 	db.DataDirectory = cfg.DatabasePath
@@ -313,20 +328,28 @@ func main() {
 	mux.Handle("DELETE /api/keys/{id}", authMiddleware.RequireAuth(http.HandlerFunc(apiKeyHandler.RevokeAPIKey)))
 	log.Println("API Key routes registered at /api/keys")
 
-	// Create and mount MCP server (requires auth + rate limiting)
-	mcpHandler := &AuthenticatedMCPHandler{}
-	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
-	// GET /mcp: MCP spec allows GET for SSE streaming; return 405 in stateless mode
-	// DELETE /mcp: session termination; return 405 in stateless mode
-	mux.Handle("GET /mcp", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "GET not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
-	})))
-	mux.Handle("DELETE /mcp", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "DELETE not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
-	})))
-	log.Println("MCP server mounted at POST /mcp (protected with rate limiting)")
+	// Create and mount MCP servers (requires auth + rate limiting)
+	mcpAllHandler := &AuthenticatedMCPHandler{
+		Toolset:     mcp.ToolsetAll,
+		SpriteToken: resolvedSpriteToken,
+	}
+	mcpNotesHandler := &AuthenticatedMCPHandler{
+		Toolset:     mcp.ToolsetNotes,
+		SpriteToken: resolvedSpriteToken,
+	}
+	mcpAppsHandler := &AuthenticatedMCPHandler{
+		Toolset:     mcp.ToolsetApps,
+		SpriteToken: resolvedSpriteToken,
+	}
+
+	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP))))
+	mux.Handle("POST /mcp/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP))))
+	mux.Handle("POST /mcp/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP))))
+
+	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp")
+	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp/notes")
+	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp/apps")
+	log.Println("MCP server mounted at POST /mcp, /mcp/notes, /mcp/apps (protected with rate limiting)")
 
 	// Wrap mux with request logging middleware
 	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -413,7 +436,9 @@ func main() {
 	log.Println("    POST /billing/portal             - Stripe customer portal (protected)")
 	log.Println("    GET  /settings/billing           - Billing settings (protected)")
 	log.Println("  MCP (rate limited):")
-	log.Println("    POST /mcp                        - MCP endpoint (protected)")
+	log.Println("    POST /mcp                        - MCP endpoint (all tools, protected)")
+	log.Println("    POST /mcp/notes                  - MCP endpoint (notes toolset, protected)")
+	log.Println("    POST /mcp/apps                   - MCP endpoint (apps toolset, protected)")
 	log.Println("  Health:")
 	log.Println("    GET  /health                     - Health check")
 	log.Println("")
@@ -785,7 +810,10 @@ func (h *AuthenticatedNotesHandler) GetStorageUsage(w http.ResponseWriter, r *ht
 }
 
 // AuthenticatedMCPHandler wraps MCP with auth context
-type AuthenticatedMCPHandler struct{}
+type AuthenticatedMCPHandler struct {
+	Toolset     mcp.Toolset
+	SpriteToken string
+}
 
 func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
@@ -793,16 +821,38 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	storageLimit := notes.FreeStorageLimitBytes
+
 	userID := auth.GetUserID(r.Context())
-	account, err := userDB.Queries().GetAccount(r.Context(), userID)
-	if err == nil && account.SubscriptionStatus.Valid {
-		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+
+	var notesSvc *notes.Service
+	if h.Toolset != mcp.ToolsetApps {
+		storageLimit := notes.FreeStorageLimitBytes
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err == nil && account.SubscriptionStatus.Valid {
+			storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+		}
+		notesSvc = notes.NewService(userDB, storageLimit)
+		_ = notesSvc.Purge(30 * 24 * time.Hour)
 	}
-	notesSvc := notes.NewService(userDB, storageLimit)
-	_ = notesSvc.Purge(30 * 24 * time.Hour)
-	mcpServer := mcp.NewServer(notesSvc)
+
+	var appsSvc *apps.Service
+	if h.Toolset != mcp.ToolsetNotes {
+		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
+	}
+
+	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
 	mcpServer.ServeHTTP(w, r)
+}
+
+func registerStatelessMCPMethodGuards(mux *http.ServeMux, authMiddleware *auth.Middleware, route string) {
+	mux.Handle("GET "+route, authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "GET not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
+	})))
+	mux.Handle("DELETE "+route, authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "DELETE not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
+	})))
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
