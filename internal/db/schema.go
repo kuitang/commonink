@@ -191,4 +191,9 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);
 const UserDBMigrations = `
 ALTER TABLE notes ADD COLUMN deleted_at INTEGER;
 CREATE INDEX IF NOT EXISTS idx_notes_deleted_at ON notes(deleted_at);
+ALTER TABLE account ADD COLUMN subscription_status TEXT DEFAULT 'free';
+ALTER TABLE account ADD COLUMN subscription_id TEXT;
+ALTER TABLE account ADD COLUMN stripe_customer_id TEXT;
+ALTER TABLE account ADD COLUMN db_size_bytes INTEGER DEFAULT 0;
+ALTER TABLE account ADD COLUMN last_login INTEGER;
 `

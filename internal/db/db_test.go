@@ -1685,10 +1685,12 @@ func testMigrateUserDB_Idempotent_Properties(t *rapid.T) {
 
 	// Property: all migration-added columns remain queryable.
 	ctx := context.Background()
-	var n int64
-	if err := userDB.DB().QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL").Scan(&n); err != nil {
-		t.Fatalf("Migration column not accessible after %d runs: %v", runs, err)
+	for _, col := range knownMigrationColumns {
+		var n int64
+		if err := userDB.DB().QueryRowContext(ctx, col.checkQuery).Scan(&n); err != nil {
+			t.Fatalf("Migration column not accessible after %d runs: query=%q err=%v",
+				runs, col.checkQuery, err)
+		}
 	}
 }
 
@@ -1716,18 +1718,45 @@ func FuzzMigrateUserDB_Idempotent_Properties(f *testing.F) {
 // migrationColumn describes a column added by UserDBMigrations and how to
 // verify it's queryable.
 type migrationColumn struct {
-	colDef      string // SQL fragment for CREATE TABLE (e.g., "deleted_at INTEGER")
-	checkQuery  string // query that errors if the column is missing
-	indexName   string // optional: index name that must exist (empty = no check)
+	table      string // table the column belongs to (e.g., "notes", "account")
+	colDef     string // SQL fragment for CREATE TABLE (e.g., "deleted_at INTEGER")
+	checkQuery string // query that errors if the column is missing
+	indexName  string // optional: index name that must exist (empty = no check)
 }
 
 // knownMigrationColumns enumerates every column+index added by UserDBMigrations.
 // Add entries here whenever a new migration is written.
 var knownMigrationColumns = []migrationColumn{
 	{
+		table:      "notes",
 		colDef:     "deleted_at INTEGER",
 		checkQuery: "SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL",
 		indexName:  "idx_notes_deleted_at",
+	},
+	{
+		table:      "account",
+		colDef:     "subscription_status TEXT DEFAULT 'free'",
+		checkQuery: "SELECT COUNT(*) FROM account WHERE subscription_status IS NULL",
+	},
+	{
+		table:      "account",
+		colDef:     "subscription_id TEXT",
+		checkQuery: "SELECT COUNT(*) FROM account WHERE subscription_id IS NULL",
+	},
+	{
+		table:      "account",
+		colDef:     "stripe_customer_id TEXT",
+		checkQuery: "SELECT COUNT(*) FROM account WHERE stripe_customer_id IS NULL",
+	},
+	{
+		table:      "account",
+		colDef:     "db_size_bytes INTEGER DEFAULT 0",
+		checkQuery: "SELECT COUNT(*) FROM account WHERE db_size_bytes IS NULL",
+	},
+	{
+		table:      "account",
+		colDef:     "last_login INTEGER",
+		checkQuery: "SELECT COUNT(*) FROM account WHERE last_login IS NULL",
 	},
 }
 
@@ -1743,24 +1772,40 @@ func testMigrateUserDB_PreExistingDB_Properties(t *rapid.T) {
 		presentInOld[i] = rapid.Bool().Draw(t, fmt.Sprintf("col_%d_present", i))
 	}
 
-	// Build a minimal notes table with the randomly selected optional columns.
-	optionalCols := ""
+	// Group optional columns by table.
+	tableOptCols := map[string][]string{}
 	for i, col := range knownMigrationColumns {
 		if presentInOld[i] {
-			optionalCols += ",\n    " + col.colDef
+			tableOptCols[col.table] = append(tableOptCols[col.table], col.colDef)
 		}
 	}
-	oldSchemaSQL := fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS notes (
-    id TEXT PRIMARY KEY,
+
+	// Build seed SQL for a table given its base columns and optional migration columns.
+	buildTableSQL := func(table, baseCols string) string {
+		s := "CREATE TABLE IF NOT EXISTS " + table + " (\n" + baseCols
+		for _, opt := range tableOptCols[table] {
+			s += ",\n    " + opt
+		}
+		s += "\n);"
+		return s
+	}
+
+	// Minimal notes table — base columns from the original schema.
+	notesSQL := buildTableSQL("notes", `    id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
     is_public INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL%s
-);`, optionalCols)
+    updated_at INTEGER NOT NULL`)
 
-	// Seed an encrypted file DB with this randomly-constructed old schema.
+	// Minimal account table — base columns present at first launch.
+	accountSQL := buildTableSQL("account", `    user_id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
+    google_sub TEXT,
+    created_at INTEGER NOT NULL`)
+
+	// Seed an encrypted file DB with both old-schema tables.
 	dbPath := filepath.Join(DataDirectory, userID+".db")
 	dekHex := hex.EncodeToString(hardcodedDEK)
 	dsn := fmt.Sprintf("%s?_pragma_key=x'%s'&_pragma_cipher_page_size=4096&_fts5_tokenizer=porter", dbPath, dekHex)
@@ -1770,9 +1815,13 @@ CREATE TABLE IF NOT EXISTS notes (
 	if err != nil {
 		t.Fatalf("Failed to open seed DB: %v", err)
 	}
-	if _, err := seedDB.Exec(oldSchemaSQL); err != nil {
+	if _, err := seedDB.Exec(notesSQL); err != nil {
 		seedDB.Close()
-		t.Fatalf("Failed to seed old schema (presentInOld=%v): %v", presentInOld, err)
+		t.Fatalf("Failed to seed old notes schema (presentInOld=%v): %v", presentInOld, err)
+	}
+	if _, err := seedDB.Exec(accountSQL); err != nil {
+		seedDB.Close()
+		t.Fatalf("Failed to seed old account schema (presentInOld=%v): %v", presentInOld, err)
 	}
 	seedDB.Close()
 
