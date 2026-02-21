@@ -146,34 +146,39 @@ func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) 
 	email := r.FormValue("email")
 	password := r.FormValue("password")
 
+	// /settings/api-keys requires re-authentication; /api-keys does not.
+	settingsPath := r.URL.Path == "/settings/api-keys"
+	errRedirect := "/settings/api-keys?error="
+	if !settingsPath {
+		errRedirect = "/api-keys/new?error="
+	}
+
 	// Validate required fields
 	if name == "" {
-		http.Redirect(w, r, "/api-keys/new?error=API+key+name+is+required", http.StatusFound)
+		http.Redirect(w, r, errRedirect+"API+key+name+is+required", http.StatusFound)
 		return
 	}
 
-	if email == "" || password == "" {
-		http.Redirect(w, r, "/api-keys/new?error=Email+and+password+required+for+authentication", http.StatusFound)
-		return
-	}
-
-	// Verify credentials
-	account, err := userDB.Queries().GetAccount(r.Context(), userID)
-	if err != nil {
-		http.Redirect(w, r, "/api-keys/new?error=Failed+to+verify+credentials", http.StatusFound)
-		return
-	}
-
-	if account.Email != email {
-		http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
-		return
-	}
-
-	// Verify password if hash exists
-	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
-		if !h.authService.VerifyPasswordHash(password, account.PasswordHash.String) {
-			http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
+	// Validate credentials only on the settings route (re-authentication required)
+	if settingsPath {
+		if email == "" || password == "" {
+			http.Redirect(w, r, errRedirect+"Email+and+password+are+required", http.StatusFound)
 			return
+		}
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err != nil {
+			http.Redirect(w, r, errRedirect+"Invalid+credentials", http.StatusFound)
+			return
+		}
+		if account.Email != email {
+			http.Redirect(w, r, errRedirect+"Invalid+credentials", http.StatusFound)
+			return
+		}
+		if account.PasswordHash.Valid && account.PasswordHash.String != "" {
+			if !h.authService.VerifyPasswordHash(password, account.PasswordHash.String) {
+				http.Redirect(w, r, errRedirect+"Invalid+credentials", http.StatusFound)
+				return
+			}
 		}
 	}
 
@@ -193,7 +198,7 @@ func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) 
 	// Create the API Key
 	token, _, err := createAPIKeyForUser(r.Context(), userDB, userID, name, scope, expiresIn)
 	if err != nil {
-		http.Redirect(w, r, "/api-keys/new?error=Failed+to+create+API+key", http.StatusFound)
+		http.Redirect(w, r, errRedirect+"Failed+to+create+API+key", http.StatusFound)
 		return
 	}
 

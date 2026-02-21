@@ -248,11 +248,8 @@ func testAPIKeyWeb_PageRendering_Properties(rt *rapid.T, ts *webFormServer) {
 	if !strings.Contains(newBody, "name") {
 		rt.Fatal("New key page should contain name input")
 	}
-	if !strings.Contains(newBody, "email") {
-		rt.Fatal("New key page should contain email input")
-	}
-	if !strings.Contains(newBody, "password") {
-		rt.Fatal("New key page should contain password input")
+	if !strings.Contains(newBody, "expires_in") {
+		rt.Fatal("New key page should contain expiration selector")
 	}
 
 	// Property 3: GET /settings/api-keys renders the settings variant
@@ -369,93 +366,37 @@ func TestAPIKeyWeb_UnauthAccess_Properties(t *testing.T) {
 func testAPIKeyWeb_PasswordVerification_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
 	password := "TestPassword123!"
-	wrongPassword := rapid.StringMatching(`[a-zA-Z0-9!@#]{8,20}`).Filter(func(s string) bool {
-		return s != password
-	}).Draw(rt, "wrongPassword")
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
 	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
-	// Property 1: Missing password redirects with error
-	noPasswordForm := url.Values{
+	// Property 1: Creation succeeds with only name (no credentials required)
+	form := url.Values{
 		"name":       {keyName},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {""},
 	}
-	status, location, _ := helper.postForm(client, "/api-keys", noPasswordForm)
-	if status != http.StatusFound {
-		rt.Fatalf("Missing password should redirect (302), got %d", status)
+	status, _, body := helper.postForm(client, "/api-keys", form)
+	if status != http.StatusOK {
+		rt.Fatalf("API key creation should succeed (200) without credentials, got %d", status)
 	}
-	if !strings.Contains(location, "error") {
-		rt.Fatalf("Missing password redirect should include error, got: %s", location)
+	if !strings.Contains(body, "API Key Created") {
+		rt.Fatal("Successful creation should render API Key Created page")
 	}
 
-	// Property 2: Missing email redirects with error
-	noEmailForm := url.Values{
-		"name":       {keyName},
+	// Property 2: Creation without a name still rejects (name is still required)
+	noNameForm := url.Values{
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {""},
-		"password":   {password},
 	}
-	status2, location2, _ := helper.postForm(client, "/api-keys", noEmailForm)
+	status2, location2, _ := helper.postForm(client, "/api-keys", noNameForm)
 	if status2 != http.StatusFound {
-		rt.Fatalf("Missing email should redirect (302), got %d", status2)
+		rt.Fatalf("Missing name should redirect (302), got %d", status2)
 	}
 	if !strings.Contains(location2, "error") {
-		rt.Fatalf("Missing email redirect should include error, got: %s", location2)
-	}
-
-	// Property 3: Wrong password redirects with error
-	wrongPasswordForm := url.Values{
-		"name":       {keyName},
-		"scope":      {"read_write"},
-		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {wrongPassword},
-	}
-	status3, location3, _ := helper.postForm(client, "/api-keys", wrongPasswordForm)
-	if status3 != http.StatusFound {
-		rt.Fatalf("Wrong password should redirect (302), got %d", status3)
-	}
-	if !strings.Contains(location3, "error") {
-		rt.Fatalf("Wrong password redirect should include error, got: %s", location3)
-	}
-
-	// Property 4: Wrong email redirects with error
-	wrongEmailForm := url.Values{
-		"name":       {keyName},
-		"scope":      {"read_write"},
-		"expires_in": {"31536000"},
-		"email":      {"wrong@example.com"},
-		"password":   {password},
-	}
-	status4, location4, _ := helper.postForm(client, "/api-keys", wrongEmailForm)
-	if status4 != http.StatusFound {
-		rt.Fatalf("Wrong email should redirect (302), got %d", status4)
-	}
-	if !strings.Contains(location4, "error") {
-		rt.Fatalf("Wrong email redirect should include error, got: %s", location4)
-	}
-
-	// Property 5: Correct credentials succeed
-	correctForm := url.Values{
-		"name":       {keyName},
-		"scope":      {"read_write"},
-		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
-	}
-	status5, _, body5 := helper.postForm(client, "/api-keys", correctForm)
-	if status5 != http.StatusOK {
-		rt.Fatalf("Correct credentials should succeed (200), got %d", status5)
-	}
-	if !strings.Contains(body5, "API Key Created") {
-		rt.Fatal("Correct credentials should render created page")
+		rt.Fatalf("Missing name redirect should include error, got: %s", location2)
 	}
 }
 

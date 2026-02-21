@@ -70,10 +70,10 @@
             {{if .IsOwner}}
             <!-- Actions (Owner Only) -->
             <div class="px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700">
-                <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
+                <div class="flex flex-wrap items-center gap-2 sm:gap-3">
                     <!-- Edit Button -->
                     <a href="/notes/{{.Note.ID}}/edit"
-                       class="inline-flex items-center justify-center px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                       class="themed-btn-primary px-4 py-2 text-sm whitespace-nowrap shrink-0">
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                         </svg>
@@ -85,7 +85,7 @@
                     <form method="POST" action="/notes/{{.Note.ID}}/publish">
                         <input type="hidden" name="visibility" value="0">
                         <button type="submit"
-                                class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                                class="themed-btn-secondary px-4 py-2 text-sm whitespace-nowrap">
                             Make Private
                         </button>
                     </form>
@@ -93,7 +93,7 @@
                     <form method="POST" action="/notes/{{.Note.ID}}/publish">
                         <input type="hidden" name="visibility" value="1">
                         <button type="submit"
-                                class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                                class="themed-btn-secondary px-4 py-2 text-sm whitespace-nowrap">
                             Make Public
                         </button>
                     </form>
@@ -102,13 +102,13 @@
                     <!-- Visibility Selector -->
                     <form method="POST" action="/notes/{{.Note.ID}}/publish" class="inline-flex items-center gap-2">
                         <select name="visibility"
-                                class="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 rounded-input text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                                class="h-9 px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 rounded-input text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                             <option value="0" {{if not .Note.Visibility.IsPublic}}selected{{end}}>Private</option>
                             <option value="1" {{if .Note.Visibility.IsAnonymous}}selected{{end}}>Public (Anonymous)</option>
                             <option value="2" {{if .Note.Visibility.IsAttributed}}selected{{end}}>Public (Show my name)</option>
                         </select>
                         <button type="submit"
-                                class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                                class="themed-btn-secondary px-4 py-2 text-sm whitespace-nowrap">
                             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
@@ -120,7 +120,7 @@
                     <form method="POST" action="/notes/{{.Note.ID}}/delete"
                           onsubmit="return confirm('Are you sure you want to delete this note? This action cannot be undone.');">
                         <button type="submit"
-                                class="inline-flex items-center justify-center px-4 py-2 border border-error-300 dark:border-error-600 text-error-700 dark:text-error-400 bg-white dark:bg-gray-700 hover:bg-error-50 dark:hover:bg-error-900/20 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-error-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                                class="themed-btn-danger px-4 py-2 text-sm whitespace-nowrap">
                             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                             </svg>
@@ -143,10 +143,10 @@
                                id="share-url"
                                value="{{.ShareURL}}"
                                readonly
-                               class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-primary-200 dark:border-primary-700 rounded-md text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500">
+                               class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-primary-200 dark:border-primary-700 rounded-input text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500">
                         <button type="button"
                                 id="copy-share-url"
-                                class="inline-flex items-center justify-center p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+                                class="inline-flex items-center justify-center p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
                                 title="Copy to clipboard">
                             <svg id="copy-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
@@ -173,17 +173,26 @@
                             }, 2000);
                         }
 
+                        function fallbackCopy(text, onSuccess) {
+                            var textarea = document.createElement('textarea');
+                            textarea.value = text;
+                            textarea.style.position = 'fixed';
+                            textarea.style.opacity = '0';
+                            document.body.appendChild(textarea);
+                            textarea.select();
+                            try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch(e) { /* silent */ }
+                            document.body.removeChild(textarea);
+                        }
+
                         btn.addEventListener('click', function() {
-                            navigator.clipboard.writeText(input.value).then(showCopied).catch(function() {
-                                var textarea = document.createElement('textarea');
-                                textarea.value = input.value;
-                                textarea.style.position = 'fixed';
-                                textarea.style.opacity = '0';
-                                document.body.appendChild(textarea);
-                                textarea.select();
-                                try { document.execCommand('copy'); showCopied(); } catch(e) { /* silent */ }
-                                document.body.removeChild(textarea);
-                            });
+                            var text = input.value;
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(text).then(showCopied).catch(function() {
+                                    fallbackCopy(text, showCopied);
+                                });
+                            } else {
+                                fallbackCopy(text, showCopied);
+                            }
                         });
                     })();
                     </script>

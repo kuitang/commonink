@@ -11,7 +11,7 @@
         <div class="themed-card border border-gray-200 dark:border-gray-700 p-8">
             {{template "pricing-free-features"}}
             <div class="mt-8">
-                <a href="/register" class="block w-full text-center px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-input text-gray-700 dark:text-gray-200 font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                <a href="/register" class="themed-btn-secondary w-full px-6 py-3">
                     Get Started Free
                 </a>
             </div>
@@ -29,7 +29,7 @@
                 <form action="/auth/google" method="POST">
                     <input type="hidden" name="return_to" value="/pricing">
                     <button type="submit"
-                            class="w-full flex items-center justify-center gap-2 rounded-input border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                            class="themed-btn-secondary w-full gap-2 px-4 py-3 text-sm">
                         {{template "google-logo-svg"}}
                         Sign in with Google
                     </button>
@@ -49,7 +49,7 @@
                 </div>
                 {{end}}
                 <button onclick="startCheckout('monthly')" class="themed-btn-primary w-full px-6 py-3">Monthly &mdash; $2/mo</button>
-                <button onclick="startCheckout('annual')" class="block w-full text-center px-6 py-3 border border-primary-500 rounded-input text-primary-600 dark:text-primary-400 font-semibold hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors">Annual &mdash; $20/yr</button>
+                <button onclick="startCheckout('annual')" class="themed-btn-secondary w-full px-6 py-3 border-primary-500 text-primary-600 dark:text-primary-400">Annual &mdash; $20/yr</button>
                 {{end}}
             </div>
         </div>

@@ -140,6 +140,18 @@
             [data-theme="neonfizz"] .themed-btn-primary { box-shadow: var(--ci-glow); }
             [data-theme="neonfizz"] .themed-btn-primary:hover { box-shadow: var(--ci-glow-hover); }
 
+            /* Themed secondary button */
+            .themed-btn-secondary {
+                @apply inline-flex items-center justify-center font-semibold rounded-input border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-900;
+                transition: all 0.2s ease;
+            }
+
+            /* Themed danger button */
+            .themed-btn-danger {
+                @apply inline-flex items-center justify-center font-semibold rounded-input text-white bg-error-600 hover:bg-error-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-error-600 focus:ring-offset-2 dark:focus:ring-offset-gray-900;
+                transition: all 0.2s ease;
+            }
+
             /* Themed prose */
             .themed-prose pre { overflow-x: auto; }
             [data-theme="academic"] .themed-prose { @apply max-w-3xl mx-auto; }
@@ -267,7 +279,7 @@
                         Pricing
                     </a>
                     <!-- Login button -->
-                    <a href="/login" class="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-input text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-600 dark:focus:ring-offset-gray-800 transition-colors">
+                    <a href="/login" class="themed-btn-primary px-4 py-2 text-sm">
                         Sign in
                     </a>
                     {{end}}
@@ -606,8 +618,7 @@
 
 {{define "pricing-pro-features"}}
 <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Pro</h3>
-<p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$2</span><span class="text-gray-500 dark:text-gray-400">/mo</span></p>
-<p class="text-sm text-gray-500 dark:text-gray-400">or $20/year &mdash; save 17%</p>
+<p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$2</span><span class="text-gray-500 dark:text-gray-400">/mo &nbsp;&middot;&nbsp; $20/yr</span></p>
 <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
     <li class="flex items-center">{{template "pricing-check"}}Unlimited storage</li>
     <li class="flex items-center">{{template "pricing-check"}}1,000 requests/second</li>

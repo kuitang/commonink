@@ -52,14 +52,14 @@ func TestBilling_PricingPage_Properties(t *testing.T) {
 		t.Fatalf("Pricing nav link not visible for logged-out user: %v", err)
 	}
 
-	// Landing page: verify pricing section with "View Pricing" link
-	viewPricingLink := page.Locator("a[href='/pricing']:has-text('View Pricing')")
+	// Landing page: verify pricing section with link to /pricing
+	viewPricingLink := page.Locator("a[href='/pricing']")
 	err = viewPricingLink.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
-		t.Fatalf("Landing page 'View Pricing' link not found: %v", err)
+		t.Fatalf("Landing page /pricing link not found: %v", err)
 	}
 
 	// Navigate to /pricing

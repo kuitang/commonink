@@ -5,10 +5,10 @@
     <h1 class="mt-6 text-2xl font-bold text-gray-900 dark:text-white">Welcome to Pro!</h1>
     <p class="mt-4 text-gray-600 dark:text-gray-300">Your subscription is now active. Enjoy unlimited storage and higher rate limits.</p>
     {{if .User}}
-    <a href="/notes" class="themed-btn-primary mt-8 inline-block px-8 py-3">Go to Notes</a>
+    <a href="/notes" class="themed-btn-primary mt-8 px-8 py-3">Go to Notes</a>
     {{else}}
     <p class="mt-4 text-gray-600 dark:text-gray-300">Create your account to get started:</p>
-    <a href="/register{{if .CustomerEmail}}?email={{.CustomerEmail}}{{end}}" class="themed-btn-primary mt-4 inline-block px-8 py-3">Create Account</a>
+    <a href="/register{{if .CustomerEmail}}?email={{.CustomerEmail}}{{end}}" class="themed-btn-primary mt-4 px-8 py-3">Create Account</a>
     <!-- Divider -->
     <div class="relative my-4 max-w-xs mx-auto">
         <div class="absolute inset-0 flex items-center" aria-hidden="true">
@@ -21,7 +21,7 @@
     <form action="/auth/google" method="POST" class="inline-block">
         <input type="hidden" name="return_to" value="/notes">
         <button type="submit"
-                class="flex items-center justify-center gap-2 rounded-input border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-8 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                class="themed-btn-secondary gap-2 px-8 py-3 text-sm">
             {{template "google-logo-svg"}}
             Sign in with Google
         </button>
@@ -31,7 +31,7 @@
     {{template "icon-circle-error"}}
     <h1 class="mt-6 text-2xl font-bold text-gray-900 dark:text-white">Payment Incomplete</h1>
     <p class="mt-4 text-gray-600 dark:text-gray-300">Your payment was not completed. Please try again.</p>
-    <a href="/pricing" class="themed-btn-primary mt-8 inline-block px-8 py-3">Try Again</a>
+    <a href="/pricing" class="themed-btn-primary mt-8 px-8 py-3">Try Again</a>
     {{end}}
 </section>
 {{end}}

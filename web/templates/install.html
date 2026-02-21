@@ -421,43 +421,49 @@ Authentication successful. Connected to commonink.
         btn.setAttribute('aria-label', 'Copy to clipboard');
         btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg><span>Copy</span>';
 
+        function showCopiedState(b) {
+            b.classList.add('copied');
+            b.querySelector('span').textContent = 'Copied';
+            b.querySelector('svg').innerHTML = '<path d="M20 6L9 17l-5-5" />';
+            setTimeout(function() {
+                b.classList.remove('copied');
+                b.querySelector('span').textContent = 'Copy';
+                b.querySelector('svg').innerHTML = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>';
+            }, 2000);
+        }
+
+        function fallbackCopyBlock(text, b) {
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showCopiedState(b);
+            } catch(e) {
+                b.querySelector('span').textContent = 'Failed';
+                setTimeout(function() {
+                    b.querySelector('span').textContent = 'Copy';
+                }, 2000);
+            }
+            document.body.removeChild(textarea);
+        }
+
         btn.addEventListener('click', function() {
             var code = pre.querySelector('code');
             var text = code ? code.textContent : pre.textContent;
 
-            navigator.clipboard.writeText(text).then(function() {
-                btn.classList.add('copied');
-                btn.querySelector('span').textContent = 'Copied';
-                btn.querySelector('svg').innerHTML = '<path d="M20 6L9 17l-5-5" />';
-
-                setTimeout(function() {
-                    btn.classList.remove('copied');
-                    btn.querySelector('span').textContent = 'Copy';
-                    btn.querySelector('svg').innerHTML = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>';
-                }, 2000);
-            }).catch(function() {
-                var textarea = document.createElement('textarea');
-                textarea.value = text;
-                textarea.style.position = 'fixed';
-                textarea.style.opacity = '0';
-                document.body.appendChild(textarea);
-                textarea.select();
-                try {
-                    document.execCommand('copy');
-                    btn.classList.add('copied');
-                    btn.querySelector('span').textContent = 'Copied';
-                    setTimeout(function() {
-                        btn.classList.remove('copied');
-                        btn.querySelector('span').textContent = 'Copy';
-                    }, 2000);
-                } catch(e) {
-                    btn.querySelector('span').textContent = 'Failed';
-                    setTimeout(function() {
-                        btn.querySelector('span').textContent = 'Copy';
-                    }, 2000);
-                }
-                document.body.removeChild(textarea);
-            });
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function() {
+                    showCopiedState(btn);
+                }).catch(function() {
+                    fallbackCopyBlock(text, btn);
+                });
+            } else {
+                fallbackCopyBlock(text, btn);
+            }
         });
 
         block.appendChild(btn);

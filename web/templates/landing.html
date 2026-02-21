@@ -29,7 +29,7 @@
                 </a>
                 {{end}}
                 <a href="#features"
-                   class="inline-flex items-center justify-center px-8 py-3 text-base font-semibold rounded-input text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition-colors w-full sm:w-auto">
+                   class="themed-btn-secondary px-8 py-3 text-base w-full sm:w-auto">
                     Learn More
                     <svg class="ml-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
@@ -164,14 +164,14 @@
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto">
             <!-- Free -->
-            <div class="themed-card border border-gray-200 dark:border-gray-700 p-8">
+            <div class="themed-card border border-gray-200 dark:border-gray-700 p-8 flex flex-col">
                 {{template "pricing-free-features"}}
-                <a href="/register" class="mt-8 block w-full text-center px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-input text-gray-700 dark:text-gray-200 font-semibold hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">Get Started Free</a>
+                <a href="/register" class="themed-btn-secondary mt-auto pt-4 w-full px-6 py-3">Get Started Free</a>
             </div>
             <!-- Pro -->
-            <div class="themed-card border-2 border-primary-500 p-8">
+            <div class="themed-card border-2 border-primary-500 p-8 flex flex-col">
                 {{template "pricing-pro-features"}}
-                <a href="/pricing" class="themed-btn-primary mt-8 block w-full px-6 py-3">View Pricing</a>
+                <a href="/pricing" class="themed-btn-primary mt-auto pt-4 w-full px-6 py-3">Get Pro</a>
             </div>
         </div>
     </div>
@@ -204,7 +204,6 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
                 </a>
-                <a href="/pricing" class="block mt-3 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">View pricing &rarr;</a>
                 {{end}}
             </div>
         </div>
