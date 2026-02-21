@@ -630,19 +630,15 @@ func TestCtrlEnter_SavesNote(t *testing.T) {
 		t.Fatalf("Failed to fill content: %v", err)
 	}
 
-	// Press Ctrl+Enter to submit the form
-	err = page.Keyboard().Press("Control+Enter")
-	if err != nil {
-		t.Fatalf("Failed to press Ctrl+Enter: %v", err)
-	}
-
-	// Wait for navigation to the note view page (should be /notes/{id}, not / or /notes/new)
-	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
+	// Press Ctrl+Enter and wait for the navigation it triggers
+	_, err = page.ExpectNavigation(func() error {
+		return page.Keyboard().Press("Control+Enter")
+	}, playwright.PageExpectNavigationOptions{
 		Timeout: playwright.Float(browserMaxTimeoutMS),
 	})
 	if err != nil {
 		currentURL := page.URL()
-		t.Fatalf("Ctrl+Enter did not navigate to note view page. Current URL: %s, error: %v", currentURL, err)
+		t.Fatalf("Ctrl+Enter did not trigger navigation. Current URL: %s, error: %v", currentURL, err)
 	}
 
 	// Verify the URL is NOT the homepage and NOT the new note page
