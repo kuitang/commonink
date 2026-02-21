@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1093,10 +1094,16 @@ HTTPServer(("0.0.0.0", 8080), H).serve_forever()
 func (env *BrowserTestEnv) SeedApp(t testing.TB, sessionID, appName string) string {
 	t.Helper()
 
-	// 1. Create the app
-	env.MCPCallTool(t, sessionID, "app_create", map[string]any{
+	// 1. Create the app and extract public URL
+	createResult := env.MCPCallTool(t, sessionID, "app_create", map[string]any{
 		"names": []string{appName},
 	})
+	var createResp struct {
+		PublicURL string `json:"public_url"`
+	}
+	if err := json.Unmarshal(createResult, &createResp); err != nil {
+		t.Fatalf("SeedApp: failed to parse app_create result: %v", err)
+	}
 
 	// Register cleanup to delete the app
 	t.Cleanup(func() {
@@ -1137,19 +1144,8 @@ func (env *BrowserTestEnv) SeedApp(t testing.TB, sessionID, appName string) stri
 		time.Sleep(2 * time.Second)
 	}
 
-	// 5. Get the public URL from app metadata
-	appResult := env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
-		"app":     appName,
-		"command": "sprite-env services url web",
-	})
-	var urlResult struct {
-		Stdout string `json:"stdout"`
-	}
-	if err := json.Unmarshal(appResult, &urlResult); err != nil {
-		t.Fatalf("SeedApp: failed to get public URL: %v", err)
-	}
-
-	publicURL := trimSpace(urlResult.Stdout)
+	// 5. Return the public URL from app_create result
+	publicURL := strings.TrimSpace(createResp.PublicURL)
 	if publicURL == "" {
 		t.Fatalf("SeedApp: public URL is empty for app %s", appName)
 	}
