@@ -227,10 +227,42 @@ func EscapeFTS5Query(query string) string {
 		parts = parts[:len(parts)-1]
 	}
 
-	if len(parts) == 0 {
+	// Third pass: NOT is a binary operator in FTS5 and cannot start a group.
+	// If a group starts with NOT (at query start or right after OR), degrade it
+	// to a positive term so the final query always remains syntactically valid.
+	var normalized []string
+	hasPositiveInGroup := false
+	for _, term := range parts {
+		if term == "OR" {
+			if len(normalized) == 0 || normalized[len(normalized)-1] == "OR" {
+				continue
+			}
+			normalized = append(normalized, term)
+			hasPositiveInGroup = false
+			continue
+		}
+
+		if strings.HasPrefix(term, "NOT ") && !hasPositiveInGroup {
+			term = strings.TrimPrefix(term, "NOT ")
+		}
+
+		if term == "" {
+			continue
+		}
+		normalized = append(normalized, term)
+		if !strings.HasPrefix(term, "NOT ") {
+			hasPositiveInGroup = true
+		}
+	}
+	// Remove trailing OR again after normalization.
+	for len(normalized) > 0 && normalized[len(normalized)-1] == "OR" {
+		normalized = normalized[:len(normalized)-1]
+	}
+
+	if len(normalized) == 0 {
 		return ""
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(normalized, " ")
 }
 
 // searchToken represents a parsed token from human search input.

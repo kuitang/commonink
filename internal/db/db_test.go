@@ -23,6 +23,7 @@ func drawUnixEpoch(t *rapid.T, label string) int64 {
 }
 
 var testNoteIDCounter uint64
+var testDataRoot string
 
 func nextTestNoteID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, atomic.AddUint64(&testNoteIDCounter, 1))
@@ -43,13 +44,21 @@ func mustCloseSessionsDB(t *rapid.T, db *SessionsDB) {
 }
 
 // TestMain runs before all tests and cleans up after.
-// Only file-based tests (singleton, wiring, InitSchemas, CloseAll) use ./testdata.
+// File-based tests use a dedicated temp root under /tmp.
 func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("/tmp", "commonink-db-testdata-")
+	if err != nil {
+		panic(fmt.Sprintf("failed to create db test temp root: %v", err))
+	}
+	testDataRoot = root
+
 	code := m.Run()
 
 	// Cleanup file-based test artifacts
 	CloseAll()
-	os.RemoveAll("./testdata")
+	if testDataRoot != "" {
+		_ = os.RemoveAll(testDataRoot)
+	}
 
 	os.Exit(code)
 }
@@ -65,11 +74,8 @@ func setupTestDir(t testing.TB) string {
 	sessionsDB = nil
 	sessionsDBErr = nil
 
-	testDir := filepath.Join("./testdata", t.Name())
-	if err := os.RemoveAll(testDir); err != nil {
-		t.Fatalf("Failed to remove old test directory: %v", err)
-	}
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	testDir, err := os.MkdirTemp(testDataRoot, "test-")
+	if err != nil {
 		t.Fatalf("Failed to create test directory: %v", err)
 	}
 
@@ -89,12 +95,8 @@ func setupTestDirRapid(t *rapid.T) string {
 	sessionsDB = nil
 	sessionsDBErr = nil
 
-	// Use a unique name based on test iteration
-	testDir := filepath.Join("./testdata", "rapid_test")
-	if err := os.RemoveAll(testDir); err != nil {
-		t.Fatalf("Failed to remove old test directory: %v", err)
-	}
-	if err := os.MkdirAll(testDir, 0755); err != nil {
+	testDir, err := os.MkdirTemp(testDataRoot, "rapid-")
+	if err != nil {
 		t.Fatalf("Failed to create test directory: %v", err)
 	}
 
@@ -335,11 +337,18 @@ func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
 
 	// Generate 2-5 unique user IDs
 	numUsers := rapid.IntRange(2, 5).Draw(t, "numUsers")
-	userIDs := make([]string, numUsers)
+	userIDs := make([]string, 0, numUsers)
 	dbs := make(map[string]*UserDB)
+	seen := make(map[string]struct{}, numUsers)
 
-	for i := 0; i < numUsers; i++ {
-		userIDs[i] = testutil.ValidUserID().Draw(t, "userID")
+	for len(userIDs) < numUsers {
+		idx := len(userIDs)
+		userID := testutil.ValidUserID().Draw(t, fmt.Sprintf("userID-%d", idx))
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		userIDs = append(userIDs, userID)
 	}
 
 	// Open in-memory databases for all users (each is an independent :memory: DB)
