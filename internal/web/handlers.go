@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
@@ -34,6 +35,7 @@ type WebHandler struct {
 	shortURLSvc    *shorturl.Service
 	billingService billing.BillingService
 	baseURL        string
+	spriteToken    string
 }
 
 // NewWebHandler creates a new web handler.
@@ -48,6 +50,7 @@ func NewWebHandler(
 	shortURLSvc *shorturl.Service,
 	billingService billing.BillingService,
 	baseURL string,
+	spriteToken string,
 ) *WebHandler {
 	return &WebHandler{
 		renderer:       renderer,
@@ -60,6 +63,7 @@ func NewWebHandler(
 		shortURLSvc:    shortURLSvc,
 		billingService: billingService,
 		baseURL:        baseURL,
+		spriteToken:    spriteToken,
 	}
 }
 
@@ -84,6 +88,9 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 	mux.Handle("POST /notes/{id}/delete", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleDeleteNote)))
 	mux.Handle("POST /notes/{id}/publish", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleTogglePublish)))
 	mux.Handle("POST /notes/search", authMiddleware.RequireAuth(http.HandlerFunc(h.HandleSearchNotes)))
+
+	// App detail page (auth required)
+	mux.Handle("GET /apps/{name}", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleAppDetail)))
 
 	// Short URL public note route (no auth required)
 	mux.HandleFunc("GET /pub/{short_id}", h.HandleShortURLRedirect)
@@ -241,6 +248,30 @@ type AccountSettingsData struct {
 	PageData
 	HasPassword bool
 	HasGoogle   bool
+}
+
+// FeedItem represents a single item in the unified feed (note or app).
+type FeedItem struct {
+	Type        string // "note" or "app"
+	ItemID      string // note ID or app name
+	DisplayName string // note title or app name
+	Preview     string // content preview (notes only)
+	Status      string // app status (apps only)
+	PublicURL   string // app public URL (apps only)
+	IsPublic    bool   // note visibility
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// UnifiedFeedData contains data for the unified feed page.
+type UnifiedFeedData struct {
+	PageData
+	Items        []FeedItem
+	Page         int
+	TotalPages   int
+	HasPrev      bool
+	HasNext      bool
+	StorageUsage *notes.StorageUsageInfo
 }
 
 // storageLimitForRequest returns the storage limit for the current user based on subscription status.
@@ -407,7 +438,7 @@ func (h *WebHandler) HandlePasswordResetConfirmPage(w http.ResponseWriter, r *ht
 	}
 }
 
-// HandleNotesList handles GET /notes - shows list of notes.
+// HandleNotesList handles GET /notes - shows unified feed of notes and apps.
 func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -415,10 +446,6 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create notes service for this user
-	notesService := notes.NewService(userDB, storageLimitForRequest(r))
-
-	// Get page from query params
 	page := 1
 	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
 		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
@@ -429,18 +456,59 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 	limit := 12
 	offset := (page - 1) * limit
 
-	result, err := notesService.List(limit, offset)
+	rows, err := userDB.DB().QueryContext(r.Context(), `
+		SELECT type, item_id, display_name, preview, status, public_url, is_public, created_at, updated_at FROM (
+			SELECT 'note' as type, id as item_id, title as display_name,
+			       SUBSTR(content, 1, 150) as preview, '' as status, '' as public_url,
+			       is_public, created_at, updated_at
+			FROM notes WHERE deleted_at IS NULL
+			UNION ALL
+			SELECT 'app' as type, name as item_id, name as display_name,
+			       '' as preview, status, COALESCE(public_url, '') as public_url,
+			       0 as is_public, created_at, updated_at
+			FROM apps
+		) ORDER BY updated_at DESC LIMIT ? OFFSET ?
+	`, limit, offset)
 	if err != nil {
-		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to load notes")
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to load feed")
+		return
+	}
+	defer rows.Close()
+
+	var items []FeedItem
+	for rows.Next() {
+		var item FeedItem
+		var createdAt, updatedAt int64
+		var isPublic int
+		if err := rows.Scan(&item.Type, &item.ItemID, &item.DisplayName, &item.Preview,
+			&item.Status, &item.PublicURL, &isPublic, &createdAt, &updatedAt); err != nil {
+			h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to read feed item")
+			return
+		}
+		item.IsPublic = isPublic != 0
+		item.CreatedAt = time.Unix(createdAt, 0).UTC()
+		item.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		h.renderer.RenderError(w, http.StatusInternalServerError, "Failed to iterate feed")
 		return
 	}
 
-	totalPages := (result.TotalCount + limit - 1) / limit
+	var totalCount int
+	err = userDB.DB().QueryRowContext(r.Context(), `
+		SELECT (SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL) + (SELECT COUNT(*) FROM apps)
+	`).Scan(&totalCount)
+	if err != nil {
+		totalCount = len(items)
+	}
+
+	totalPages := (totalCount + limit - 1) / limit
 	if totalPages == 0 {
 		totalPages = 1
 	}
 
-	// Get storage usage info
+	notesService := notes.NewService(userDB, storageLimitForRequest(r))
 	var storageUsage *notes.StorageUsageInfo
 	usage, err := notesService.GetStorageUsage()
 	if err == nil {
@@ -451,15 +519,14 @@ func (h *WebHandler) HandleNotesList(w http.ResponseWriter, r *http.Request) {
 		Title: "My Notes",
 		User:  getUserWithEmail(r),
 	}
-	// Check for flash error message from query params
 	if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 		pageData.FlashMessage = errMsg
 		pageData.FlashType = "error"
 	}
 
-	data := NotesListData{
+	data := UnifiedFeedData{
 		PageData:     pageData,
-		Notes:        result.Notes,
+		Items:        items,
 		Page:         page,
 		TotalPages:   totalPages,
 		HasPrev:      page > 1,
@@ -533,7 +600,16 @@ func (h *WebHandler) HandleSearchNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, note := range renderNotes {
-		if err := h.renderer.RenderPartial(w, "notes/list.html", "note-card", note); err != nil {
+		item := FeedItem{
+			Type:        "note",
+			ItemID:      note.ID,
+			DisplayName: note.Title,
+			Preview:     note.Content,
+			IsPublic:    note.Visibility.IsPublic(),
+			CreatedAt:   note.CreatedAt,
+			UpdatedAt:   note.UpdatedAt,
+		}
+		if err := h.renderer.RenderPartial(w, "notes/list.html", "note-card", item); err != nil {
 			log.Printf("[SEARCH] RenderPartial error: %v", err)
 			return
 		}

@@ -264,6 +264,11 @@ func (c *Config) Validate() error {
 		errs = append(errs, "OAUTH_SIGNING_KEY must be 64 hex characters (ed25519 seed)")
 	}
 
+	// Sprites: require at least one token
+	if c.SpriteToken == "" && c.SpriteFlyToken == "" {
+		errs = append(errs, "SPRITE_TOKEN or SPRITE_FLY_TOKEN is required (set env var for Fly Sprites)")
+	}
+
 	// Validate rate limit config
 	if c.RateLimitConfig.FreeRPS <= 0 {
 		errs = append(errs, "RATE_LIMIT_FREE_RPS must be positive")

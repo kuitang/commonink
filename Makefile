@@ -30,6 +30,7 @@ export LISTEN_ADDR := :8080
 export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+export SPRITE_TOKEN ?= $(shell ./scripts/resolve-sprite-token.sh 2>/dev/null)
 
 # Optional regex for go test -skip (CI-friendly filtering)
 TEST_SKIP_PATTERNS ?=
@@ -104,40 +105,11 @@ test-conformance:
 	elif [ -x "$$HOME/.fly/bin/flyctl" ]; then \
 		flyctl_bin="$$HOME/.fly/bin/flyctl"; \
 	else \
-		echo "ERROR: flyctl CLI required to provision SPRITE_TOKEN"; \
+		echo "ERROR: flyctl CLI required for conformance tests"; \
 		exit 1; \
 	fi; \
 	if [ -z "$${SPRITE_TOKEN:-}" ]; then \
-		sprite_org="$${SPRITE_ORG_SLUG:-personal}"; \
-		sprite_invite="$${SPRITE_INVITE_CODE:-}"; \
-		fly_raw_token="$$("$$flyctl_bin" auth token --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' || true)"; \
-		fly_raw_token="$$(printf %s "$$fly_raw_token" | tr -d '[:space:]')"; \
-		if [ -z "$$fly_raw_token" ]; then \
-			echo "ERROR: failed to get Fly auth token from $$flyctl_bin"; \
-			echo "Run: $$flyctl_bin auth login"; \
-			exit 1; \
-		fi; \
-		sprite_body='{"description":"commonink conformance"}'; \
-		if [ -n "$$sprite_invite" ]; then \
-			sprite_body="{\"description\":\"commonink conformance\",\"invite_code\":\"$$sprite_invite\"}"; \
-		fi; \
-		sprite_resp="$$(mktemp -t sprite-token-resp-XXXXXX)"; \
-		sprite_code="$$(curl -sS -o "$$sprite_resp" -w "%{http_code}" -X POST "https://api.sprites.dev/v1/organizations/$$sprite_org/tokens" \
-			-H "Authorization: FlyV1 $$fly_raw_token" \
-			-H "Content-Type: application/json" \
-			-d "$$sprite_body" || true)"; \
-		if [ "$$sprite_code" = "200" ] || [ "$$sprite_code" = "201" ]; then \
-			SPRITE_TOKEN="$$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data.get("token",""))' "$$sprite_resp" 2>/dev/null || true)"; \
-		else \
-			SPRITE_TOKEN=""; \
-		fi; \
-		rm -f "$$sprite_resp"; \
-		SPRITE_TOKEN="$$(printf %s "$$SPRITE_TOKEN" | tr -d '[:space:]')"; \
-		if [ -z "$$SPRITE_TOKEN" ]; then \
-			echo "ERROR: SPRITE_TOKEN not set and auto-creation from Fly token failed"; \
-			echo "Set SPRITE_TOKEN directly or set SPRITE_ORG_SLUG/SPRITE_INVITE_CODE and retry."; \
-			exit 1; \
-		fi; \
+		SPRITE_TOKEN="$$(./scripts/resolve-sprite-token.sh)" || { echo "ERROR: resolve-sprite-token.sh failed"; exit 1; }; \
 		export SPRITE_TOKEN; \
 	fi; \
 	echo "Fly apps snapshot (pre-conformance):"; \
@@ -210,40 +182,11 @@ test-full:
 	elif [ -x "$$HOME/.fly/bin/flyctl" ]; then \
 		flyctl_bin="$$HOME/.fly/bin/flyctl"; \
 	else \
-		echo "ERROR: flyctl CLI required to provision SPRITE_TOKEN"; \
+		echo "ERROR: flyctl CLI required for full tests"; \
 		exit 1; \
 	fi; \
 	if [ -z "$${SPRITE_TOKEN:-}" ]; then \
-		sprite_org="$${SPRITE_ORG_SLUG:-personal}"; \
-		sprite_invite="$${SPRITE_INVITE_CODE:-}"; \
-		fly_raw_token="$$("$$flyctl_bin" auth token --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' || true)"; \
-		fly_raw_token="$$(printf %s "$$fly_raw_token" | tr -d '[:space:]')"; \
-		if [ -z "$$fly_raw_token" ]; then \
-			echo "ERROR: failed to get Fly auth token from $$flyctl_bin"; \
-			echo "Run: $$flyctl_bin auth login"; \
-			exit 1; \
-		fi; \
-		sprite_body='{"description":"commonink full-test"}'; \
-		if [ -n "$$sprite_invite" ]; then \
-			sprite_body="{\"description\":\"commonink full-test\",\"invite_code\":\"$$sprite_invite\"}"; \
-		fi; \
-		sprite_resp="$$(mktemp -t sprite-token-resp-XXXXXX)"; \
-		sprite_code="$$(curl -sS -o "$$sprite_resp" -w "%{http_code}" -X POST "https://api.sprites.dev/v1/organizations/$$sprite_org/tokens" \
-			-H "Authorization: FlyV1 $$fly_raw_token" \
-			-H "Content-Type: application/json" \
-			-d "$$sprite_body" || true)"; \
-		if [ "$$sprite_code" = "200" ] || [ "$$sprite_code" = "201" ]; then \
-			SPRITE_TOKEN="$$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data.get("token",""))' "$$sprite_resp" 2>/dev/null || true)"; \
-		else \
-			SPRITE_TOKEN=""; \
-		fi; \
-		rm -f "$$sprite_resp"; \
-		SPRITE_TOKEN="$$(printf %s "$$SPRITE_TOKEN" | tr -d '[:space:]')"; \
-		if [ -z "$$SPRITE_TOKEN" ]; then \
-			echo "ERROR: SPRITE_TOKEN not set and auto-creation from Fly token failed"; \
-			echo "Set SPRITE_TOKEN directly or set SPRITE_ORG_SLUG/SPRITE_INVITE_CODE and retry."; \
-			exit 1; \
-		fi; \
+		SPRITE_TOKEN="$$(./scripts/resolve-sprite-token.sh)" || { echo "ERROR: resolve-sprite-token.sh failed"; exit 1; }; \
 		export SPRITE_TOKEN; \
 	fi; \
 	echo "Fly apps snapshot (pre-full-test):"; \

@@ -48,9 +48,9 @@ type AppCreateResult struct {
 
 // AppWriteResult is the response payload for app_write.
 type AppWriteResult struct {
-	App         string `json:"app"`
-	Path        string `json:"path"`
-	BytesWritten int   `json:"bytes_written"`
+	App          string `json:"app"`
+	Path         string `json:"path"`
+	BytesWritten int    `json:"bytes_written"`
 }
 
 // AppReadResult is the response payload for app_read.
@@ -62,24 +62,24 @@ type AppReadResult struct {
 
 // AppBashResult is the response payload for app_bash.
 type AppBashResult struct {
-	Stdout       string `json:"stdout"`
-	Stderr       string `json:"stderr"`
-	ExitCode     int    `json:"exit_code"`
-	RuntimeMS    int64  `json:"runtime_ms"`
-	PortStatus   string `json:"port_status,omitempty"`
-	PublicURL    string `json:"public_url,omitempty"`
-	Warning      string `json:"warning,omitempty"`
-	TimeoutSeconds int  `json:"timeout_seconds"`
+	Stdout         string `json:"stdout"`
+	Stderr         string `json:"stderr"`
+	ExitCode       int    `json:"exit_code"`
+	RuntimeMS      int64  `json:"runtime_ms"`
+	PortStatus     string `json:"port_status,omitempty"`
+	PublicURL      string `json:"public_url,omitempty"`
+	Warning        string `json:"warning,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 // AppLogsResult is the response payload for app log tailing.
 type AppLogsResult struct {
-	App      string `json:"app"`
-	Lines    int    `json:"lines"`
-	Output   string `json:"output"`
-	Stderr   string `json:"stderr,omitempty"`
-	ExitCode int    `json:"exit_code"`
-	RuntimeMS int64 `json:"runtime_ms"`
+	App       string `json:"app"`
+	Lines     int    `json:"lines"`
+	Output    string `json:"output"`
+	Stderr    string `json:"stderr,omitempty"`
+	ExitCode  int    `json:"exit_code"`
+	RuntimeMS int64  `json:"runtime_ms"`
 }
 
 // AppDeleteResult is the response payload for app_delete.

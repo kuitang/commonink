@@ -243,6 +243,7 @@ func main() {
 		shortURLSvc,
 		billingService,
 		"",
+		resolvedSpriteToken,
 	)
 
 	// Create HTTP mux
@@ -329,6 +330,7 @@ func main() {
 	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
 	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
 	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
 	log.Println("Protected apps API routes registered at /api/apps with rate limiting")
 
 	// Register API Key routes
@@ -1015,6 +1017,66 @@ func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Reques
 	result, err := svc.TailLogs(r.Context(), name, lines)
 	if err != nil {
 		writeAppError(w, "tail app logs", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// HandleAction handles POST /api/apps/{name}/{action} - performs start/stop/restart.
+func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	action := strings.TrimSpace(r.PathValue("action"))
+	switch action {
+	case "start", "stop", "restart":
+	default:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid action %q: must be start, stop, or restart", action))
+		return
+	}
+
+	listResult, err := svc.RunBash(r.Context(), name, "sprite-env services list", 30)
+	if err != nil {
+		writeAppError(w, "discover service", err)
+		return
+	}
+
+	svcName := ""
+	for _, line := range strings.Split(listResult.Stdout, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.Contains(strings.ToLower(trimmed), "no services") {
+			svcName = trimmed
+			break
+		}
+	}
+	if svcName == "" {
+		writeError(w, http.StatusBadRequest, "No service registered. Use sprite-env services create first.")
+		return
+	}
+
+	var cmd string
+	switch action {
+	case "start":
+		cmd = fmt.Sprintf("sprite-env services start %s", svcName)
+	case "stop":
+		cmd = fmt.Sprintf("sprite-env services stop %s", svcName)
+	case "restart":
+		cmd = fmt.Sprintf("sprite-env services stop %s && sprite-env services start %s", svcName, svcName)
+	}
+
+	result, err := svc.RunBash(r.Context(), name, cmd, 30)
+	if err != nil {
+		writeAppError(w, action+" service", err)
 		return
 	}
 

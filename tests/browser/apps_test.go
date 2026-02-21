@@ -1,0 +1,461 @@
+// Package browser contains Playwright E2E tests for app management flows.
+// These tests require SPRITE_TOKEN to be set (except TestBrowser_UnifiedFeed_EmptyState).
+package browser
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/playwright-community/playwright-go"
+)
+
+// =============================================================================
+// Unified Feed Tests
+// =============================================================================
+
+// TestBrowser_UnifiedFeed_ShowsApp verifies that the unified feed shows both
+// app cards and note cards after seeding an app and a note.
+func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	if env.SpriteToken == "" {
+		t.Skip("SPRITE_TOKEN required")
+	}
+	env.InitBrowser(t)
+
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+
+	emailAddr := GenerateUniqueEmail("feed-app")
+	userID := env.LoginUser(t, ctx, emailAddr)
+	sessionID := env.LoginAs(t, userID)
+
+	// Seed an app
+	appName := "feed-" + GenerateUniqueEmail("x")[:8]
+	env.SeedApp(t, sessionID, appName)
+
+	// Create a note
+	env.CreateNoteForUser(t, userID, "Feed Test Note", "Content for feed test")
+
+	// Navigate to /notes (unified feed)
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	Navigate(t, page, env.BaseURL, "/notes")
+
+	// Assert: app-card is visible
+	appCard := page.Locator("article.themed-card a[href*='/apps/']").First()
+	err = appCard.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("App card not visible in unified feed: %v", err)
+	}
+
+	// Assert: note-card is visible
+	noteCard := page.Locator("article.themed-card a[href*='/notes/']").First()
+	err = noteCard.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Note card not visible in unified feed: %v", err)
+	}
+}
+
+// TestBrowser_UnifiedFeed_EmptyState verifies the empty state when a user
+// has no notes and no apps.
+func TestBrowser_UnifiedFeed_EmptyState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
+
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+
+	emailAddr := GenerateUniqueEmail("empty-feed")
+	env.LoginUser(t, ctx, emailAddr)
+
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	Navigate(t, page, env.BaseURL, "/notes")
+
+	// Assert: empty state message is visible ("No notes yet")
+	emptyHeading := page.Locator("h3:has-text('No notes yet')")
+	err = emptyHeading.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Empty state heading not visible: %v", err)
+	}
+
+	// Assert: "Create your first note" link/button is visible
+	createLink := page.Locator("a:has-text('Create your first note')")
+	err = createLink.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Create first note link not visible in empty state: %v", err)
+	}
+}
+
+// =============================================================================
+// App Detail Tests
+// =============================================================================
+
+// TestBrowser_AppDetail_FileSidebar verifies the app detail page shows
+// a header, status badge, file sidebar with "server.py", and clicking
+// the file loads its content in the editor.
+func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	if env.SpriteToken == "" {
+		t.Skip("SPRITE_TOKEN required")
+	}
+	env.InitBrowser(t)
+
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+
+	emailAddr := GenerateUniqueEmail("detail-files")
+	userID := env.LoginUser(t, ctx, emailAddr)
+	sessionID := env.LoginAs(t, userID)
+
+	appName := "detail-" + GenerateUniqueEmail("x")[:8]
+	env.SeedApp(t, sessionID, appName)
+
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	Navigate(t, page, env.BaseURL, "/apps/"+appName)
+
+	// Assert: header with app name
+	heading := page.Locator("h1")
+	headingText, err := heading.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get heading text: %v", err)
+	}
+	if !strings.Contains(headingText, appName) {
+		t.Errorf("Expected heading to contain %q, got %q", appName, headingText)
+	}
+
+	// Assert: status badge
+	statusBadge := page.Locator("#status-badge")
+	err = statusBadge.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Status badge not visible: %v", err)
+	}
+
+	// Assert: file sidebar lists "server.py"
+	// The file list is populated via fetch(), so wait for it
+	serverPyBtn := page.Locator("button.file-btn[data-path='server.py']")
+	err = serverPyBtn.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("server.py not found in file sidebar: %v", err)
+	}
+
+	// Click server.py to load content
+	if err := serverPyBtn.Click(); err != nil {
+		t.Fatalf("Failed to click server.py: %v", err)
+	}
+
+	// Wait for editor filename to update
+	editorFilename := page.Locator("#editor-filename")
+	_, err = page.WaitForFunction(`() => {
+		const el = document.getElementById('editor-filename');
+		return el && el.textContent.includes('server.py');
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		fnText, _ := editorFilename.TextContent()
+		t.Fatalf("Editor filename did not update to server.py (got %q): %v", fnText, err)
+	}
+
+	// Assert: editor content contains Python code
+	editorContent := page.Locator("#editor-content")
+	editorValue, err := editorContent.InputValue()
+	if err != nil {
+		t.Fatalf("Failed to get editor content: %v", err)
+	}
+	if !strings.Contains(editorValue, "HTTPServer") {
+		t.Errorf("Editor content should contain Python server code, got: %s", editorValue[:min(200, len(editorValue))])
+	}
+}
+
+// TestBrowser_AppDetail_VisitAndPost verifies that the app's public URL serves
+// a form, and posting to it echoes the message.
+func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	if env.SpriteToken == "" {
+		t.Skip("SPRITE_TOKEN required")
+	}
+	env.InitBrowser(t)
+
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+
+	emailAddr := GenerateUniqueEmail("post-app")
+	userID := env.LoginUser(t, ctx, emailAddr)
+	sessionID := env.LoginAs(t, userID)
+
+	appName := "post-" + GenerateUniqueEmail("x")[:8]
+	publicURL := env.SeedApp(t, sessionID, appName)
+
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	// Navigate to the public URL
+	_, err = page.Goto(publicURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		Timeout:   playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Failed to navigate to public URL %s: %v", publicURL, err)
+	}
+
+	// Assert: form is visible
+	msgInput := page.Locator("input#msg")
+	err = msgInput.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Message input not visible on public app page: %v", err)
+	}
+
+	// Fill and submit
+	testMsg := "hello from playwright"
+	if err := msgInput.Fill(testMsg); err != nil {
+		t.Fatalf("Failed to fill message: %v", err)
+	}
+
+	sendBtn := page.Locator("button#send")
+	if err := sendBtn.Click(); err != nil {
+		t.Fatalf("Failed to click send: %v", err)
+	}
+
+	// Wait for the echo response
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		t.Fatalf("Page did not load after POST: %v", err)
+	}
+
+	// Assert: echo paragraph shows the message
+	echoP := page.Locator("p#echo")
+	err = echoP.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Echo paragraph not visible: %v", err)
+	}
+
+	echoText, err := echoP.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get echo text: %v", err)
+	}
+	if !strings.Contains(echoText, testMsg) {
+		t.Errorf("Echo should contain %q, got: %q", testMsg, echoText)
+	}
+}
+
+// TestBrowser_AppDetail_LogsShowPost verifies that after posting to an app,
+// the logs panel on the detail page shows the POST request.
+func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	if env.SpriteToken == "" {
+		t.Skip("SPRITE_TOKEN required")
+	}
+	env.InitBrowser(t)
+
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+
+	emailAddr := GenerateUniqueEmail("logs-app")
+	userID := env.LoginUser(t, ctx, emailAddr)
+	sessionID := env.LoginAs(t, userID)
+
+	appName := "logs-" + GenerateUniqueEmail("x")[:8]
+	publicURL := env.SeedApp(t, sessionID, appName)
+
+	// First, make a POST to the app so there are logs to check
+	postPage, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	postPage.SetDefaultTimeout(browserMaxTimeoutMS)
+	postPage.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	_, err = postPage.Goto(publicURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		Timeout:   playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Failed to navigate to public URL: %v", err)
+	}
+
+	msgInput := postPage.Locator("input#msg")
+	err = msgInput.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Message input not visible: %v", err)
+	}
+	msgInput.Fill("logtest")
+	postPage.Locator("button#send").Click()
+	postPage.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	postPage.Close()
+
+	// Now navigate to the app detail page
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	Navigate(t, page, env.BaseURL, "/apps/"+appName)
+
+	// The log panel fetches logs on page load. Wait for it to populate.
+	logOutput := page.Locator("#log-output")
+	_, err = page.WaitForFunction(`() => {
+		const el = document.getElementById('log-output');
+		return el && el.textContent.includes('POST');
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		logText, _ := logOutput.TextContent()
+		t.Fatalf("Log output does not contain 'POST' (got: %s): %v", logText, err)
+	}
+
+	logText, _ := logOutput.TextContent()
+	if !strings.Contains(logText, "POST") || !strings.Contains(logText, "msg=") {
+		t.Errorf("Logs should show POST with msg=, got: %s", logText)
+	}
+}
+
+// TestBrowser_AppDetail_ActionButtons verifies that the app detail page
+// shows Start, Restart, and Stop action buttons.
+func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	if env.SpriteToken == "" {
+		t.Skip("SPRITE_TOKEN required")
+	}
+	env.InitBrowser(t)
+
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+
+	emailAddr := GenerateUniqueEmail("action-app")
+	userID := env.LoginUser(t, ctx, emailAddr)
+	sessionID := env.LoginAs(t, userID)
+
+	appName := "action-" + GenerateUniqueEmail("x")[:8]
+	env.SeedApp(t, sessionID, appName)
+
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+
+	Navigate(t, page, env.BaseURL, "/apps/"+appName)
+
+	// Assert: Start button visible
+	startBtn := page.Locator("#btn-start")
+	err = startBtn.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Start button not visible: %v", err)
+	}
+
+	// Assert: Restart button visible
+	restartBtn := page.Locator("#btn-restart")
+	err = restartBtn.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Restart button not visible: %v", err)
+	}
+
+	// Assert: Stop button visible
+	stopBtn := page.Locator("#btn-stop")
+	err = stopBtn.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Stop button not visible: %v", err)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

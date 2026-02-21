@@ -3,10 +3,13 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,11 +26,13 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/playwright-community/playwright-go"
 
+	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
+	"github.com/kuitang/agent-notes/internal/mcp"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
@@ -78,6 +83,7 @@ type BrowserTestEnv struct {
 	PublicNotes    *notes.PublicNoteService
 	ShortURLSvc    *shorturl.Service
 	LocalMockOIDC  *auth.LocalMockOIDCProvider
+	SpriteToken    string
 	TempDir        string
 
 	pw        *playwright.Playwright
@@ -179,6 +185,9 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	publicNotes = publicNotes.WithShortURLService(shortURLSvc, server.URL)
 
+	// Sprite token for MCP/apps
+	spriteToken := os.Getenv("SPRITE_TOKEN")
+
 	// Local mock OIDC
 	localMockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
 
@@ -194,6 +203,7 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 		shortURLSvc,
 		billing.NewMockService(),
 		server.URL,
+		spriteToken,
 	)
 
 	// Health check
@@ -228,6 +238,23 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesPutHandler))))
 	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesDeleteHandler))))
 
+	// MCP handler (authenticated, all tools)
+	mcpHandler := &authenticatedMCPHandler{
+		Toolset:     mcp.ToolsetAll,
+		SpriteToken: spriteToken,
+	}
+	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
+
+	// Apps management API routes (authenticated)
+	appsHandler := &authenticatedAppsHandler{SpriteToken: spriteToken}
+	mux.Handle("GET /api/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListApps))))
+	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
+	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
+	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
+	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
+	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
+
 	env := &BrowserTestEnv{
 		Server:         server,
 		BaseURL:        server.URL,
@@ -244,6 +271,7 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 		PublicNotes:    publicNotes,
 		ShortURLSvc:    shortURLSvc,
 		LocalMockOIDC:  localMockOIDC,
+		SpriteToken:    spriteToken,
 		TempDir:        tempDir,
 		fakeS3Server:   fakeS3Server,
 	}
@@ -730,4 +758,400 @@ func PublishNoteViaUI(t *testing.T, page playwright.Page) string {
 		t.Fatal("share URL is empty after publishing")
 	}
 	return shareURL
+}
+
+// =============================================================================
+// Authenticated MCP handler (local copy for browser test env)
+// =============================================================================
+
+// authenticatedMCPHandler wraps MCP with auth context for the browser test env.
+type authenticatedMCPHandler struct {
+	Toolset     mcp.Toolset
+	SpriteToken string
+}
+
+func (h *authenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	userID := auth.GetUserID(r.Context())
+
+	var notesSvc *notes.Service
+	if h.Toolset != mcp.ToolsetApps {
+		storageLimit := notes.FreeStorageLimitBytes
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err == nil && account.SubscriptionStatus.Valid {
+			storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+		}
+		notesSvc = notes.NewService(userDB, storageLimit)
+		_ = notesSvc.Purge(30 * 24 * time.Hour)
+	}
+
+	var appsSvc *apps.Service
+	if h.Toolset != mcp.ToolsetNotes {
+		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
+	}
+
+	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
+	mcpServer.ServeHTTP(w, r)
+}
+
+// =============================================================================
+// Authenticated apps handler (local copy for browser test env)
+// =============================================================================
+
+// authenticatedAppsHandler wraps apps management API operations with auth context.
+type authenticatedAppsHandler struct {
+	SpriteToken string
+}
+
+func (h *authenticatedAppsHandler) getService(r *http.Request) (*apps.Service, error) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		return nil, fmt.Errorf("no user database in context")
+	}
+	userID := auth.GetUserID(r.Context())
+	return apps.NewService(userDB, userID, h.SpriteToken), nil
+}
+
+func (h *authenticatedAppsHandler) ListApps(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	items, err := svc.List(r.Context())
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, map[string]any{"apps": items})
+}
+
+func (h *authenticatedAppsHandler) GetApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	item, err := svc.Get(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, item)
+}
+
+func (h *authenticatedAppsHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	result, err := svc.Delete(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	result, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) GetFile(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	filePath := r.PathValue("path")
+	result, err := svc.ReadFile(r.Context(), name, filePath)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	result, err := svc.TailLogs(r.Context(), name, 100)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	action := r.PathValue("action")
+
+	// Discover service name
+	listResult, err := svc.RunBash(r.Context(), name, "sprite-env services list", 30)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	svcName := ""
+	for _, line := range splitLines(listResult.Stdout) {
+		trimmed := trimSpace(line)
+		if trimmed != "" && !containsCI(trimmed, "no services") {
+			svcName = trimmed
+			break
+		}
+	}
+	if svcName == "" {
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "No service registered"})
+		return
+	}
+
+	var cmd string
+	switch action {
+	case "start":
+		cmd = fmt.Sprintf("sprite-env services start %s", svcName)
+	case "stop":
+		cmd = fmt.Sprintf("sprite-env services stop %s", svcName)
+	case "restart":
+		cmd = fmt.Sprintf("sprite-env services stop %s && sprite-env services start %s", svcName, svcName)
+	default:
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid action"})
+		return
+	}
+
+	result, err := svc.RunBash(r.Context(), name, cmd, 30)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func writeTestJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	for _, line := range bytes.Split([]byte(s), []byte("\n")) {
+		lines = append(lines, string(line))
+	}
+	return lines
+}
+
+func trimSpace(s string) string {
+	return string(bytes.TrimSpace([]byte(s)))
+}
+
+func containsCI(s, substr string) bool {
+	return bytes.Contains(bytes.ToLower([]byte(s)), bytes.ToLower([]byte(substr)))
+}
+
+// =============================================================================
+// MCP call helper (cookie-based)
+// =============================================================================
+
+// MCPCallTool sends a JSON-RPC tools/call request via cookie auth to /mcp
+// and returns the result content.
+func (env *BrowserTestEnv) MCPCallTool(t testing.TB, sessionID, tool string, args map[string]any) json.RawMessage {
+	t.Helper()
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"id":      1,
+		"params": map[string]any{
+			"name":      tool,
+			"arguments": args,
+		},
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("MCPCallTool: failed to marshal request: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", env.BaseURL+"/mcp", bytes.NewReader(bodyBytes))
+	if err != nil {
+		t.Fatalf("MCPCallTool: failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionID,
+	})
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("MCPCallTool %s: request failed: %v", tool, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("MCPCallTool %s: failed to read response: %v", tool, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("MCPCallTool %s: unexpected status %d: %s", tool, resp.StatusCode, string(respBody))
+	}
+
+	// Parse JSON-RPC response
+	var rpcResp struct {
+		Result struct {
+			Content []struct {
+				Type string          `json:"type"`
+				Text json.RawMessage `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		t.Fatalf("MCPCallTool %s: failed to parse response: %v\nBody: %s", tool, err, string(respBody))
+	}
+	if rpcResp.Error != nil {
+		t.Fatalf("MCPCallTool %s: RPC error %d: %s", tool, rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+
+	if len(rpcResp.Result.Content) == 0 {
+		return json.RawMessage("{}")
+	}
+
+	// The text field contains the tool result as a JSON string
+	var textStr string
+	if err := json.Unmarshal(rpcResp.Result.Content[0].Text, &textStr); err != nil {
+		// If it's not a string, return it directly
+		return rpcResp.Result.Content[0].Text
+	}
+	return json.RawMessage(textStr)
+}
+
+// =============================================================================
+// App seeding helper
+// =============================================================================
+
+const seedAppPythonServer = `from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import parse_qs
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"GET {self.path}", flush=True)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b'<form method="POST" action="/"><input name="msg" id="msg"><button type="submit" id="send">Send</button></form>')
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(n).decode()
+        params = parse_qs(raw)
+        msg = params.get("msg", [""])[0]
+        print(f"POST {self.path} msg={msg}", flush=True)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(f'<p id="echo">You said: {msg}</p>'.encode())
+HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+`
+
+// SeedApp creates a sprite-based app via MCP tools and waits for it to become reachable.
+// It returns the public URL and registers t.Cleanup to delete the app.
+// The caller must have already created a user and session.
+func (env *BrowserTestEnv) SeedApp(t testing.TB, sessionID, appName string) string {
+	t.Helper()
+
+	// 1. Create the app
+	env.MCPCallTool(t, sessionID, "app_create", map[string]any{
+		"names": []string{appName},
+	})
+
+	// Register cleanup to delete the app
+	t.Cleanup(func() {
+		env.MCPCallTool(t, sessionID, "app_delete", map[string]any{
+			"names": []string{appName},
+		})
+	})
+
+	// 2. Write the Python test server
+	env.MCPCallTool(t, sessionID, "app_write", map[string]any{
+		"app_name": appName,
+		"path":     "server.py",
+		"content":  seedAppPythonServer,
+	})
+
+	// 3. Create the web service
+	env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
+		"app_name": appName,
+		"command":  "sprite-env services create web --cmd 'python3 server.py' --http-port 8080",
+	})
+
+	// 4. Poll until the server is reachable (max 30s)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		result := env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
+			"app_name": appName,
+			"command":  "curl -sf http://localhost:8080",
+		})
+
+		// Check if the command succeeded (non-empty result without error)
+		var bashResult struct {
+			ExitCode int    `json:"exit_code"`
+			Stdout   string `json:"stdout"`
+		}
+		if err := json.Unmarshal(result, &bashResult); err == nil && bashResult.ExitCode == 0 && bashResult.Stdout != "" {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// 5. Get the public URL from app metadata
+	appResult := env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
+		"app_name": appName,
+		"command":  "sprite-env services url web",
+	})
+	var urlResult struct {
+		Stdout string `json:"stdout"`
+	}
+	if err := json.Unmarshal(appResult, &urlResult); err != nil {
+		t.Fatalf("SeedApp: failed to get public URL: %v", err)
+	}
+
+	publicURL := trimSpace(urlResult.Stdout)
+	if publicURL == "" {
+		t.Fatalf("SeedApp: public URL is empty for app %s", appName)
+	}
+	return publicURL
 }

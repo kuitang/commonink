@@ -539,4 +539,3 @@ func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (*mc
 	}
 	return newToolResultText(marshalToolJSON(result)), nil
 }
-
