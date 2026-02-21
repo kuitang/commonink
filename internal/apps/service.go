@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -18,6 +19,9 @@ import (
 const (
 	defaultBashTimeoutSeconds = 120
 	maxBashTimeoutSeconds     = 600
+	defaultLogLines           = 200
+	maxLogLines               = 1000
+	maxFileListEntries        = 1000
 )
 
 // Service owns app metadata persistence and Sprite operations.
@@ -348,6 +352,158 @@ func (s *Service) List(ctx context.Context) ([]AppMetadata, error) {
 	}
 
 	return apps, nil
+}
+
+// Get returns metadata for a single app by name.
+func (s *Service) Get(ctx context.Context, appName string) (*AppMetadata, error) {
+	if s.userDB == nil {
+		return nil, errors.New("user database not available")
+	}
+	meta, err := s.getMetadata(ctx, appName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("app not found")
+		}
+		return nil, err
+	}
+	return meta, nil
+}
+
+// ListFiles lists files and directories under /home/sprite for an app.
+func (s *Service) ListFiles(ctx context.Context, appName string) (*AppListFilesResult, error) {
+	if err := s.requireClient(); err != nil {
+		return nil, err
+	}
+	meta, err := s.getMetadata(ctx, appName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("app not found, use app_create first")
+		}
+		return nil, err
+	}
+
+	script := fmt.Sprintf(`import json, pathlib
+root = pathlib.Path("/home/sprite")
+skip_names = {"node_modules",".git",".venv","venv","__pycache__"}
+entries = []
+for p in sorted(root.rglob("*")):
+    rel = p.relative_to(root).as_posix()
+    if not rel:
+        continue
+    parts = rel.split("/")
+    if any(part.startswith(".") for part in parts):
+        continue
+    if any(part in skip_names for part in parts):
+        continue
+    try:
+        st = p.stat()
+    except Exception:
+        continue
+    kind = "dir" if p.is_dir() else "file"
+    size = int(st.st_size) if p.is_file() else 0
+    entries.append({
+        "path": rel,
+        "kind": kind,
+        "size_bytes": size,
+        "modified_unix": int(st.st_mtime),
+    })
+    if len(entries) >= %d:
+        break
+print(json.dumps(entries))`, maxFileListEntries)
+
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "python3", "-c", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files on sprite: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	var raw []struct {
+		Path         string `json:"path"`
+		Kind         string `json:"kind"`
+		SizeBytes    int64  `json:"size_bytes"`
+		ModifiedUnix int64  `json:"modified_unix"`
+	}
+	if err := json.Unmarshal(output, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse file list: %w", err)
+	}
+
+	files := make([]AppFileEntry, 0, len(raw))
+	for _, item := range raw {
+		files = append(files, AppFileEntry{
+			Path:       item.Path,
+			Kind:       item.Kind,
+			SizeBytes:  item.SizeBytes,
+			ModifiedAt: time.Unix(item.ModifiedUnix, 0).UTC(),
+		})
+	}
+
+	return &AppListFilesResult{
+		App:   meta.Name,
+		Files: files,
+	}, nil
+}
+
+// TailLogs returns recent journal output from a sprite.
+func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*AppLogsResult, error) {
+	if err := s.requireClient(); err != nil {
+		return nil, err
+	}
+	meta, err := s.getMetadata(ctx, appName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("app not found, use app_create first")
+		}
+		return nil, err
+	}
+
+	if lines <= 0 {
+		lines = defaultLogLines
+	}
+	if lines > maxLogLines {
+		lines = maxLogLines
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultBashTimeoutSeconds)*time.Second)
+	defer cancel()
+
+	cmdText := fmt.Sprintf("if command -v journalctl >/dev/null 2>&1; then journalctl -n %d --no-pager; else echo 'journalctl unavailable on this sprite runtime'; fi", lines)
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(runCtx, "bash", "-lc", cmdText)
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	start := time.Now()
+	runErr := cmd.Run()
+	runtimeMS := time.Since(start).Milliseconds()
+
+	stdout := stdoutBuf.String()
+	stderr := stderrBuf.String()
+	exitCode := cmd.ExitCode()
+	if exitCode < 0 {
+		exitCode = 0
+	}
+
+	var exitErr *sprites.ExitError
+	if runErr != nil {
+		if errors.As(runErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			exitCode = -1
+			stderr = fmt.Sprintf("log command timed out after %d seconds", defaultBashTimeoutSeconds)
+		} else {
+			return nil, fmt.Errorf("failed to tail logs on sprite: %w", runErr)
+		}
+	}
+
+	return &AppLogsResult{
+		App:       meta.Name,
+		Lines:     lines,
+		Output:    stdout,
+		Stderr:    stderr,
+		ExitCode:  exitCode,
+		RuntimeMS: runtimeMS,
+	}, nil
 }
 
 func (s *Service) Delete(ctx context.Context, appName string) (*AppDeleteResult, error) {

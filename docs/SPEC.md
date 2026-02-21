@@ -67,6 +67,10 @@ Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/han
 - Notes: `GET/POST /api/notes`, `GET/PUT/DELETE /api/notes/{id}`, `POST /api/notes/search`
 - Storage: `GET /api/storage`
 - API keys: `POST /api/keys`, `GET /api/keys`, `DELETE /api/keys/{id}`
+- Apps (management): `GET /api/apps`, `GET /api/apps/{name}`, `DELETE /api/apps/{name}`
+- Apps filesystem: `GET /api/apps/{name}/files`, `GET /api/apps/{name}/files/{path...}`
+- Apps logs: `GET /api/apps/{name}/logs` (optional `?lines=<n>`, capped server-side)
+- Deployment remains MCP-only: `app_create`, `app_write`, `app_bash`
 
 ### OAuth Provider
 - Metadata: `/.well-known/*`

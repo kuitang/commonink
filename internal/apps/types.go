@@ -12,6 +12,20 @@ type AppMetadata struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// AppFileEntry describes one file or directory in a Sprite app filesystem listing.
+type AppFileEntry struct {
+	Path       string    `json:"path"`
+	Kind       string    `json:"kind"` // file | dir
+	SizeBytes  int64     `json:"size_bytes"`
+	ModifiedAt time.Time `json:"modified_at"`
+}
+
+// AppListFilesResult is the response payload for filesystem listing.
+type AppListFilesResult struct {
+	App   string         `json:"app"`
+	Files []AppFileEntry `json:"files"`
+}
+
 // AppCreateAttempt captures one candidate attempted during app_create.
 type AppCreateAttempt struct {
 	Name              string `json:"name"`
@@ -58,9 +72,18 @@ type AppBashResult struct {
 	TimeoutSeconds int  `json:"timeout_seconds"`
 }
 
+// AppLogsResult is the response payload for app log tailing.
+type AppLogsResult struct {
+	App      string `json:"app"`
+	Lines    int    `json:"lines"`
+	Output   string `json:"output"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode int    `json:"exit_code"`
+	RuntimeMS int64 `json:"runtime_ms"`
+}
+
 // AppDeleteResult is the response payload for app_delete.
 type AppDeleteResult struct {
 	App     string `json:"app"`
 	Deleted bool   `json:"deleted"`
 }
-

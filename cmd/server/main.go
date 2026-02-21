@@ -310,6 +310,7 @@ func main() {
 
 	// Create authenticated notes handler with rate limiting
 	notesHandler := &AuthenticatedNotesHandler{}
+	appsHandler := &AuthenticatedAppsHandler{SpriteToken: resolvedSpriteToken}
 
 	// Register protected notes API routes with rate limiting
 	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.ListNotes))))
@@ -320,6 +321,15 @@ func main() {
 	mux.Handle("POST /api/notes/search", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.SearchNotes))))
 	mux.Handle("GET /api/storage", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.GetStorageUsage))))
 	log.Println("Protected notes API routes registered at /api/notes with rate limiting")
+
+	// Register protected apps management API routes with rate limiting
+	mux.Handle("GET /api/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListApps))))
+	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
+	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
+	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
+	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
+	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	log.Println("Protected apps API routes registered at /api/apps with rate limiting")
 
 	// Register API Key routes
 	apiKeyHandler := auth.NewAPIKeyHandler(userService)
@@ -428,6 +438,13 @@ func main() {
 	log.Println("    GET  /api/keys                   - List API keys (protected)")
 	log.Println("    POST /api/keys                   - Create API key (protected)")
 	log.Println("    DELETE /api/keys/{id}            - Revoke API key (protected)")
+	log.Println("  Apps API (management, rate limited):")
+	log.Println("    GET  /api/apps                   - List apps (protected)")
+	log.Println("    GET  /api/apps/{name}            - Get app metadata (protected)")
+	log.Println("    DELETE /api/apps/{name}          - Delete app + sprite (protected)")
+	log.Println("    GET  /api/apps/{name}/files      - List app files on sprite (protected)")
+	log.Println("    GET  /api/apps/{name}/files/{path...} - Read app file (protected)")
+	log.Println("    GET  /api/apps/{name}/logs       - Tail app logs (protected)")
 	log.Println("  Billing:")
 	log.Println("    GET  /pricing                    - Pricing page")
 	log.Println("    POST /billing/checkout           - Create checkout session")
@@ -807,6 +824,201 @@ func (h *AuthenticatedNotesHandler) GetStorageUsage(w http.ResponseWriter, r *ht
 	}
 
 	writeJSON(w, http.StatusOK, usage)
+}
+
+// AuthenticatedAppsHandler wraps apps management operations with auth context.
+type AuthenticatedAppsHandler struct {
+	SpriteToken string
+}
+
+func (h *AuthenticatedAppsHandler) getService(r *http.Request) (*apps.Service, error) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		return nil, fmt.Errorf("no user database in context")
+	}
+	userID := auth.GetUserID(r.Context())
+	return apps.NewService(userDB, userID, h.SpriteToken), nil
+}
+
+func appErrorStatus(err error) int {
+	if err == nil {
+		return http.StatusInternalServerError
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "not found"):
+		return http.StatusNotFound
+	case strings.Contains(msg, "path is required"),
+		strings.Contains(msg, "must be relative"),
+		strings.Contains(msg, "invalid lines parameter"):
+		return http.StatusBadRequest
+	case strings.Contains(msg, "not configured"):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeAppError(w http.ResponseWriter, action string, err error) {
+	status := appErrorStatus(err)
+	if status == http.StatusInternalServerError {
+		writeError(w, status, "Failed to "+action+": "+err.Error())
+		return
+	}
+	writeError(w, status, err.Error())
+}
+
+// ListApps handles GET /api/apps - returns all apps for current user.
+func (h *AuthenticatedAppsHandler) ListApps(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	items, err := svc.List(r.Context())
+	if err != nil {
+		writeAppError(w, "list apps", err)
+		return
+	}
+
+	response := struct {
+		Apps []apps.AppMetadata `json:"apps"`
+	}{
+		Apps: items,
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// GetApp handles GET /api/apps/{name} - returns app metadata.
+func (h *AuthenticatedAppsHandler) GetApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	item, err := svc.Get(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "get app", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, item)
+}
+
+// DeleteApp handles DELETE /api/apps/{name} - destroys sprite and deletes metadata.
+func (h *AuthenticatedAppsHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	result, err := svc.Delete(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "delete app", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ListFiles handles GET /api/apps/{name}/files - lists app files on sprite.
+func (h *AuthenticatedAppsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	result, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "list app files", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// GetFile handles GET /api/apps/{name}/files/{path...} - reads one app file.
+func (h *AuthenticatedAppsHandler) GetFile(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	filePath := strings.TrimSpace(r.PathValue("path"))
+	if filePath == "" {
+		writeError(w, http.StatusBadRequest, "File path is required")
+		return
+	}
+
+	result, err := svc.ReadFile(r.Context(), name, filePath)
+	if err != nil {
+		writeAppError(w, "read app file", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// GetLogs handles GET /api/apps/{name}/logs - tails recent app logs.
+func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	lines := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid lines parameter: must be a positive integer")
+			return
+		}
+		lines = parsed
+	}
+
+	result, err := svc.TailLogs(r.Context(), name, lines)
+	if err != nil {
+		writeAppError(w, "tail app logs", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // AuthenticatedMCPHandler wraps MCP with auth context
