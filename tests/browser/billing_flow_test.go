@@ -87,11 +87,11 @@ func TestBilling_PricingPage_Properties(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get pricing page content: %v", err)
 	}
-	if !strings.Contains(content, "$2") {
-		t.Error("Pro card should show $2 monthly price")
+	if !strings.Contains(content, "$5") {
+		t.Error("Pro card should show $5 monthly price")
 	}
-	if !strings.Contains(content, "$20") {
-		t.Error("Pro card should show $20 annual price")
+	if !strings.Contains(content, "$50") {
+		t.Error("Pro card should show $50 annual price")
 	}
 
 	// Verify mock mode message

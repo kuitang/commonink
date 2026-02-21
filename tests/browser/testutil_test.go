@@ -1101,29 +1101,29 @@ func (env *BrowserTestEnv) SeedApp(t testing.TB, sessionID, appName string) stri
 	// Register cleanup to delete the app
 	t.Cleanup(func() {
 		env.MCPCallTool(t, sessionID, "app_delete", map[string]any{
-			"names": []string{appName},
+			"app": appName,
 		})
 	})
 
 	// 2. Write the Python test server
 	env.MCPCallTool(t, sessionID, "app_write", map[string]any{
-		"app_name": appName,
-		"path":     "server.py",
-		"content":  seedAppPythonServer,
+		"app":     appName,
+		"path":    "server.py",
+		"content": seedAppPythonServer,
 	})
 
 	// 3. Create the web service
 	env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
-		"app_name": appName,
-		"command":  "sprite-env services create web --cmd 'python3 server.py' --http-port 8080",
+		"app":     appName,
+		"command": "sprite-env services create web --cmd 'python3 server.py' --http-port 8080",
 	})
 
 	// 4. Poll until the server is reachable (max 30s)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		result := env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
-			"app_name": appName,
-			"command":  "curl -sf http://localhost:8080",
+			"app":     appName,
+			"command": "curl -sf http://localhost:8080",
 		})
 
 		// Check if the command succeeded (non-empty result without error)
@@ -1139,8 +1139,8 @@ func (env *BrowserTestEnv) SeedApp(t testing.TB, sessionID, appName string) stri
 
 	// 5. Get the public URL from app metadata
 	appResult := env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
-		"app_name": appName,
-		"command":  "sprite-env services url web",
+		"app":     appName,
+		"command": "sprite-env services url web",
 	})
 	var urlResult struct {
 		Stdout string `json:"stdout"`
