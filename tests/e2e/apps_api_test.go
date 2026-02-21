@@ -401,6 +401,10 @@ func testAppsAPI_Roundtrip_CreateGetDelete_Properties(rt *rapid.T, env *appsAPIE
 		rt.Fatalf("failed to parse MCP result: %v (%s)", err, string(result))
 	}
 	if toolResult.IsError {
+		// Rate limiting is expected when running many rapid iterations.
+		if len(toolResult.Content) > 0 && strings.Contains(toolResult.Content[0].Text, "rate_limited") {
+			rt.Skipf("sprite creation rate limited, skipping iteration")
+		}
 		rt.Fatalf("app_create returned isError=true: %s", string(result))
 	}
 
