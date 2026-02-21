@@ -11,6 +11,7 @@ package claude
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,7 +51,7 @@ func getAuthenticatedMCPConfig(t testing.TB, accessToken string) string {
 	configPath := filepath.Join(tempDir, ".mcp.json")
 	config := map[string]any{
 		"mcpServers": map[string]any{
-			"agent-notes": map[string]any{
+			conformanceMCPServerName: map[string]any{
 				"type": "http",
 				"url":  srv.BaseURL + "/mcp",
 				"headers": map[string]string{
@@ -62,6 +63,9 @@ func getAuthenticatedMCPConfig(t testing.TB, accessToken string) string {
 	configBytes, _ := json.MarshalIndent(config, "", "  ")
 	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
 		t.Fatalf("Failed to write MCP config: %v", err)
+	}
+	if err := verifyClaudeMCPURLViaList(configPath, srv.BaseURL+"/mcp"); err != nil {
+		t.Fatalf("Hermetic MCP URL preflight failed: %v", err)
 	}
 	return configPath
 }
@@ -104,7 +108,45 @@ type ToolCall struct {
 	ServerID string
 }
 
+const conformanceMCPServerName = "agent-notes-conformance-local"
 const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash. For app requests with unspecified stack (for example 'make me a todo list app'), default to a minimal Flask app (app.py + requirements.txt), then register sprite-env service on port 8080."
+
+var (
+	verifyMCPURLOnce sync.Once
+	verifyMCPURLErr  error
+)
+
+func verifyClaudeMCPURLViaList(mcpConfigPath, expectedURL string) error {
+	verifyMCPURLOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "claude", "mcp", "list")
+		cmd.Dir = filepath.Dir(mcpConfigPath)
+		cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
+
+		output, err := cmd.CombinedOutput()
+		if ctx.Err() == context.DeadlineExceeded {
+			verifyMCPURLErr = fmt.Errorf("claude mcp list timed out after 20s")
+			return
+		}
+		if err != nil {
+			verifyMCPURLErr = fmt.Errorf("claude mcp list failed: %w\noutput:\n%s", err, string(output))
+			return
+		}
+
+		expectedEntry := fmt.Sprintf("%s: %s", conformanceMCPServerName, expectedURL)
+		if !strings.Contains(string(output), expectedEntry) {
+			verifyMCPURLErr = fmt.Errorf(
+				"claude mcp list missing expected MCP URL entry %q\noutput:\n%s",
+				expectedEntry,
+				string(output),
+			)
+		}
+	})
+
+	return verifyMCPURLErr
+}
 
 // filterEnv returns a copy of env with the named variable removed.
 func filterEnv(env []string, name string) []string {
