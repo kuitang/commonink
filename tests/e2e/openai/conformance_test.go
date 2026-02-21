@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"strings"
 	"testing"
@@ -52,6 +53,7 @@ type testEnv struct {
 	client      *openai.Client
 	mcpClient   *testutil.MCPClient
 	mcpURL      string
+	serverLabel string
 	accessToken string
 	userID      string
 }
@@ -79,12 +81,15 @@ func setupTestEnv(t *testing.T) *testEnv {
 		t.Skip("TEST_PUBLIC_URL not set; OpenAI MCP connector cannot reach localhost test servers")
 	}
 	mcpURL := strings.TrimRight(publicURL, "/") + "/mcp"
+	serverLabel := buildOpenAIMCPServerLabel(srv.Label, t.Name()+":"+creds.UserID)
 	t.Logf("Using public MCP URL for OpenAI: %s", mcpURL)
+	t.Logf("Using OpenAI MCP server label: %s", serverLabel)
 
 	return &testEnv{
 		client:      &openaiClient,
 		mcpClient:   testutil.NewMCPClient(srv.BaseURL, creds.AccessToken),
 		mcpURL:      mcpURL,
+		serverLabel: serverLabel,
 		accessToken: creds.AccessToken,
 		userID:      creds.UserID,
 	}
@@ -99,7 +104,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 func (env *testEnv) getMCPTool() responses.ToolUnionParam {
 	return responses.ToolUnionParam{
 		OfMcp: &responses.ToolMcpParam{
-			ServerLabel: "agent-notes",
+			ServerLabel: env.serverLabel,
 			ServerURL:   openai.String(env.mcpURL),
 			RequireApproval: responses.ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalSetting: openai.String("never"),
@@ -109,6 +114,35 @@ func (env *testEnv) getMCPTool() responses.ToolUnionParam {
 			},
 		},
 	}
+}
+
+func buildOpenAIMCPServerLabel(serverLabel, entropy string) string {
+	label := sanitizeOpenAIIdentifier(serverLabel)
+	if label == "" {
+		label = "default"
+	}
+	sum := crc32.ChecksumIEEE([]byte(entropy))
+	return fmt.Sprintf("agent-notes-%s-%08x", label, sum)
+}
+
+func sanitizeOpenAIIdentifier(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, ch := range raw {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			b.WriteRune(ch)
+		case ch >= '0' && ch <= '9':
+			b.WriteRune(ch)
+		case ch == '-', ch == '_':
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // =============================================================================
@@ -683,7 +717,13 @@ func TestOpenAI_AppWorkflow_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	prompt := "make me a todo list app"
+	base := fmt.Sprintf("oa-workflow-%d", time.Now().UnixNano()%1000000)
+	nameA := base + "-a"
+	nameB := base + "-b"
+	prompt := fmt.Sprintf(
+		"make me a todo list app. Use app_create with candidate names ['%s','%s'] before writing code.",
+		nameA, nameB,
+	)
 
 	resp, toolCalls, _, err := env.runConversation(ctx, t, prompt, "")
 	if err != nil {

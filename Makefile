@@ -121,10 +121,14 @@ test-conformance:
 		echo "Run: export NGROK_AUTHTOKEN=\"<your ngrok token>\" && ngrok config add-authtoken \"$$NGROK_AUTHTOKEN\""; \
 		exit 1; \
 	fi; \
-	test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	openai_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	if [ "$$claude_test_port" = "$$openai_test_port" ]; then \
+		claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	fi; \
 	ngrok_log="$$(mktemp -t ngrok-log-XXXXXX)"; \
 	tunnels_json="$$(mktemp -t ngrok-tunnels-XXXXXX)"; \
-	ngrok http "$$test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
+	ngrok http "$$openai_test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
 	ngrok_pid="$$!"; \
 	cleanup() { \
 		kill "$$ngrok_pid" >/dev/null 2>&1 || true; \
@@ -146,13 +150,14 @@ test-conformance:
 		exit 1; \
 	fi; \
 	echo "ngrok tunnel URL: $$public_url"; \
+	echo "Conformance server ports: claude=$$claude_test_port openai=$$openai_test_port"; \
 	echo "Running conformance packages in parallel with isolated env"; \
 	set +e; \
-	env -u TEST_PUBLIC_URL -u TEST_LISTEN_PORT \
+	TEST_LISTEN_PORT="$$claude_test_port" TEST_SERVER_LABEL="claude" env -u TEST_PUBLIC_URL \
 		go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
 		./tests/e2e/claude -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
 	claude_pid="$$!"; \
-	TEST_PUBLIC_URL="$$public_url" TEST_LISTEN_PORT="$$test_port" \
+	TEST_PUBLIC_URL="$$public_url" TEST_LISTEN_PORT="$$openai_test_port" TEST_SERVER_LABEL="openai" \
 		go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
 		./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
 	openai_pid="$$!"; \
@@ -198,10 +203,14 @@ test-full:
 		echo "Run: export NGROK_AUTHTOKEN=\"<your ngrok token>\" && ngrok config add-authtoken \"$$NGROK_AUTHTOKEN\""; \
 		exit 1; \
 	fi; \
-	test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	openai_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	if [ "$$claude_test_port" = "$$openai_test_port" ]; then \
+		claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	fi; \
 	ngrok_log="$$(mktemp -t ngrok-log-XXXXXX)"; \
 	tunnels_json="$$(mktemp -t ngrok-tunnels-XXXXXX)"; \
-	ngrok http "$$test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
+	ngrok http "$$openai_test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
 	ngrok_pid="$$!"; \
 	cleanup() { \
 		kill "$$ngrok_pid" >/dev/null 2>&1 || true; \
@@ -224,8 +233,8 @@ test-full:
 		exit 1; \
 	fi; \
 	echo "ngrok tunnel URL: $$public_url"; \
+	echo "Conformance server ports: claude=$$claude_test_port openai=$$openai_test_port"; \
 	export TEST_PUBLIC_URL="$$public_url"; \
-	export TEST_LISTEN_PORT="$$test_port"; \
 	run_id="$$(date -u +%Y%m%dT%H%M%S)-$$-$$RANDOM"; \
 	log_path="test-results/full-test-$${run_id}.log"; \
 	coverage_out="test-results/coverage-$${run_id}.out"; \
@@ -240,15 +249,15 @@ test-full:
 			echo "Running browser packages"; \
 			go test -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
 				$$browser_packages; \
-			echo "Running conformance packages with -rapid.checks=$(RAPID_CHECKS_CONFORMANCE)"; \
-			set +e; \
-			env -u TEST_PUBLIC_URL -u TEST_LISTEN_PORT \
-				go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
-				./tests/e2e/claude -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
-			claude_pid="$$!"; \
-			TEST_PUBLIC_URL="$$public_url" TEST_LISTEN_PORT="$$test_port" \
-				go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
-				./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
+				echo "Running conformance packages with -rapid.checks=$(RAPID_CHECKS_CONFORMANCE)"; \
+				set +e; \
+				TEST_LISTEN_PORT="$$claude_test_port" TEST_SERVER_LABEL="claude" env -u TEST_PUBLIC_URL \
+					go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+					./tests/e2e/claude -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
+				claude_pid="$$!"; \
+				TEST_PUBLIC_URL="$$public_url" TEST_LISTEN_PORT="$$openai_test_port" TEST_SERVER_LABEL="openai" \
+					go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+					./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
 			openai_pid="$$!"; \
 			wait "$$claude_pid"; claude_rc="$$?"; \
 			wait "$$openai_pid"; openai_rc="$$?"; \
