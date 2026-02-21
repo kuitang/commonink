@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_is_public ON notes(is_public);
-CREATE INDEX IF NOT EXISTS idx_notes_deleted_at ON notes(deleted_at);
+-- idx_notes_deleted_at is created via UserDBMigrations (after ALTER TABLE ADD COLUMN)
 
 -- FTS5 virtual table for full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_notes USING fts5(
