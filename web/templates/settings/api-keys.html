@@ -57,14 +57,14 @@
                     <label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Key Name</label>
                     <input type="text" name="name" id="name" required
                            placeholder="e.g., Claude Code, ChatGPT, CI/CD"
-                           class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                           class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">A descriptive name to identify this API key</p>
                 </div>
 
                 <div>
                     <label for="scope" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Permissions</label>
                     <select name="scope" id="scope"
-                            class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                            class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         <option value="read_write">Read and Write (recommended)</option>
                         <option value="read">Read Only</option>
                     </select>
@@ -73,7 +73,7 @@
                 <div>
                     <label for="expires_in" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Expiration</label>
                     <select name="expires_in" id="expires_in"
-                            class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                            class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         <option value="2592000">30 days</option>
                         <option value="7776000">90 days</option>
                         <option value="15552000">180 days</option>
@@ -87,19 +87,19 @@
                         <div>
                             <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
                             <input type="email" name="email" id="email" required
-                                   class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                                   class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         </div>
                         <div>
                             <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
                             <input type="password" name="password" id="password" required
-                                   class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                                   class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         </div>
                     </div>
                 </div>
 
                 <div class="flex justify-end">
                     <button type="submit"
-                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-input shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+                            class="themed-btn-primary px-4 py-2 text-sm">
                         Create API Key
                     </button>
                 </div>
@@ -190,14 +190,14 @@
                     <label for="oauth-client-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Client Name</label>
                     <input type="text" id="oauth-client-name" required
                            placeholder="e.g., My ChatGPT Connector"
-                           class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                           class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">A descriptive name for this OAuth client</p>
                 </div>
 
                 <div>
                     <label for="oauth-platform" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Platform</label>
                     <select id="oauth-platform"
-                            class="mt-1 block w-full rounded-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
+                            class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
                         <option value="chatgpt">ChatGPT (confidential client)</option>
                         <option value="claude">Claude (public client)</option>
                     </select>
@@ -214,7 +214,7 @@
 
                 <div class="flex justify-end">
                     <button type="submit" id="oauth-submit-btn"
-                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-input shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+                            class="themed-btn-primary px-4 py-2 text-sm">
                         Generate Credentials
                     </button>
                 </div>
@@ -223,7 +223,7 @@
     </div>
 
     <!-- OAuth Credentials Result Dialog -->
-    <dialog id="oauth-credentials-dialog" class="rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-0 w-full max-w-lg backdrop:bg-black/50">
+    <dialog id="oauth-credentials-dialog" class="rounded-card shadow-card border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-0 w-full max-w-lg backdrop:bg-black/50">
         <div class="px-6 py-6">
             <div class="flex items-center mb-4">
                 <div class="flex h-10 w-10 items-center justify-center rounded-full bg-success-100 dark:bg-success-900/30 mr-3">
@@ -290,7 +290,7 @@
         </div>
         <div class="bg-gray-50 dark:bg-gray-700/50 px-6 py-4 border-t border-gray-200 dark:border-gray-600">
             <button type="button" onclick="document.getElementById('oauth-credentials-dialog').close()"
-                    class="w-full rounded-input bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                    class="themed-btn-primary w-full px-4 py-2.5 text-sm">
                 Close
             </button>
         </div>
@@ -302,7 +302,7 @@
         <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
             Include your API key in the Authorization header when making API requests:
         </p>
-        <div class="bg-gray-800 dark:bg-gray-950 rounded-md p-4 overflow-x-auto">
+        <div class="bg-gray-800 dark:bg-gray-950 rounded-card p-4 overflow-x-auto">
             <code class="text-sm text-success-400 font-mono">
                 curl -H "Authorization: Bearer &lt;YOUR_API_KEY&gt;" \<br>
                 &nbsp;&nbsp;&nbsp;&nbsp; {{.BaseURL}}/api/notes
@@ -315,13 +315,40 @@
 </div>
 
 <script>
+function fallbackCopy(text, onSuccess, onFail) {
+    var textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        if (onSuccess) onSuccess();
+    } catch (e) {
+        if (onFail) onFail();
+    }
+    document.body.removeChild(textarea);
+}
+
+function copyToClipboard(text, onSuccess, onFail) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(onSuccess).catch(function() {
+            fallbackCopy(text, onSuccess, onFail);
+        });
+    } else {
+        fallbackCopy(text, onSuccess, onFail);
+    }
+}
+
 function copyToken() {
     var tokenElement = document.getElementById('new-token');
     var copyIcon = document.getElementById('copy-icon');
     var checkIcon = document.getElementById('check-icon');
     var copyText = document.getElementById('copy-text');
+    var text = tokenElement.textContent.trim();
 
-    navigator.clipboard.writeText(tokenElement.textContent).then(function() {
+    copyToClipboard(text, function() {
         copyIcon.classList.add('hidden');
         checkIcon.classList.remove('hidden');
         copyText.textContent = 'Copied!';
@@ -331,14 +358,26 @@ function copyToken() {
             checkIcon.classList.add('hidden');
             copyText.textContent = 'Copy';
         }, 2000);
+    }, function() {
+        copyText.textContent = 'Copy failed';
+        setTimeout(function() {
+            copyText.textContent = 'Copy';
+        }, 2000);
     });
 }
 
 function copyOAuthField(elementId, button) {
     var element = document.getElementById(elementId);
-    var originalText = button.textContent;
-    navigator.clipboard.writeText(element.textContent).then(function() {
+    var originalText = button.textContent.trim();
+    var text = element.textContent.trim();
+
+    copyToClipboard(text, function() {
         button.textContent = 'Copied!';
+        setTimeout(function() {
+            button.textContent = originalText;
+        }, 2000);
+    }, function() {
+        button.textContent = 'Failed';
         setTimeout(function() {
             button.textContent = originalText;
         }, 2000);

@@ -5,10 +5,10 @@
         <!-- App Icon -->
         <div class="flex justify-center">
             {{if .ClientIcon}}
-            <img src="{{.ClientIcon}}" alt="{{.ClientName}} logo" class="h-16 w-16 rounded-xl shadow-sm" />
+            <img src="{{.ClientIcon}}" alt="{{.ClientName}} logo" class="h-16 w-16 rounded-card" />
             {{else}}
             <!-- Placeholder icon when no client icon provided -->
-            <div class="h-16 w-16 rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center shadow-sm">
+            <div class="h-16 w-16 rounded-card bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center">
                 <svg class="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
                 </svg>
@@ -82,7 +82,7 @@
                 <button type="submit"
                         name="decision"
                         value="allow"
-                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-input shadow-sm text-sm font-semibold text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 dark:focus:ring-offset-gray-800 transition-colors">
+                        class="themed-btn-primary w-full py-3 px-4 text-sm">
                     Allow
                 </button>
 
@@ -90,7 +90,7 @@
                 <button type="submit"
                         name="decision"
                         value="deny"
-                        class="w-full flex justify-center py-3 px-4 border border-gray-300 dark:border-gray-600 rounded-input shadow-sm text-sm font-semibold text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 dark:focus:ring-offset-gray-800 transition-colors">
+                        class="themed-btn-secondary w-full py-3 px-4 text-sm">
                     Deny
                 </button>
             </form>

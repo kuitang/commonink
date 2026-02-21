@@ -21,7 +21,7 @@
         <div class="bg-white dark:bg-gray-800 shadow-card rounded-card p-8 border border-gray-200 dark:border-gray-700">
             <div class="text-center space-y-6">
                 <!-- Email display -->
-                <div class="rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4 border border-gray-200 dark:border-gray-600">
+                <div class="rounded-card bg-gray-50 dark:bg-gray-700/50 p-4 border border-gray-200 dark:border-gray-600">
                     <p class="text-sm text-gray-600 dark:text-gray-400">Magic link sent to:</p>
                     <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{{.Email}}</p>
                 </div>
@@ -32,7 +32,7 @@
                         Click the link in the email to sign in to your account. The link will expire in 15 minutes.
                     </p>
 
-                    <div class="rounded-lg bg-primary-50 dark:bg-primary-900/20 p-4 border border-primary-200 dark:border-primary-800">
+                    <div class="rounded-card bg-primary-50 dark:bg-primary-900/20 p-4 border border-primary-200 dark:border-primary-800">
                         <div class="flex">
                             <svg class="h-5 w-5 text-primary-600 dark:text-primary-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -52,7 +52,7 @@
                     <form action="/auth/magic" method="POST" class="mt-3">
                         <input type="hidden" name="email" value="{{.Email}}">
                         <button type="submit"
-                                class="inline-flex items-center justify-center rounded-input border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-600 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors">
+                                class="themed-btn-secondary px-4 py-2 text-sm">
                             <svg class="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>

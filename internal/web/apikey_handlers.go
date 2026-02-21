@@ -143,38 +143,11 @@ func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) 
 	name := r.FormValue("name")
 	scope := r.FormValue("scope")
 	expiresInStr := r.FormValue("expires_in")
-	email := r.FormValue("email")
-	password := r.FormValue("password")
 
 	// Validate required fields
 	if name == "" {
 		http.Redirect(w, r, "/api-keys/new?error=API+key+name+is+required", http.StatusFound)
 		return
-	}
-
-	if email == "" || password == "" {
-		http.Redirect(w, r, "/api-keys/new?error=Email+and+password+required+for+authentication", http.StatusFound)
-		return
-	}
-
-	// Verify credentials
-	account, err := userDB.Queries().GetAccount(r.Context(), userID)
-	if err != nil {
-		http.Redirect(w, r, "/api-keys/new?error=Failed+to+verify+credentials", http.StatusFound)
-		return
-	}
-
-	if account.Email != email {
-		http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
-		return
-	}
-
-	// Verify password if hash exists
-	if account.PasswordHash.Valid && account.PasswordHash.String != "" {
-		if !h.authService.VerifyPasswordHash(password, account.PasswordHash.String) {
-			http.Redirect(w, r, "/api-keys/new?error=Invalid+credentials", http.StatusFound)
-			return
-		}
 	}
 
 	// Parse expiration

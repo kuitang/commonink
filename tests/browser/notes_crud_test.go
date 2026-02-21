@@ -588,3 +588,83 @@ func TestBrowser_NotesCRUD_NewNoteButton(t *testing.T) {
 		t.Errorf("Expected heading 'Create New Note', got '%s'", headingText)
 	}
 }
+
+// =============================================================================
+// Test: Ctrl+Enter saves note (regression test for shortcut targeting wrong form)
+// =============================================================================
+
+func TestCtrlEnter_SavesNote(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping browser test in short mode")
+	}
+
+	env := SetupBrowserTestEnv(t)
+	env.InitBrowser(t)
+	ctx := env.NewContext(t)
+	defer ctx.Close()
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page: %v", err)
+	}
+	defer page.Close()
+
+	testEmail := GenerateUniqueEmail("test-ctrlenter")
+	env.LoginUser(t, ctx, testEmail)
+
+	// Navigate to /notes/new
+	Navigate(t, page, env.BaseURL, "/notes/new")
+
+	// Wait for the form to be visible
+	titleInput := WaitForSelector(t, page, "input#title")
+	contentTextarea := WaitForSelector(t, page, "textarea#content")
+
+	// Fill in the form
+	noteTitle := "Ctrl+Enter Test Note"
+	err = titleInput.Fill(noteTitle)
+	if err != nil {
+		t.Fatalf("Failed to fill title: %v", err)
+	}
+
+	err = contentTextarea.Fill("Content saved via Ctrl+Enter keyboard shortcut.")
+	if err != nil {
+		t.Fatalf("Failed to fill content: %v", err)
+	}
+
+	// Press Ctrl+Enter to submit the form
+	err = page.Keyboard().Press("Control+Enter")
+	if err != nil {
+		t.Fatalf("Failed to press Ctrl+Enter: %v", err)
+	}
+
+	// Wait for navigation to the note view page (should be /notes/{id}, not / or /notes/new)
+	err = page.WaitForURL("**/notes/**", playwright.PageWaitForURLOptions{
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
+	if err != nil {
+		currentURL := page.URL()
+		t.Fatalf("Ctrl+Enter did not navigate to note view page. Current URL: %s, error: %v", currentURL, err)
+	}
+
+	// Verify the URL is NOT the homepage and NOT the new note page
+	currentURL := page.URL()
+	if strings.HasSuffix(currentURL, "/") {
+		t.Fatalf("Ctrl+Enter redirected to homepage instead of saving the note. URL: %s", currentURL)
+	}
+	if strings.HasSuffix(currentURL, "/notes/new") {
+		t.Fatalf("Ctrl+Enter did not submit the form, still on /notes/new. URL: %s", currentURL)
+	}
+	if strings.HasSuffix(currentURL, "/login") {
+		t.Fatalf("Ctrl+Enter triggered logout instead of saving the note. URL: %s", currentURL)
+	}
+
+	// Verify the note title is displayed on the view page
+	titleElement := WaitForSelector(t, page, "h1")
+	titleText, err := titleElement.TextContent()
+	if err != nil {
+		t.Fatalf("Failed to get title text: %v", err)
+	}
+
+	if strings.TrimSpace(titleText) != noteTitle {
+		t.Errorf("Expected title %q, got %q", noteTitle, strings.TrimSpace(titleText))
+	}
+}
