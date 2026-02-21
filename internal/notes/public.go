@@ -40,10 +40,13 @@ func publicNoteKey(userID, noteID string) string {
 	return fmt.Sprintf("public/%s/%s.html", userID, noteID)
 }
 
-// SetPublic toggles the public visibility of a note.
-// When isPublic is true, renders the note to HTML and uploads to object storage.
-// When isPublic is false, deletes the rendered HTML from object storage.
-func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, noteID string, isPublic bool) error {
+// SetPublic sets the visibility of a note.
+// When vis >= VisibilityPublicAnonymous: renders HTML, uploads to S3, creates short URL.
+//   - VisibilityPublicAttributed: looks up user email for author attribution.
+//   - VisibilityPublicAnonymous: empty author string.
+//
+// When vis == VisibilityPrivate: deletes from S3 and short URL.
+func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, noteID string, vis NoteVisibility) error {
 	if noteID == "" {
 		return fmt.Errorf("note ID is required")
 	}
@@ -59,15 +62,10 @@ func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, no
 
 	nowUnix := time.Now().UTC().Unix()
 
-	// Update the is_public flag in the database
-	isPublicValue := int64(0)
-	if isPublic {
-		isPublicValue = 1
-	}
-
+	// Update the is_public value in the database
 	err = userDB.Queries().UpdateNotePublic(ctx, userdb.UpdateNotePublicParams{
 		ID:        noteID,
-		IsPublic:  sql.NullInt64{Int64: isPublicValue, Valid: true},
+		IsPublic:  sql.NullInt64{Int64: int64(vis), Valid: true},
 		UpdatedAt: nowUnix,
 	})
 	if err != nil {
@@ -77,9 +75,18 @@ func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, no
 	userID := userDB.UserID()
 	key := publicNoteKey(userID, noteID)
 
-	if isPublic {
+	if vis.IsPublic() {
+		// Determine author string for attribution
+		author := ""
+		if vis == VisibilityPublicAttributed {
+			account, err := userDB.Queries().GetAccount(ctx, userID)
+			if err == nil {
+				author = account.Email
+			}
+		}
+
 		// Render note to HTML and upload
-		html, err := renderNoteHTML(dbNote.Title, dbNote.Content, userID, noteID)
+		html, err := renderNoteHTML(dbNote.Title, dbNote.Content, userID, noteID, author)
 		if err != nil {
 			return fmt.Errorf("failed to render note HTML: %w", err)
 		}
@@ -95,7 +102,6 @@ func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, no
 			_, err = s.shortURLSvc.Create(ctx, fullPath)
 			if err != nil {
 				// Log but don't fail - short URL is a convenience feature
-				// In production, you might want to handle this differently
 			}
 		}
 	} else {
@@ -116,7 +122,7 @@ func (s *PublicNoteService) SetPublic(ctx context.Context, userDB *db.UserDB, no
 }
 
 // GetPublic retrieves a public note by ID without requiring authentication.
-// Returns an error if the note is not found or is not public.
+// Returns an error if the note is not found or is not public (is_public >= 1).
 func (s *PublicNoteService) GetPublic(ctx context.Context, userDB *db.UserDB, noteID string) (*Note, error) {
 	if noteID == "" {
 		return nil, fmt.Errorf("note ID is required")
@@ -130,18 +136,22 @@ func (s *PublicNoteService) GetPublic(ctx context.Context, userDB *db.UserDB, no
 		return nil, fmt.Errorf("failed to get note: %w", err)
 	}
 
-	// Check if note is public
-	if !dbNote.IsPublic.Valid || dbNote.IsPublic.Int64 != 1 {
+	// Check if note is public (is_public >= 1)
+	vis := VisibilityPrivate
+	if dbNote.IsPublic.Valid {
+		vis = NoteVisibility(dbNote.IsPublic.Int64)
+	}
+	if !vis.IsPublic() {
 		return nil, fmt.Errorf("note is not public: %s", noteID)
 	}
 
 	return &Note{
-		ID:        dbNote.ID,
-		Title:     dbNote.Title,
-		Content:   dbNote.Content,
-		IsPublic:  true,
-		CreatedAt: time.Unix(dbNote.CreatedAt, 0).UTC(),
-		UpdatedAt: time.Unix(dbNote.UpdatedAt, 0).UTC(),
+		ID:         dbNote.ID,
+		Title:      dbNote.Title,
+		Content:    dbNote.Content,
+		Visibility: vis,
+		CreatedAt:  time.Unix(dbNote.CreatedAt, 0).UTC(),
+		UpdatedAt:  time.Unix(dbNote.UpdatedAt, 0).UTC(),
 	}, nil
 }
 
@@ -167,13 +177,17 @@ func (s *PublicNoteService) ListPublicByUser(ctx context.Context, userDB *db.Use
 
 	notes := make([]*Note, 0, len(dbNotes))
 	for _, dbNote := range dbNotes {
+		vis := VisibilityPublicAnonymous
+		if dbNote.IsPublic.Valid {
+			vis = NoteVisibility(dbNote.IsPublic.Int64)
+		}
 		notes = append(notes, &Note{
-			ID:        dbNote.ID,
-			Title:     dbNote.Title,
-			Content:   dbNote.Content,
-			IsPublic:  true, // All returned notes are public
-			CreatedAt: time.Unix(dbNote.CreatedAt, 0).UTC(),
-			UpdatedAt: time.Unix(dbNote.UpdatedAt, 0).UTC(),
+			ID:         dbNote.ID,
+			Title:      dbNote.Title,
+			Content:    dbNote.Content,
+			Visibility: vis,
+			CreatedAt:  time.Unix(dbNote.CreatedAt, 0).UTC(),
+			UpdatedAt:  time.Unix(dbNote.UpdatedAt, 0).UTC(),
 		})
 	}
 
@@ -181,8 +195,6 @@ func (s *PublicNoteService) ListPublicByUser(ctx context.Context, userDB *db.Use
 }
 
 // GetPublicURL returns the public URL for a note.
-// If a short URL service is configured, returns the short URL.
-// Otherwise, returns the full S3 URL.
 func (s *PublicNoteService) GetPublicURL(userID, noteID string) string {
 	key := publicNoteKey(userID, noteID)
 	return s.s3.GetPublicURL(key)
@@ -210,18 +222,13 @@ func (s *PublicNoteService) GetShortURL(ctx context.Context, userID, noteID stri
 }
 
 // renderNoteHTML renders a note's markdown content to a complete HTML document.
-// Uses RenderMarkdownToHTML from render.go to convert markdown to HTML with
-// proper sanitization and SEO meta tags.
-func renderNoteHTML(title, content, userID, noteID string) ([]byte, error) {
-	// Generate description from content (first 160 characters)
+func renderNoteHTML(title, content, userID, noteID, author string) ([]byte, error) {
 	description := content
 	if len(description) > 160 {
 		description = description[:160] + "..."
 	}
 
-	// Generate canonical URL
 	canonicalURL := fmt.Sprintf("/public/%s/%s", userID, noteID)
 
-	// Use the RenderMarkdownToHTML function which properly converts markdown to HTML
-	return RenderMarkdownToHTML(content, title, description, canonicalURL), nil
+	return RenderMarkdownToHTML(content, title, description, canonicalURL, author), nil
 }

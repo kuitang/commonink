@@ -4,9 +4,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-
-	// Import SQLCipher driver with "sqlite3" driver name.
-	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // NewUserDBInMemory creates an in-memory encrypted UserDB for package db tests.
@@ -18,7 +15,7 @@ func NewUserDBInMemory(userID string) (*UserDB, error) {
 	dekHex := hex.EncodeToString(GetHardcodedDEK())
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
 
-	sqlDB, err := sql.Open("sqlite3", dsn)
+	sqlDB, err := sql.Open(SQLiteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open in-memory user database: %w", err)
 	}
@@ -47,7 +44,7 @@ func NewUserDBInMemory(userID string) (*UserDB, error) {
 
 // NewSessionsDBInMemory creates an in-memory unencrypted SessionsDB for package db tests.
 func NewSessionsDBInMemory() (*SessionsDB, error) {
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	sqlDB, err := sql.Open(SQLiteDriverName, ":memory:")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open in-memory sessions database: %w", err)
 	}

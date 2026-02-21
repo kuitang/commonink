@@ -1,7 +1,9 @@
 package notes
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -37,6 +39,19 @@ func createInMemoryService(t interface {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}
 	return NewService(userDB, FreeStorageLimitBytes)
+}
+
+func mustGetRevisionHash(t interface {
+	Fatalf(format string, args ...interface{})
+}, svc *Service, noteID string) string {
+	note, err := svc.Read(noteID)
+	if err != nil {
+		t.Fatalf("failed to read note: %v", err)
+	}
+	if note.RevisionHash == "" {
+		t.Fatalf("read note missing revision_hash")
+	}
+	return note.RevisionHash
 }
 
 // =============================================================================
@@ -265,6 +280,8 @@ func testUpdate_FieldsModified_Properties(t *rapid.T) {
 		params.Content = &newContent
 		expectedContent = newContent
 	}
+	priorHash := mustGetRevisionHash(t, svc, note.ID)
+	params.PriorHash = &priorHash
 
 	// Property: Update succeeds
 	updated, err := svc.Update(note.ID, params)
@@ -350,6 +367,64 @@ func TestUpdate_EmptyID_Properties(t *testing.T) {
 func FuzzUpdate_EmptyID_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testUpdate_EmptyID_Properties))
+}
+
+// =============================================================================
+// Property: Update honors prior_hash optimistic concurrency precondition
+// =============================================================================
+
+func testUpdate_PriorHash_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: contentGenerator().Draw(t, "content"),
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	correctHash := mustGetRevisionHash(t, svc, note.ID)
+	newContent := "updated-" + rapid.StringMatching(`[a-z]{8}`).Draw(t, "suffix")
+
+	// Property: matching prior_hash succeeds.
+	updated, err := svc.Update(note.ID, UpdateNoteParams{
+		Content:   &newContent,
+		PriorHash: &correctHash,
+	})
+	if err != nil {
+		t.Fatalf("Update with matching prior_hash failed: %v", err)
+	}
+	if updated.Content != newContent {
+		t.Fatalf("Content mismatch: expected %q, got %q", newContent, updated.Content)
+	}
+
+	// Property: stale prior_hash fails with revision conflict.
+	staleHash := correctHash
+	if staleHash[0] == '0' {
+		staleHash = "1" + staleHash[1:]
+	} else {
+		staleHash = "0" + staleHash[1:]
+	}
+	_, err = svc.Update(note.ID, UpdateNoteParams{
+		Content:   &newContent,
+		PriorHash: &staleHash,
+	})
+	if err == nil {
+		t.Fatal("Expected revision conflict for stale prior_hash")
+	}
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("Expected ErrRevisionConflict, got: %v", err)
+	}
+}
+
+func TestUpdate_PriorHash_Properties(t *testing.T) {
+	rapid.Check(t, testUpdate_PriorHash_Properties)
+}
+
+func FuzzUpdate_PriorHash_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUpdate_PriorHash_Properties))
 }
 
 // =============================================================================
@@ -723,8 +798,10 @@ func testCRUD_Workflow_Consistency_Properties(t *rapid.T) {
 
 	// Update
 	newTitle := titleGenerator().Draw(t, "newTitle")
+	priorHash := mustGetRevisionHash(t, svc, note.ID)
 	updated, err := svc.Update(note.ID, UpdateNoteParams{
-		Title: &newTitle,
+		Title:     &newTitle,
+		PriorHash: &priorHash,
 	})
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
@@ -832,4 +909,294 @@ func TestMultipleNotes_Independence_Properties(t *testing.T) {
 func FuzzMultipleNotes_Independence_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testMultipleNotes_Independence_Properties))
+}
+
+// =============================================================================
+// Property: Delete soft-deletes (Read returns error, List excludes)
+// =============================================================================
+
+func testDelete_SoftDelete_ReadFails_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	title := titleGenerator().Draw(t, "title")
+	content := contentGenerator().Draw(t, "content")
+
+	note, err := svc.Create(CreateNoteParams{Title: title, Content: content})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	err = svc.Delete(note.ID)
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Property: Read returns error after soft-delete
+	_, err = svc.Read(note.ID)
+	if err == nil {
+		t.Fatal("Expected error reading soft-deleted note")
+	}
+}
+
+func TestDelete_SoftDelete_ReadFails_Properties(t *testing.T) {
+	rapid.Check(t, testDelete_SoftDelete_ReadFails_Properties)
+}
+
+func FuzzDelete_SoftDelete_ReadFails_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testDelete_SoftDelete_ReadFails_Properties))
+}
+
+// =============================================================================
+// Property: Delete soft-deletes - List excludes deleted note
+// =============================================================================
+
+func testDelete_SoftDelete_ListExcludes_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	title := titleGenerator().Draw(t, "title")
+	content := contentGenerator().Draw(t, "content")
+
+	note, err := svc.Create(CreateNoteParams{Title: title, Content: content})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	err = svc.Delete(note.ID)
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Property: List does not include deleted note
+	result, err := svc.List(100, 0)
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	for _, n := range result.Notes {
+		if n.ID == note.ID {
+			t.Fatal("Soft-deleted note should not appear in list")
+		}
+	}
+	if result.TotalCount != 0 {
+		t.Fatalf("Expected 0 total count, got %d", result.TotalCount)
+	}
+}
+
+func TestDelete_SoftDelete_ListExcludes_Properties(t *testing.T) {
+	rapid.Check(t, testDelete_SoftDelete_ListExcludes_Properties)
+}
+
+func FuzzDelete_SoftDelete_ListExcludes_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testDelete_SoftDelete_ListExcludes_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace performs exact single replacement
+// =============================================================================
+
+func testStrReplace_ExactMatch_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	// Create note with known content containing a unique marker
+	marker := rapid.StringMatching(`[a-z]{8}`).Draw(t, "marker")
+	prefix := contentGenerator().Draw(t, "prefix")
+	suffix := contentGenerator().Draw(t, "suffix")
+	content := prefix + "UNIQUE_" + marker + suffix
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Property: StrReplace with unique match succeeds
+	replacement := "REPLACED_" + marker
+	priorHash := mustGetRevisionHash(t, svc, note.ID)
+	updated, _, err := svc.StrReplace(note.ID, "UNIQUE_"+marker, replacement, false, &priorHash)
+	if err != nil {
+		t.Fatalf("StrReplace failed: %v", err)
+	}
+
+	expectedContent := prefix + replacement + suffix
+	if updated.Content != expectedContent {
+		t.Fatalf("Content mismatch: expected %q, got %q", expectedContent, updated.Content)
+	}
+}
+
+func TestStrReplace_ExactMatch_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_ExactMatch_Properties)
+}
+
+func FuzzStrReplace_ExactMatch_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_ExactMatch_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace returns ErrNoMatch when old_str not found
+// =============================================================================
+
+func testStrReplace_NoMatch_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: "some known content",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	priorHash := mustGetRevisionHash(t, svc, note.ID)
+	_, _, err = svc.StrReplace(note.ID, "nonexistent_text_xyz", "replacement", false, &priorHash)
+	if err == nil {
+		t.Fatal("Expected ErrNoMatch")
+	}
+	if !errors.Is(err, ErrNoMatch) {
+		t.Fatalf("Expected ErrNoMatch, got: %v", err)
+	}
+}
+
+func TestStrReplace_NoMatch_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_NoMatch_Properties)
+}
+
+func FuzzStrReplace_NoMatch_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_NoMatch_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace returns ErrAmbiguousMatch when old_str matches multiple
+// =============================================================================
+
+func testStrReplace_AmbiguousMatch_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	marker := rapid.StringMatching(`[a-z]{6}`).Draw(t, "marker")
+	content := marker + " middle " + marker
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	priorHash := mustGetRevisionHash(t, svc, note.ID)
+	_, _, err = svc.StrReplace(note.ID, marker, "replacement", false, &priorHash)
+	if err == nil {
+		t.Fatal("Expected ErrAmbiguousMatch")
+	}
+	if !errors.Is(err, ErrAmbiguousMatch) {
+		t.Fatalf("Expected ErrAmbiguousMatch, got: %v", err)
+	}
+}
+
+func TestStrReplace_AmbiguousMatch_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_AmbiguousMatch_Properties)
+}
+
+func FuzzStrReplace_AmbiguousMatch_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_AmbiguousMatch_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace with replace_all=true replaces every occurrence
+// =============================================================================
+
+func testStrReplace_ReplaceAll_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	marker := rapid.StringMatching(`[a-z]{6}`).Draw(t, "marker")
+	repeatCount := rapid.IntRange(2, 5).Draw(t, "repeatCount")
+
+	// Build content with marker repeated N times, separated by unique text
+	var parts []string
+	for i := 0; i < repeatCount; i++ {
+		parts = append(parts, fmt.Sprintf("section_%d_%s_end", i, marker))
+	}
+	content := strings.Join(parts, "\n")
+
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Property: replace_all=true replaces every occurrence
+	replacement := "REPLACED"
+	priorHash := mustGetRevisionHash(t, svc, note.ID)
+	updated, _, err := svc.StrReplace(note.ID, marker, replacement, true, &priorHash)
+	if err != nil {
+		t.Fatalf("StrReplace with replace_all=true failed: %v", err)
+	}
+
+	// All occurrences should be replaced
+	remaining := strings.Count(updated.Content, marker)
+	if remaining != 0 {
+		t.Fatalf("Expected 0 remaining occurrences of %q, found %d in %q", marker, remaining, updated.Content)
+	}
+
+	replacedCount := strings.Count(updated.Content, replacement)
+	if replacedCount != repeatCount {
+		t.Fatalf("Expected %d replacements, found %d in %q", repeatCount, replacedCount, updated.Content)
+	}
+}
+
+func TestStrReplace_ReplaceAll_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_ReplaceAll_Properties)
+}
+
+func FuzzStrReplace_ReplaceAll_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_ReplaceAll_Properties))
+}
+
+// =============================================================================
+// Property: StrReplace enforces prior_hash precondition when provided
+// =============================================================================
+
+func testStrReplace_PriorHash_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	marker := rapid.StringMatching(`[a-z]{8}`).Draw(t, "marker")
+	note, err := svc.Create(CreateNoteParams{
+		Title:   titleGenerator().Draw(t, "title"),
+		Content: "before " + marker + " after",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	staleHash := mustGetRevisionHash(t, svc, note.ID)
+	if staleHash[0] == '0' {
+		staleHash = "1" + staleHash[1:]
+	} else {
+		staleHash = "0" + staleHash[1:]
+	}
+
+	_, _, err = svc.StrReplace(note.ID, marker, "replacement", false, &staleHash)
+	if err == nil {
+		t.Fatal("Expected revision conflict for stale prior_hash")
+	}
+	if !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("Expected ErrRevisionConflict, got: %v", err)
+	}
+}
+
+func TestStrReplace_PriorHash_Properties(t *testing.T) {
+	rapid.Check(t, testStrReplace_PriorHash_Properties)
+}
+
+func FuzzStrReplace_PriorHash_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testStrReplace_PriorHash_Properties))
 }

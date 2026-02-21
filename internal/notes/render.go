@@ -16,7 +16,9 @@ import (
 // ensure io is used (required for renderHook signature)
 var _ io.Writer
 
-// htmlTemplate is the template for the complete HTML document
+// htmlTemplate is the template for the complete HTML document.
+// Uses Tailwind CSS CDN with an academic theme: Georgia serif, terracotta accents,
+// warm gray surfaces, CSS-only dark mode via prefers-color-scheme.
 const htmlTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,133 +41,109 @@ const htmlTemplate = `<!DOCTYPE html>
     <meta name="twitter:title" content="{{.Title}}">
     <meta name="twitter:description" content="{{.Description}}">
 
-    <style>
-        :root {
-            --text-color: #1a1a1a;
-            --bg-color: #ffffff;
-            --link-color: #0066cc;
-            --code-bg: #f5f5f5;
-            --border-color: #e0e0e0;
-            --blockquote-border: #ddd;
-        }
+    <!-- Tailwind CSS CDN with academic theme -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+      darkMode: 'media',
+      theme: {
+        extend: {
+          colors: {
+            terracotta: {
+              50:  '#fdf3ef',
+              100: '#fbe4da',
+              200: '#f6c5b4',
+              300: '#f0a084',
+              400: '#e87853',
+              500: '#c4633a',
+              600: '#b0502e',
+              700: '#923f26',
+              800: '#763424',
+              900: '#612c21',
+              950: '#34140f',
+            },
+            warmgray: {
+              50:  '#F5F5F0',
+              100: '#EBEBDF',
+              200: '#D6D6C8',
+              300: '#B8B8A6',
+              400: '#9A9A84',
+              500: '#7D7D68',
+              600: '#636353',
+              700: '#4D4D41',
+              800: '#3A3A32',
+              900: '#2A2A24',
+              950: '#1a1a18',
+            },
+          },
+          fontFamily: {
+            serif: ['Georgia', 'Cambria', '"Times New Roman"', 'Times', 'serif'],
+          },
+        },
+      },
+    }
+    </script>
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --text-color: #e0e0e0;
-                --bg-color: #1a1a1a;
-                --link-color: #66b3ff;
-                --code-bg: #2d2d2d;
-                --border-color: #404040;
-                --blockquote-border: #555;
-            }
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            line-height: 1.6;
-            color: var(--text-color);
-            background-color: var(--bg-color);
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 2rem 1rem;
-        }
-
-        h1, h2, h3, h4, h5, h6 {
-            margin-top: 1.5em;
-            margin-bottom: 0.5em;
-            line-height: 1.3;
-        }
-
-        h1 { font-size: 2rem; }
-        h2 { font-size: 1.5rem; }
-        h3 { font-size: 1.25rem; }
-
-        a {
-            color: var(--link-color);
-            text-decoration: none;
-        }
-
-        a:hover {
-            text-decoration: underline;
-        }
-
-        p {
-            margin: 1em 0;
-        }
-
-        code {
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-            background-color: var(--code-bg);
-            padding: 0.2em 0.4em;
-            border-radius: 3px;
-            font-size: 0.9em;
-        }
-
-        pre {
-            background-color: var(--code-bg);
-            padding: 1rem;
-            border-radius: 6px;
-            overflow-x: auto;
-        }
-
-        pre code {
-            background-color: transparent;
-            padding: 0;
-        }
-
-        blockquote {
-            margin: 1em 0;
-            padding: 0.5em 1em;
-            border-left: 4px solid var(--blockquote-border);
-            color: inherit;
-            opacity: 0.85;
-        }
-
-        ul, ol {
-            margin: 1em 0;
-            padding-left: 2em;
-        }
-
-        li {
-            margin: 0.25em 0;
-        }
-
-        img {
-            max-width: 100%;
-            height: auto;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 1em 0;
-        }
-
-        th, td {
-            border: 1px solid var(--border-color);
-            padding: 0.5em 1em;
-            text-align: left;
-        }
-
-        th {
-            background-color: var(--code-bg);
-        }
-
-        hr {
-            border: none;
-            border-top: 1px solid var(--border-color);
-            margin: 2em 0;
+    <style type="text/tailwindcss">
+        /* Prose overrides for markdown content */
+        article pre {
+            @apply overflow-x-auto;
         }
     </style>
 </head>
-<body>
-    <article>
-        {{.Content}}
-    </article>
+<body class="bg-warmgray-50 dark:bg-warmgray-950 text-warmgray-900 dark:text-warmgray-100 font-serif antialiased">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
+
+        <!-- Minimal public header -->
+        <header class="mb-6 border-b border-warmgray-200 dark:border-warmgray-800 pb-4">
+            <div class="flex items-center justify-between gap-4">
+                <a href="/" class="text-lg font-bold tracking-tight text-warmgray-900 dark:text-warmgray-50">common.ink</a>
+                <span class="inline-flex items-center rounded-full bg-terracotta-100 text-terracotta-900 dark:bg-terracotta-900/50 dark:text-terracotta-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide">Public Note</span>
+            </div>
+        </header>
+
+        <!-- Article header -->
+        <section class="mb-8 border-b border-warmgray-200 dark:border-warmgray-800 pb-6">
+            <h1 class="text-3xl sm:text-4xl font-bold leading-tight text-warmgray-900 dark:text-warmgray-50 mb-3">{{.Title}}</h1>
+            <p class="text-sm text-warmgray-500 dark:text-warmgray-400">
+                By <span class="font-medium text-terracotta-600 dark:text-terracotta-400">{{if .Author}}{{.Author}}{{else}}Anonymous{{end}}</span>
+            </p>
+        </section>
+
+        <!-- Article body -->
+        <article class="
+            prose prose-lg max-w-none
+            prose-headings:font-serif prose-headings:text-warmgray-900 dark:prose-headings:text-warmgray-50
+            prose-h2:text-2xl prose-h2:mt-10 prose-h2:mb-4 prose-h2:border-b prose-h2:border-warmgray-200 dark:prose-h2:border-warmgray-800 prose-h2:pb-2
+            prose-h3:text-xl prose-h3:mt-8 prose-h3:mb-3
+            prose-p:text-warmgray-800 dark:prose-p:text-warmgray-200 prose-p:leading-relaxed
+            prose-a:text-terracotta-600 dark:prose-a:text-terracotta-400 prose-a:underline prose-a:decoration-terracotta-300 dark:prose-a:decoration-terracotta-700 hover:prose-a:decoration-terracotta-500
+            prose-strong:text-warmgray-900 dark:prose-strong:text-warmgray-50
+            prose-code:text-terracotta-700 dark:prose-code:text-terracotta-300 prose-code:bg-warmgray-100 dark:prose-code:bg-warmgray-900 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:font-normal prose-code:before:content-none prose-code:after:content-none
+            prose-pre:bg-warmgray-100 dark:prose-pre:bg-warmgray-900 prose-pre:border prose-pre:border-warmgray-200 dark:prose-pre:border-warmgray-800 prose-pre:rounded-lg prose-pre:shadow-sm
+            prose-blockquote:border-terracotta-400 dark:prose-blockquote:border-terracotta-600 prose-blockquote:text-warmgray-600 dark:prose-blockquote:text-warmgray-400 prose-blockquote:not-italic
+            prose-img:rounded-lg prose-img:shadow-md
+            prose-hr:border-warmgray-200 dark:prose-hr:border-warmgray-800
+            prose-th:text-warmgray-900 dark:prose-th:text-warmgray-50
+            prose-td:text-warmgray-700 dark:prose-td:text-warmgray-300
+            prose-li:text-warmgray-800 dark:prose-li:text-warmgray-200
+        ">
+            {{.Content}}
+        </article>
+
+        <!-- Share section -->
+        {{if .CanonicalURL}}
+        <section class="mt-12 pt-6 border-t border-warmgray-200 dark:border-warmgray-800">
+            <p class="text-xs text-warmgray-400 dark:text-warmgray-500 uppercase tracking-wider mb-2">Share this note</p>
+            <p class="text-sm text-warmgray-600 dark:text-warmgray-400 font-mono break-all select-all bg-warmgray-100 dark:bg-warmgray-900 rounded px-3 py-2 border border-warmgray-200 dark:border-warmgray-800">{{.CanonicalURL}}</p>
+        </section>
+        {{end}}
+
+        <div class="mt-8">
+            <a href="/register" class="inline-flex items-center justify-center rounded-md bg-terracotta-600 px-4 py-2 text-sm font-semibold text-white hover:bg-terracotta-700 transition-colors">Get Started Free</a>
+        </div>
+
+    </div>
 </body>
 </html>`
 
@@ -174,6 +152,7 @@ type templateData struct {
 	Title        string
 	Description  string
 	CanonicalURL string
+	Author       string
 	Content      template.HTML
 }
 
@@ -183,9 +162,10 @@ type templateData struct {
 //   - title: the page title (used in <title> and Open Graph/Twitter meta tags)
 //   - description: a brief description (used in meta description and social tags)
 //   - canonicalURL: the canonical URL for the page (used in <link rel="canonical"> and og:url)
+//   - author: the author name displayed in the byline (shown as "Anonymous" if empty)
 //
 // Returns a complete HTML document as a byte slice.
-func RenderMarkdownToHTML(markdownContent, title, description, canonicalURL string) []byte {
+func RenderMarkdownToHTML(markdownContent, title, description, canonicalURL, author string) []byte {
 	// Configure the markdown parser with common extensions
 	extensions := parser.CommonExtensions | parser.AutoHeadingIDs | parser.NoEmptyLineBeforeBlock
 	p := parser.NewWithExtensions(extensions)
@@ -212,6 +192,7 @@ func RenderMarkdownToHTML(markdownContent, title, description, canonicalURL stri
 	escapedTitle := html.EscapeString(title)
 	escapedDescription := html.EscapeString(description)
 	escapedCanonicalURL := html.EscapeString(canonicalURL)
+	escapedAuthor := html.EscapeString(author)
 
 	// Parse and execute the template
 	tmpl := template.Must(template.New("html").Parse(htmlTemplate))
@@ -221,6 +202,7 @@ func RenderMarkdownToHTML(markdownContent, title, description, canonicalURL stri
 		Title:        escapedTitle,
 		Description:  escapedDescription,
 		CanonicalURL: escapedCanonicalURL,
+		Author:       escapedAuthor,
 		Content:      template.HTML(sanitizedContent),
 	}
 

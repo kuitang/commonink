@@ -17,9 +17,12 @@
         </div>
 
         <!-- Form -->
-        <form method="POST" action="{{if .Note}}/notes/{{.Note.ID}}{{else}}/notes{{end}}"
-              class="themed-card flex-1 flex flex-col">
-            <div class="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1 flex flex-col">
+	        <form method="POST" action="{{if .Note}}/notes/{{.Note.ID}}{{else}}/notes{{end}}"
+	              class="themed-card flex-1 flex flex-col">
+	            {{if .PriorHash}}
+	            <input type="hidden" name="prior_hash" value="{{.PriorHash}}">
+	            {{end}}
+	            <div class="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1 flex flex-col">
                 <!-- Title Input -->
                 <div class="flex-shrink-0">
                     <label for="title" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 sm:mb-2">

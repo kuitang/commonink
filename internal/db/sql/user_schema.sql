@@ -22,10 +22,12 @@ CREATE TABLE IF NOT EXISTS notes (
     content TEXT NOT NULL CHECK(length(content) <= 1048576),
     is_public INTEGER DEFAULT 0,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_is_public ON notes(is_public);
+CREATE INDEX IF NOT EXISTS idx_notes_deleted_at ON notes(deleted_at);
 
 -- FTS5 virtual table for full-text search
 -- Note: sqlc doesn't fully support FTS5, so we keep this in schema but handle search queries manually

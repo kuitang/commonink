@@ -60,7 +60,7 @@ func testMarkdown_HeadingsRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains the appropriate heading tag
@@ -106,7 +106,7 @@ func testMarkdown_CodeBlocksRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <pre> and <code> tags
@@ -149,7 +149,7 @@ func testMarkdown_InlineCodeRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <code> tag (not necessarily in <pre>)
@@ -186,7 +186,7 @@ func testMarkdown_LinksRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <a> tag with href attribute
@@ -232,7 +232,7 @@ func testMarkdown_BoldRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <strong> tags
@@ -273,7 +273,7 @@ func testMarkdown_ItalicRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <em> tags
@@ -314,7 +314,7 @@ func testMarkdown_ParagraphsRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <p> tags
@@ -369,7 +369,7 @@ func testMarkdown_UnorderedListRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <ul> and <li> tags
@@ -418,7 +418,7 @@ func testMarkdown_OrderedListRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <ol> and <li> tags
@@ -467,7 +467,7 @@ func testMarkdown_BlockquoteRender_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(markdown, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output contains <blockquote> tag
@@ -505,7 +505,7 @@ func testMarkdown_ValidHTMLDocument_Properties(t *rapid.T) {
 	description := rapid.StringMatching(`[A-Za-z0-9 ]{1,100}`).Draw(t, "description")
 	canonicalURL := urlGenerator().Draw(t, "canonicalURL")
 
-	html := RenderMarkdownToHTML(content, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(content, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
 	// Property: Output starts with DOCTYPE
@@ -523,8 +523,8 @@ func testMarkdown_ValidHTMLDocument_Properties(t *rapid.T) {
 		t.Fatalf("Expected <head> tag in output\nGot: %s", htmlStr)
 	}
 
-	// Property: Output contains <body> tag
-	if !strings.Contains(htmlStr, "<body>") {
+	// Property: Output contains <body> tag (may have attributes like class)
+	if !strings.Contains(htmlStr, "<body") {
 		t.Fatalf("Expected <body> tag in output\nGot: %s", htmlStr)
 	}
 
@@ -570,22 +570,30 @@ func testMarkdown_XSSPrevention_Properties(t *rapid.T) {
 	description := "Test Description"
 	canonicalURL := "https://example.com/test"
 
-	html := RenderMarkdownToHTML(maliciousContent, title, description, canonicalURL)
+	html := RenderMarkdownToHTML(maliciousContent, title, description, canonicalURL, "")
 	htmlStr := string(html)
 
-	// Property: Script tags are not present in output
-	if strings.Contains(htmlStr, "<script") {
-		t.Fatalf("Script tag should be sanitized\nInput: %s\nGot: %s", maliciousContent, htmlStr)
+	// Extract just the article body content to avoid matching the Tailwind CDN <script> in <head>
+	articleStart := strings.Index(htmlStr, "<article")
+	articleEnd := strings.Index(htmlStr, "</article>")
+	if articleStart == -1 || articleEnd == -1 {
+		t.Fatalf("Expected <article> tags in output\nGot: %s", htmlStr)
+	}
+	articleContent := htmlStr[articleStart : articleEnd+len("</article>")]
+
+	// Property: Script tags are not present in article content
+	if strings.Contains(articleContent, "<script") {
+		t.Fatalf("Script tag should be sanitized\nInput: %s\nGot: %s", maliciousContent, articleContent)
 	}
 
-	// Property: JavaScript URLs are not present
-	if strings.Contains(htmlStr, "javascript:") {
-		t.Fatalf("JavaScript URL should be sanitized\nInput: %s\nGot: %s", maliciousContent, htmlStr)
+	// Property: JavaScript URLs are not present in article content
+	if strings.Contains(articleContent, "javascript:") {
+		t.Fatalf("JavaScript URL should be sanitized\nInput: %s\nGot: %s", maliciousContent, articleContent)
 	}
 
-	// Property: Event handlers are not present (onerror, onclick, etc.)
-	if strings.Contains(htmlStr, "onerror=") || strings.Contains(htmlStr, "onclick=") {
-		t.Fatalf("Event handlers should be sanitized\nInput: %s\nGot: %s", maliciousContent, htmlStr)
+	// Property: Event handlers are not present in article content (onerror, onclick, etc.)
+	if strings.Contains(articleContent, "onerror=") || strings.Contains(articleContent, "onclick=") {
+		t.Fatalf("Event handlers should be sanitized\nInput: %s\nGot: %s", maliciousContent, articleContent)
 	}
 }
 

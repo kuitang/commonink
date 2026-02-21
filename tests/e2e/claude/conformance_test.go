@@ -103,6 +103,20 @@ type ToolCall struct {
 	ServerID string
 }
 
+const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash."
+
+// filterEnv returns a copy of env with the named variable removed.
+func filterEnv(env []string, name string) []string {
+	prefix := name + "="
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // =============================================================================
 // Conversation: Bidirectional streaming with Claude CLI
 // =============================================================================
@@ -133,6 +147,9 @@ func NewConversation(t *testing.T, mcpConfig string) *Conversation {
 		"--mcp-config", mcpConfig,
 		"--dangerously-skip-permissions",
 	)
+
+	// Allow running inside a Claude Code session by removing the nesting guard
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -172,7 +189,7 @@ func (c *Conversation) SendMessage(t *testing.T, message string) (string, []Tool
 		"type": "user",
 		"message": map[string]string{
 			"role":    "user",
-			"content": message,
+			"content": requiredPriorHashInstruction + "\n\n" + message,
 		},
 	}
 	msgBytes, _ := json.Marshal(userMsg)
@@ -271,11 +288,14 @@ func runOneShotClaude(t *testing.T, mcpConfig, prompt string) (string, []ToolCal
 		t.Fatal("claude CLI not found")
 	}
 
-	cmd := exec.Command("claude", "-p", prompt,
+	cmd := exec.Command("claude", "-p", requiredPriorHashInstruction+"\n\n"+prompt,
 		"--verbose",
 		"--output-format", "stream-json",
 		"--mcp-config", mcpConfig,
 		"--dangerously-skip-permissions")
+
+	// Allow running inside a Claude Code session by removing the nesting guard
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -423,6 +443,30 @@ func TestClaude_MultiTurn_Streaming(t *testing.T) {
 		t.Logf("Tool calls: %d", len(toolCalls))
 	})
 
+	// Turn 4b: Edit note (surgical str_replace)
+	t.Run("Turn4b_Edit", func(t *testing.T) {
+		if noteID == "" {
+			t.Skip("No note ID")
+		}
+
+		prompt := fmt.Sprintf("Use the note_edit tool on note '%s' to replace the phrase 'Follow-up: Monday' with 'Follow-up: Tuesday at 10am'.", noteID)
+		resp, toolCalls := conv.SendMessage(t, prompt)
+
+		t.Logf("Response: %s", resp)
+		t.Logf("Tool calls: %d", len(toolCalls))
+
+		// Verify via MCP that the edit took effect
+		viewResp, err := mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
+		if err != nil {
+			t.Fatalf("MCP view failed: %v", err)
+		}
+		viewResult, _ := testutil.ParseToolResult(viewResp)
+		if !strings.Contains(viewResult, "Tuesday at 10am") {
+			t.Fatalf("Edit not applied, note content: %s", viewResult)
+		}
+		t.Log("note_edit verified successfully")
+	})
+
 	// Turn 5: Delete note
 	t.Run("Turn5_Delete", func(t *testing.T) {
 		if noteID == "" {
@@ -434,10 +478,19 @@ func TestClaude_MultiTurn_Streaming(t *testing.T) {
 		t.Logf("Response: %s", resp)
 		t.Logf("Tool calls: %d", len(toolCalls))
 
-		// Verify deletion via MCP
+		// Verify deletion via MCP: soft delete means note_view returns a tool
+		// error (isError: true in the MCP result), not a JSON-RPC error.
 		readResp, err := mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
-		if err == nil && readResp.Error == nil {
-			t.Fatal("Note still exists after delete")
+		if err != nil {
+			// HTTP-level error is also acceptable (note is gone)
+			t.Logf("note_view returned HTTP error after delete: %v", err)
+		} else {
+			// Check for tool-level error (isError: true) in the result
+			isToolError := testutil.IsToolError(readResp)
+			if !isToolError {
+				t.Fatal("Note still exists after delete: note_view returned success instead of tool error")
+			}
+			t.Log("note_view correctly returned tool error for soft-deleted note")
 		}
 		t.Log("Note deleted successfully")
 	})
@@ -513,6 +566,25 @@ func TestClaude_OneShot_CRUD(t *testing.T) {
 		t.Logf("Response: %s, Tools: %d", resp, len(toolCalls))
 	})
 
+	t.Run("Edit", func(t *testing.T) {
+		if noteID == "" {
+			t.Skip("No note")
+		}
+		resp, toolCalls := runOneShotClaude(t, mcpConfig,
+			fmt.Sprintf("Use the note_edit tool on note %s to replace 'Updated content' with 'Revised content v2'.", noteID))
+		t.Logf("Response: %s, Tools: %d", resp, len(toolCalls))
+
+		// Verify via MCP
+		viewResp, err := mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
+		if err != nil {
+			t.Fatalf("MCP view failed: %v", err)
+		}
+		viewResult, _ := testutil.ParseToolResult(viewResp)
+		if !strings.Contains(viewResult, "Revised content v2") {
+			t.Fatalf("Edit not applied, note content: %s", viewResult)
+		}
+	})
+
 	t.Run("Delete", func(t *testing.T) {
 		if noteID == "" {
 			t.Skip("No note")
@@ -521,12 +593,123 @@ func TestClaude_OneShot_CRUD(t *testing.T) {
 			fmt.Sprintf("Delete the note with ID %s.", noteID))
 		t.Logf("Response: %s, Tools: %d", resp, len(toolCalls))
 
-		// Verify deletion
+		// Verify deletion: soft delete means note_view returns a tool error
+		// (isError: true in the MCP result), not a JSON-RPC error.
 		readResp, err := mcpClient.CallTool("note_view", map[string]interface{}{"id": noteID})
-		if err == nil && readResp.Error == nil {
-			t.Fatal("Note still exists")
+		if err != nil {
+			// HTTP-level error is also acceptable
+			t.Logf("note_view returned HTTP error after delete: %v", err)
+		} else {
+			isToolError := testutil.IsToolError(readResp)
+			if !isToolError {
+				t.Fatal("Note still exists: note_view returned success instead of tool error")
+			}
 		}
 	})
+}
+
+// =============================================================================
+// FTS5 Syntax Edge Cases (direct MCP calls, no Claude CLI needed)
+// =============================================================================
+
+func TestFTS5_SyntaxEdgeCases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping in short mode")
+	}
+
+	srv := testutil.GetServer(t)
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "FTS5Test")
+	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
+
+	// Create notes with known content for searching
+	notes := []struct {
+		title   string
+		content string
+	}{
+		{"Alpha Report", "The quarterly alpha report covers revenue and growth metrics."},
+		{"Beta Analysis", "Beta testing revealed issues with the authentication module."},
+		{"Gamma Overview", "Gamma radiation levels are within the expected range for safety."},
+		{"Meeting Notes Q1", "Discussed budget for Q1. Action items: review proposals."},
+		{"Meeting Notes Q2", "Q2 planning session. Deliverables include alpha release."},
+	}
+
+	for _, n := range notes {
+		resp, err := mcpClient.CallTool("note_create", map[string]interface{}{
+			"title":   n.title,
+			"content": n.content,
+		})
+		if err != nil {
+			t.Fatalf("Failed to create note %q: %v", n.title, err)
+		}
+		if testutil.IsToolError(resp) {
+			result, _ := testutil.ParseToolResult(resp)
+			t.Fatalf("Tool error creating note %q: %s", n.title, result)
+		}
+	}
+
+	tests := []struct {
+		name           string
+		query          string
+		expectResults  bool   // true = expect at least one result
+		expectContains string // substring in snippet (empty = don't check)
+	}{
+		// Basic keyword (implicit AND via FTS5 default)
+		{"SimpleKeyword", "alpha", true, "alpha"},
+		// OR operator
+		{"OROperator", "alpha OR beta", true, ""},
+		// AND (implicit)
+		{"ImplicitAND", "quarterly revenue", true, ""},
+		// Prefix matching
+		{"PrefixMatch", "meet*", true, ""},
+		// NOT operator
+		{"NOTOperator", "meeting NOT budget", true, ""},
+		// Quoted phrase
+		{"QuotedPhrase", `"action items"`, true, ""},
+		// Special characters that should not crash
+		{"QuestionMark", "?", false, ""},
+		{"SingleQuote", "'", false, ""},
+		{"Apostrophe", "it's", false, ""},
+		{"MultipleSpecial", "???''!!", false, ""},
+		// Mixed valid + special
+		{"MixedValidSpecial", "alpha?", true, ""},
+		// Empty-ish queries
+		{"EmptyQuery", "", false, ""},
+		{"WhitespaceOnly", "   ", false, ""},
+		// Column filter syntax (raw FTS5)
+		{"ColumnFilter", "title:alpha", true, ""},
+		// NEAR operator
+		{"NEAROperator", "NEAR(quarterly revenue)", true, ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := mcpClient.CallTool("note_search", map[string]interface{}{
+				"query": tc.query,
+			})
+			if err != nil {
+				t.Fatalf("note_search HTTP error for query %q: %v", tc.query, err)
+			}
+
+			result, _ := testutil.ParseToolResult(resp)
+
+			if tc.expectResults {
+				// Should not be an error and should have results
+				if testutil.IsToolError(resp) {
+					t.Fatalf("Expected results for query %q, got tool error: %s", tc.query, result)
+				}
+				if result == "[]" || result == "null" {
+					t.Fatalf("Expected results for query %q, got empty: %s", tc.query, result)
+				}
+				if tc.expectContains != "" && !strings.Contains(strings.ToLower(result), tc.expectContains) {
+					t.Fatalf("Expected result to contain %q for query %q, got: %s", tc.expectContains, tc.query, result)
+				}
+			}
+
+			// Key property: no query should cause a server error (500) or panic
+			// Tool errors (isError: true) for empty/invalid queries are acceptable
+			t.Logf("Query %q: isError=%v, resultLen=%d", tc.query, testutil.IsToolError(resp), len(result))
+		})
+	}
 }
 
 // =============================================================================

@@ -1,3 +1,40 @@
+{{define "note-card"}}
+<article class="themed-card h-fit">
+    <a href="/notes/{{.ID}}" class="block p-4 sm:p-5">
+        <div class="flex items-start justify-between mb-2 sm:mb-3">
+            <h2 class="text-base sm:text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
+                {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
+            </h2>
+            {{if .Visibility.IsPublic}}
+            <span class="ml-2 flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Public
+            </span>
+            {{else}}
+            <span class="ml-2 flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                </svg>
+                Private
+            </span>
+            {{end}}
+        </div>
+        <p class="text-gray-600 dark:text-gray-300 text-sm line-clamp-2 sm:line-clamp-3 mb-3 sm:mb-4">
+            {{if .Content}}{{truncate .Content 150}}{{else}}No content{{end}}
+        </p>
+        <div class="flex items-center text-xs text-gray-500 dark:text-gray-400">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <time datetime="{{.UpdatedAt.Format "2006-01-02T15:04:05Z07:00"}}">
+                {{formatTime .UpdatedAt}}
+            </time>
+        </div>
+    </a>
+</article>
+{{end}}
 
 {{define "content"}}
 <div class="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900">
@@ -49,50 +86,31 @@
         {{end}}
 
         {{if .Notes}}
-        <!-- Notes Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 flex-1 auto-rows-max overflow-y-auto">
+        <!-- Search Bar -->
+        <div class="relative mb-4 sm:mb-6 flex-shrink-0">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+            </div>
+            <input type="search" id="search-input"
+                   placeholder="Search notes... (press / to focus)"
+                   class="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-input bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
+                   autocomplete="off">
+        </div>
+
+        <!-- Notes Grid (original server-rendered) -->
+        <div id="notes-original" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 flex-1 auto-rows-max overflow-y-auto">
             {{range .Notes}}
-            <article class="themed-card h-fit">
-                <a href="/notes/{{.ID}}" class="block p-4 sm:p-5">
-                    <div class="flex items-start justify-between mb-2 sm:mb-3">
-                        <h2 class="text-base sm:text-lg font-semibold text-gray-900 dark:text-white line-clamp-2 flex-1">
-                            {{if .Title}}{{.Title}}{{else}}Untitled{{end}}
-                        </h2>
-                        {{if .IsPublic}}
-                        <span class="ml-2 flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200">
-                            <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            </svg>
-                            Public
-                        </span>
-                        {{else}}
-                        <span class="ml-2 flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
-                            <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                            </svg>
-                            Private
-                        </span>
-                        {{end}}
-                    </div>
-                    <p class="text-gray-600 dark:text-gray-300 text-sm line-clamp-2 sm:line-clamp-3 mb-3 sm:mb-4">
-                        {{if .Content}}{{truncate .Content 150}}{{else}}No content{{end}}
-                    </p>
-                    <div class="flex items-center text-xs text-gray-500 dark:text-gray-400">
-                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                        <time datetime="{{.UpdatedAt.Format "2006-01-02T15:04:05Z07:00"}}">
-                            {{formatTime .UpdatedAt}}
-                        </time>
-                    </div>
-                </a>
-            </article>
+            {{template "note-card" .}}
             {{end}}
         </div>
+        <!-- Search Results (hidden by default, populated by fetch) -->
+        <div id="notes-search-results" class="hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 flex-1 auto-rows-max overflow-y-auto"></div>
 
         <!-- Pagination -->
         {{if or .HasPrev .HasNext}}
-        <nav class="flex items-center justify-between mt-4 sm:mt-6 px-3 sm:px-4 py-2 sm:py-3 bg-white dark:bg-gray-800 rounded-card shadow-card flex-shrink-0" aria-label="Pagination">
+        <nav id="notes-pagination" class="flex items-center justify-between mt-4 sm:mt-6 px-3 sm:px-4 py-2 sm:py-3 bg-white dark:bg-gray-800 rounded-card shadow-card flex-shrink-0" aria-label="Pagination">
             <div class="flex-1 flex justify-between sm:hidden">
                 {{if .HasPrev}}
                 <a href="?page={{sub .Page 1}}"
@@ -160,6 +178,64 @@
             </div>
         </nav>
         {{end}}
+
+        <script>
+        (function() {
+            var input = document.getElementById('search-input');
+            var original = document.getElementById('notes-original');
+            var results = document.getElementById('notes-search-results');
+            var pagination = document.getElementById('notes-pagination');
+            if (!input || !original || !results) return;
+
+            var timer = null;
+            var controller = null;
+
+            function restore() {
+                original.classList.remove('hidden');
+                results.classList.add('hidden');
+                if (pagination) pagination.classList.remove('hidden');
+                results.innerHTML = '';
+            }
+
+            function doSearch(query) {
+                if (controller) controller.abort();
+                controller = new AbortController();
+                fetch('/notes/search', {method:'POST', body: new URLSearchParams({query: query}), credentials:'same-origin', signal: controller.signal})
+                    .then(function(r) { return r.text(); })
+                    .then(function(html) {
+                        results.innerHTML = html;
+                        original.classList.add('hidden');
+                        if (pagination) pagination.classList.add('hidden');
+                        results.classList.remove('hidden');
+                    })
+                    .catch(function(e) {
+                        if (e.name !== 'AbortError') console.error('Search failed:', e);
+                    });
+            }
+
+            input.addEventListener('input', function() {
+                clearTimeout(timer);
+                var q = input.value.trim();
+                if (!q) { restore(); return; }
+                timer = setTimeout(function() { doSearch(q); }, 250);
+            });
+
+            // Keyboard: / to focus, Escape to clear
+            document.addEventListener('keydown', function(e) {
+                if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+                    e.preventDefault();
+                    input.focus();
+                }
+            });
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    input.value = '';
+                    restore();
+                    input.blur();
+                }
+            });
+        })();
+        </script>
 
         {{else}}
         <!-- Empty State -->

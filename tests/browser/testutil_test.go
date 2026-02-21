@@ -4,6 +4,7 @@ package browser
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -664,7 +665,11 @@ func (env *BrowserTestEnv) SetUserSubscription(t *testing.T, userID, status, str
 
 // GenerateUniqueEmail generates a unique email for test isolation.
 func GenerateUniqueEmail(prefix string) string {
-	return fmt.Sprintf("%s-%d@example.com", prefix, time.Now().UnixNano())
+	suffix := make([]byte, 8)
+	if _, err := crand.Read(suffix); err != nil {
+		panic(fmt.Sprintf("failed to generate unique email suffix: %v", err))
+	}
+	return fmt.Sprintf("%s-%s@example.com", prefix, hex.EncodeToString(suffix))
 }
 
 // =============================================================================

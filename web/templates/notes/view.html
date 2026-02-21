@@ -30,12 +30,19 @@
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
-                        {{if .Note.IsPublic}}
+                        {{if .Note.Visibility.IsAttributed}}
                         <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200">
                             <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
-                            Public
+                            Public (Attributed)
+                        </span>
+                        {{else if .Note.Visibility.IsAnonymous}}
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200">
+                            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            Public (Anonymous)
                         </span>
                         {{else}}
                         <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
@@ -73,25 +80,40 @@
                         Edit Note
                     </a>
 
-                    <!-- Public/Private Toggle -->
+                    <!-- Quick Visibility Toggle (browser test compatibility) -->
+                    {{if .Note.Visibility.IsPublic}}
                     <form method="POST" action="/notes/{{.Note.ID}}/publish">
-                        {{if .Note.IsPublic}}
+                        <input type="hidden" name="visibility" value="0">
                         <button type="submit"
                                 class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
-                            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                            </svg>
                             Make Private
                         </button>
-                        {{else}}
+                    </form>
+                    {{else}}
+                    <form method="POST" action="/notes/{{.Note.ID}}/publish">
+                        <input type="hidden" name="visibility" value="1">
+                        <button type="submit"
+                                class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                            Make Public
+                        </button>
+                    </form>
+                    {{end}}
+
+                    <!-- Visibility Selector -->
+                    <form method="POST" action="/notes/{{.Note.ID}}/publish" class="inline-flex items-center gap-2">
+                        <select name="visibility"
+                                class="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 rounded-input text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
+                            <option value="0" {{if not .Note.Visibility.IsPublic}}selected{{end}}>Private</option>
+                            <option value="1" {{if .Note.Visibility.IsAnonymous}}selected{{end}}>Public (Anonymous)</option>
+                            <option value="2" {{if .Note.Visibility.IsAttributed}}selected{{end}}>Public (Show my name)</option>
+                        </select>
                         <button type="submit"
                                 class="inline-flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 font-medium rounded-input transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900">
                             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
-                            Make Public
+                            Update Visibility
                         </button>
-                        {{end}}
                     </form>
 
                     <!-- Delete Button -->
@@ -107,7 +129,7 @@
                     </form>
                 </div>
 
-                {{if and .Note.IsPublic .ShareURL}}
+                {{if and .Note.Visibility.IsPublic .ShareURL}}
                 <!-- Share Link -->
                 <div class="mt-4 p-4 bg-primary-50 dark:bg-primary-900/30 rounded-card">
                     <div class="flex items-center mb-2">
@@ -123,14 +145,48 @@
                                readonly
                                class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-primary-200 dark:border-primary-700 rounded-md text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500">
                         <button type="button"
-                                onclick="navigator.clipboard.writeText(document.getElementById('share-url').value).then(() => { this.innerHTML = '<svg class=\'w-5 h-5\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M5 13l4 4L19 7\'/></svg>'; setTimeout(() => { this.innerHTML = '<svg class=\'w-5 h-5\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3\'/></svg>'; }, 2000); })"
+                                id="copy-share-url"
                                 class="inline-flex items-center justify-center p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
                                 title="Copy to clipboard">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg id="copy-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+                            </svg>
+                            <svg id="copy-check-icon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                             </svg>
                         </button>
                     </div>
+                    <script>
+                    (function() {
+                        var btn = document.getElementById('copy-share-url');
+                        var input = document.getElementById('share-url');
+                        var copyIcon = document.getElementById('copy-icon');
+                        var checkIcon = document.getElementById('copy-check-icon');
+                        if (!btn || !input) return;
+
+                        function showCopied() {
+                            copyIcon.classList.add('hidden');
+                            checkIcon.classList.remove('hidden');
+                            setTimeout(function() {
+                                checkIcon.classList.add('hidden');
+                                copyIcon.classList.remove('hidden');
+                            }, 2000);
+                        }
+
+                        btn.addEventListener('click', function() {
+                            navigator.clipboard.writeText(input.value).then(showCopied).catch(function() {
+                                var textarea = document.createElement('textarea');
+                                textarea.value = input.value;
+                                textarea.style.position = 'fixed';
+                                textarea.style.opacity = '0';
+                                document.body.appendChild(textarea);
+                                textarea.select();
+                                try { document.execCommand('copy'); showCopied(); } catch(e) { /* silent */ }
+                                document.body.removeChild(textarea);
+                            });
+                        });
+                    })();
+                    </script>
                 </div>
                 {{end}}
             </div>

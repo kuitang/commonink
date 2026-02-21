@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/kuitang/agent-notes/internal/api"
+	dbtestgen "github.com/kuitang/agent-notes/internal/db/testutil"
 	"github.com/kuitang/agent-notes/internal/notes"
 	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
@@ -163,6 +164,7 @@ type noteResponse struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Content   string `json:"content"`
+	Revision  string `json:"revision_hash"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -230,13 +232,16 @@ func (s *notesTestServer) listNotes(limit, offset int) (*http.Response, []byte, 
 }
 
 // updateNote updates a note via HTTP PUT
-func (s *notesTestServer) updateNote(id string, title, content *string) (*http.Response, []byte, error) {
+func (s *notesTestServer) updateNote(id string, title, content, priorHash *string) (*http.Response, []byte, error) {
 	body := make(map[string]string)
 	if title != nil {
 		body["title"] = *title
 	}
 	if content != nil {
 		body["content"] = *content
+	}
+	if priorHash != nil {
+		body["prior_hash"] = *priorHash
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -440,7 +445,13 @@ func testNotesAPI_Update_Properties(t *rapid.T) {
 	newContent := testutil.NoteContentGenerator().Draw(t, "newContent")
 
 	// Property: PUT /notes/{id} updates the note
-	resp, data, err = srv.updateNote(created.ID, &newTitle, &newContent)
+	resp, data, _ = srv.getNote(created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected 200 on pre-update read, got %d", resp.StatusCode)
+	}
+	var current noteResponse
+	json.Unmarshal(data, &current)
+	resp, data, err = srv.updateNote(created.ID, &newTitle, &newContent, &current.Revision)
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -492,7 +503,7 @@ func testNotesAPI_Update_NonExistent_Properties(t *rapid.T) {
 	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
 
 	// Property: PUT /notes/{id} for non-existent note returns 404
-	resp, data, err := srv.updateNote(nonExistentID, &newTitle, nil)
+	resp, data, err := srv.updateNote(nonExistentID, &newTitle, nil, nil)
 	if err != nil {
 		t.Fatalf("HTTP request failed: %v", err)
 	}
@@ -756,7 +767,13 @@ func testNotesAPI_CRUD_Workflow_Properties(t *rapid.T) {
 	}
 
 	// Update
-	resp, data, _ = srv.updateNote(created.ID, &newTitle, &newContent)
+	resp, data, _ = srv.getNote(created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Read before update failed: %d", resp.StatusCode)
+	}
+	var current noteResponse
+	json.Unmarshal(data, &current)
+	resp, data, _ = srv.updateNote(created.ID, &newTitle, &newContent, &current.Revision)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Update failed: %d", resp.StatusCode)
 	}
@@ -868,6 +885,53 @@ func TestNotesAPI_Search_NoMatches_Properties(t *testing.T) {
 func FuzzNotesAPI_Search_NoMatches_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testNotesAPI_Search_NoMatches_Properties))
+}
+
+// =============================================================================
+// Property: Search never returns 500 for arbitrary adversarial queries
+// =============================================================================
+
+func testNotesAPI_Search_ArbitraryQuery_Properties(t *rapid.T) {
+	srv, cleanup := getNotesTestServerForRapid(t)
+	defer cleanup()
+
+	// Create a note so the FTS index exists
+	srv.createNote("adversarial test note", "some content for fts index")
+
+	// Draw from the adversarial generator (SQL injection, FTS5 syntax, unicode, etc.)
+	query := dbtestgen.ArbitrarySearchQuery().Draw(t, "query")
+
+	resp, data, err := srv.searchNotes(query)
+	if err != nil {
+		t.Fatalf("HTTP request failed for query %q: %v", query, err)
+	}
+
+	// Property: Never a 500 (server error)
+	if resp.StatusCode == http.StatusInternalServerError {
+		t.Fatalf("Got 500 for query %q: %s", query, string(data))
+	}
+
+	// Property: Response is always valid JSON
+	if resp.StatusCode == http.StatusOK {
+		var searchResp searchResponse
+		if err := json.Unmarshal(data, &searchResp); err != nil {
+			t.Fatalf("Invalid JSON for query %q (status %d): %s", query, resp.StatusCode, string(data))
+		}
+	}
+
+	// Acceptable statuses: 200 (results or empty), 400 (empty query)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Unexpected status %d for query %q: %s", resp.StatusCode, query, string(data))
+	}
+}
+
+func TestNotesAPI_Search_ArbitraryQuery_Properties(t *testing.T) {
+	runNotesRapidCheckWithSharedServer(t, testNotesAPI_Search_ArbitraryQuery_Properties)
+}
+
+func FuzzNotesAPI_Search_ArbitraryQuery_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testNotesAPI_Search_ArbitraryQuery_Properties))
 }
 
 // =============================================================================
@@ -1001,7 +1065,13 @@ func testNotesAPI_Update_PartialUpdate_Properties(t *rapid.T) {
 
 	// Update only title
 	newTitle := testutil.NoteTitleGenerator().Draw(t, "newTitle")
-	resp, data, _ = srv.updateNote(created.ID, &newTitle, nil)
+	resp, data, _ = srv.getNote(created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Read before partial update failed: %d", resp.StatusCode)
+	}
+	var current noteResponse
+	json.Unmarshal(data, &current)
+	resp, data, _ = srv.updateNote(created.ID, &newTitle, nil, &current.Revision)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Update failed: %d", resp.StatusCode)
 	}

@@ -3,18 +3,29 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/kuitang/agent-notes/internal/db/sessions"
 	"github.com/kuitang/agent-notes/internal/db/testutil"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"pgregory.net/rapid"
 )
+
+func drawUnixEpoch(t *rapid.T, label string) int64 {
+	return rapid.Int64Range(946684800, 4102444800).Draw(t, label) // 2000-01-01 .. 2100-01-01 UTC
+}
+
+var testNoteIDCounter uint64
+
+func nextTestNoteID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, atomic.AddUint64(&testNoteIDCounter, 1))
+}
 
 // closeOnCleanup registers a cleanup function on rapid.T that closes a UserDB.
 // rapid.T does not have Cleanup(), so we use a pattern where the caller defers this.
@@ -341,7 +352,7 @@ func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
 	}
 
 	// Property: Each user's database is independent
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixIsolation")
 	for i, userID := range userIDs {
 		userDB := dbs[userID]
 
@@ -408,7 +419,7 @@ func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixFTSSync")
 
 	// Generate arbitrary note content (including special chars, unicode, etc.)
 	title := testutil.ArbitraryNoteTitle().Draw(t, "title")
@@ -466,8 +477,11 @@ func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
 		t.Fatalf("FTS index content mismatch: expected %q, got %q", newContent, results[0].Content)
 	}
 
-	// Delete note using sqlc
-	err = userDB.Queries().DeleteNote(ctx, noteID)
+	// Delete note using sqlc (soft delete)
+	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
+		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
+		ID:        noteID,
+	})
 	if err != nil {
 		t.Fatalf("Failed to delete note: %v", err)
 	}
@@ -505,7 +519,7 @@ func testUserDB_ContentSizeLimit_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixSizeLimit")
 
 	// Property: Content at exactly 1MB succeeds
 	content1MB := make([]byte, 1048576)
@@ -700,7 +714,7 @@ func testUserDB_Encryption_Roundtrip_Properties(t *rapid.T) {
 	sensitiveContent := rapid.StringMatching("[A-Za-z0-9 ]{10,100}").Draw(t, "sensitiveContent")
 	title := rapid.StringMatching("[A-Za-z ]{5,30}").Draw(t, "title")
 	noteID := "encrypted-note-" + rapid.StringMatching("[a-z0-9]{8}").Draw(t, "noteID")
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixEncryption")
 
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 		ID:        noteID,
@@ -762,7 +776,7 @@ func testSessionsDB_CRUD_Properties(t *rapid.T) {
 	// Generate random session data
 	sessionID := "session-" + rapid.StringMatching("[a-z0-9]{16}").Draw(t, "sessionID")
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixSessionsCRUD")
 	expiresAt := now + int64(rapid.IntRange(3600, 86400).Draw(t, "expiresIn"))
 
 	// Property: Create session succeeds
@@ -836,7 +850,7 @@ func testUserDB_FTS5_ArbitraryQuery_Properties(t *rapid.T) {
 	}
 	defer mustCloseUserDB(t, userDB)
 
-	now := time.Now().Unix()
+	now := drawUnixEpoch(t, "nowUnixArbitraryQuery")
 
 	// Create a note so there's something to search
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
@@ -938,6 +952,86 @@ func TestUserDB_FTS5_ArbitraryQueryCount_Properties(t *testing.T) {
 func FuzzUserDB_FTS5_ArbitraryQueryCount_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testUserDB_FTS5_ArbitraryQueryCount_Properties))
+}
+
+// =============================================================================
+// Property: SearchNotesWithSnippets handles arbitrary queries safely
+// This tests the raw-FTS5-with-fallback path used by note_search MCP tool.
+// =============================================================================
+
+func testUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *rapid.T) {
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := NewUserDBInMemory(userID)
+	if err != nil {
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
+	}
+	defer mustCloseUserDB(t, userDB)
+
+	now := drawUnixEpoch(t, "nowUnixSnippetQuery")
+
+	// Create a note so there's something to search
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        "snippet-test",
+		Title:     "Snippet Test Note",
+		Content:   "Some content for snippet testing with various words",
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create test note: %v", err)
+	}
+
+	// Property: SearchNotesWithSnippets should NEVER panic for ANY query string
+	// and should handle FTS5 syntax errors gracefully via fallback
+	query := testutil.ArbitrarySearchQuery().Draw(t, "query")
+
+	result, err := userDB.SearchNotesWithSnippets(ctx, query, 10, 0)
+
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "syntax error") {
+			t.Fatalf("FTS5 snippet search failed (syntax error) for query %q: %v", query, err)
+		}
+		if strings.Contains(errStr, "unrecognized token") {
+			t.Fatalf("FTS5 snippet search failed (unrecognized token) for query %q: %v", query, err)
+		}
+		if strings.Contains(errStr, "no such column") {
+			t.Fatalf("SQL injection possible (no such column) for query %q: %v", query, err)
+		}
+		if strings.Contains(errStr, "no such table") {
+			t.Fatalf("SQL injection possible (no such table) for query %q: %v", query, err)
+		}
+		t.Fatalf("Unexpected FTS5 snippet error for query %q: %v", query, err)
+	}
+
+	// Property: Result wrapper is always non-nil on success
+	if result == nil {
+		t.Fatal("SearchNotesWithSnippets returned nil result without error")
+	}
+
+	// Property: Results are well-formed if returned
+	for _, r := range result.Results {
+		if r.ID == "" {
+			t.Fatal("Result has empty ID")
+		}
+	}
+
+	// Property: If fallback was applied, metadata fields are populated
+	if result.FallbackApplied && result.OriginalError == "" {
+		t.Fatal("FallbackApplied=true but OriginalError is empty")
+	}
+}
+
+func TestUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *testing.T) {
+	rapid.Check(t, testUserDB_FTS5_ArbitrarySnippetQuery_Properties)
+}
+
+func FuzzUserDB_FTS5_ArbitrarySnippetQuery_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUserDB_FTS5_ArbitrarySnippetQuery_Properties))
 }
 
 // =============================================================================
@@ -1074,4 +1168,496 @@ func TestDataDirectory_Wiring_Properties(t *testing.T) {
 func FuzzDataDirectory_Wiring_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testDataDirectory_Wiring_Properties))
+}
+
+// =============================================================================
+// Property: sanitizeFTS5Word output is always lowercase
+// =============================================================================
+
+func testSanitizeFTS5Word_Lowercase_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := sanitizeFTS5Word(input)
+
+	// Property: output is always lowercase
+	if result != strings.ToLower(result) {
+		t.Fatalf("sanitizeFTS5Word(%q) = %q is not lowercase", input, result)
+	}
+}
+
+func TestSanitizeFTS5Word_Lowercase_Properties(t *testing.T) {
+	rapid.Check(t, testSanitizeFTS5Word_Lowercase_Properties)
+}
+
+func FuzzSanitizeFTS5Word_Lowercase_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testSanitizeFTS5Word_Lowercase_Properties))
+}
+
+// =============================================================================
+// Property: sanitizeFTS5Word output only contains safe characters
+// =============================================================================
+
+func testSanitizeFTS5Word_SafeChars_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := sanitizeFTS5Word(input)
+
+	// Property: output only contains [a-z0-9_] and characters > 127 (unicode)
+	for _, r := range result {
+		safe := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r > 127
+		if !safe {
+			t.Fatalf("sanitizeFTS5Word(%q) = %q contains unsafe rune %q (U+%04X)", input, result, r, r)
+		}
+	}
+}
+
+func TestSanitizeFTS5Word_SafeChars_Properties(t *testing.T) {
+	rapid.Check(t, testSanitizeFTS5Word_SafeChars_Properties)
+}
+
+func FuzzSanitizeFTS5Word_SafeChars_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testSanitizeFTS5Word_SafeChars_Properties))
+}
+
+// =============================================================================
+// Property: sanitizeFTS5Word is idempotent
+// =============================================================================
+
+func testSanitizeFTS5Word_Idempotent_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	once := sanitizeFTS5Word(input)
+	twice := sanitizeFTS5Word(once)
+
+	// Property: sanitize(sanitize(x)) == sanitize(x)
+	if once != twice {
+		t.Fatalf("sanitizeFTS5Word is not idempotent: sanitize(%q) = %q, sanitize(%q) = %q", input, once, once, twice)
+	}
+}
+
+func TestSanitizeFTS5Word_Idempotent_Properties(t *testing.T) {
+	rapid.Check(t, testSanitizeFTS5Word_Idempotent_Properties)
+}
+
+func FuzzSanitizeFTS5Word_Idempotent_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testSanitizeFTS5Word_Idempotent_Properties))
+}
+
+// =============================================================================
+// Property: tokenizeHumanSearch preserves all non-whitespace, non-quote content
+// =============================================================================
+
+func testTokenizeHumanSearch_ContentPreserved_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	tokens := tokenizeHumanSearch(input)
+
+	// Reconstruct all token text
+	var reconstructed strings.Builder
+	for _, tok := range tokens {
+		reconstructed.WriteString(tok.text)
+	}
+	tokenContent := reconstructed.String()
+
+	// Property: every non-whitespace, non-quote character from input appears in tokens
+	for i, ch := range input {
+		if ch == ' ' || ch == '\t' || ch == '"' {
+			continue
+		}
+		if !strings.ContainsRune(tokenContent, ch) {
+			t.Fatalf("Character %q (U+%04X) at index %d from input %q not found in token content %q",
+				ch, ch, i, input, tokenContent)
+		}
+	}
+}
+
+func TestTokenizeHumanSearch_ContentPreserved_Properties(t *testing.T) {
+	rapid.Check(t, testTokenizeHumanSearch_ContentPreserved_Properties)
+}
+
+func FuzzTokenizeHumanSearch_ContentPreserved_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testTokenizeHumanSearch_ContentPreserved_Properties))
+}
+
+// =============================================================================
+// Property: tokenizeHumanSearch marks quoted strings as phrases
+// =============================================================================
+
+func testTokenizeHumanSearch_QuotedPhrases_Properties(t *rapid.T) {
+	// Generate a phrase that doesn't contain quotes
+	phrase := rapid.StringMatching(`[a-zA-Z0-9 ]{1,20}`).Draw(t, "phrase")
+	input := `"` + phrase + `"`
+	tokens := tokenizeHumanSearch(input)
+
+	// Property: a properly quoted string produces at least one phrase token
+	foundPhrase := false
+	for _, tok := range tokens {
+		if tok.isPhrase && tok.text == phrase {
+			foundPhrase = true
+			break
+		}
+	}
+	if !foundPhrase {
+		t.Fatalf("Input %q should produce phrase token with text %q, got tokens: %+v", input, phrase, tokens)
+	}
+}
+
+func TestTokenizeHumanSearch_QuotedPhrases_Properties(t *testing.T) {
+	rapid.Check(t, testTokenizeHumanSearch_QuotedPhrases_Properties)
+}
+
+func FuzzTokenizeHumanSearch_QuotedPhrases_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testTokenizeHumanSearch_QuotedPhrases_Properties))
+}
+
+// =============================================================================
+// Property: tokenizeHumanSearch token count matches word count for unquoted input
+// =============================================================================
+
+func testTokenizeHumanSearch_TokenCount_Properties(t *rapid.T) {
+	// Generate words without quotes, tabs, or leading/trailing whitespace
+	numWords := rapid.IntRange(1, 10).Draw(t, "numWords")
+	words := make([]string, numWords)
+	for i := 0; i < numWords; i++ {
+		words[i] = rapid.StringMatching(`[a-zA-Z0-9]{1,10}`).Draw(t, "word")
+	}
+	input := strings.Join(words, " ")
+	tokens := tokenizeHumanSearch(input)
+
+	// Property: token count equals word count for input without quotes
+	if len(tokens) != numWords {
+		t.Fatalf("Input %q has %d words but tokenizeHumanSearch returned %d tokens: %+v",
+			input, numWords, len(tokens), tokens)
+	}
+}
+
+func TestTokenizeHumanSearch_TokenCount_Properties(t *testing.T) {
+	rapid.Check(t, testTokenizeHumanSearch_TokenCount_Properties)
+}
+
+func FuzzTokenizeHumanSearch_TokenCount_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testTokenizeHumanSearch_TokenCount_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query never starts or ends with OR
+// =============================================================================
+
+func testEscapeFTS5Query_NoLeadingTrailingOR_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := EscapeFTS5Query(input)
+
+	if result == "" {
+		return // empty is fine
+	}
+
+	parts := strings.Fields(result)
+	if len(parts) == 0 {
+		return
+	}
+
+	// Property: output never starts with OR
+	if parts[0] == "OR" {
+		t.Fatalf("EscapeFTS5Query(%q) = %q starts with OR", input, result)
+	}
+
+	// Property: output never ends with OR
+	if parts[len(parts)-1] == "OR" {
+		t.Fatalf("EscapeFTS5Query(%q) = %q ends with OR", input, result)
+	}
+}
+
+func TestEscapeFTS5Query_NoLeadingTrailingOR_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_NoLeadingTrailingOR_Properties)
+}
+
+func FuzzEscapeFTS5Query_NoLeadingTrailingOR_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_NoLeadingTrailingOR_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query never has consecutive OR tokens
+// =============================================================================
+
+func testEscapeFTS5Query_NoConsecutiveOR_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := EscapeFTS5Query(input)
+
+	if result == "" {
+		return
+	}
+
+	parts := strings.Fields(result)
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "OR" && parts[i-1] == "OR" {
+			t.Fatalf("EscapeFTS5Query(%q) = %q has consecutive OR tokens", input, result)
+		}
+	}
+}
+
+func TestEscapeFTS5Query_NoConsecutiveOR_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_NoConsecutiveOR_Properties)
+}
+
+func FuzzEscapeFTS5Query_NoConsecutiveOR_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_NoConsecutiveOR_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query NOT only appears with a preceding positive term
+// =============================================================================
+
+func testEscapeFTS5Query_NOTRequiresPositive_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := EscapeFTS5Query(input)
+
+	if result == "" {
+		return
+	}
+
+	// Split into space-separated tokens, but preserve "NOT word*" as conceptual pairs
+	parts := strings.Split(result, " ")
+
+	// Find all NOT tokens and check they have a preceding positive term
+	for i, part := range parts {
+		if part != "NOT" {
+			continue
+		}
+		// NOT found; check that there's a preceding positive (non-NOT, non-OR) term
+		hasPositiveBefore := false
+		for j := 0; j < i; j++ {
+			if parts[j] != "OR" && parts[j] != "NOT" && parts[j] != "" {
+				hasPositiveBefore = true
+				break
+			}
+		}
+		if !hasPositiveBefore {
+			t.Fatalf("EscapeFTS5Query(%q) = %q has NOT at position %d without a preceding positive term",
+				input, result, i)
+		}
+	}
+}
+
+func TestEscapeFTS5Query_NOTRequiresPositive_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_NOTRequiresPositive_Properties)
+}
+
+func FuzzEscapeFTS5Query_NOTRequiresPositive_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_NOTRequiresPositive_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query bare words end with * (prefix matching)
+// =============================================================================
+
+func testEscapeFTS5Query_BareWordsHavePrefix_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := EscapeFTS5Query(input)
+
+	if result == "" {
+		return
+	}
+
+	tokens := tokenizeHumanSearch(result)
+	for _, tok := range tokens {
+		if tok.isPhrase {
+			continue
+		}
+		part := tok.text
+		if part == "OR" || part == "NOT" || part == "" {
+			continue
+		}
+		// Every bare word (including those after NOT) must end with *
+		if !strings.HasSuffix(part, "*") {
+			t.Fatalf("EscapeFTS5Query(%q) = %q contains bare word %q without trailing *",
+				input, result, part)
+		}
+	}
+}
+
+func TestEscapeFTS5Query_BareWordsHavePrefix_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_BareWordsHavePrefix_Properties)
+}
+
+func FuzzEscapeFTS5Query_BareWordsHavePrefix_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_BareWordsHavePrefix_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query returns empty for whitespace-only or empty input
+// =============================================================================
+
+func testEscapeFTS5Query_EmptyInput_Properties(t *rapid.T) {
+	// Generate whitespace-only inputs
+	input := rapid.OneOf(
+		rapid.Just(""),
+		rapid.Just(" "),
+		rapid.Just("  "),
+		rapid.Just("\t"),
+		rapid.Just("\t "),
+		rapid.Just("   \t  "),
+		rapid.Just("\n"),
+		rapid.Just("\r\n"),
+	).Draw(t, "input")
+
+	result := EscapeFTS5Query(input)
+
+	// Property: empty/whitespace-only input returns empty string
+	if result != "" {
+		t.Fatalf("EscapeFTS5Query(%q) = %q, expected empty string", input, result)
+	}
+}
+
+func TestEscapeFTS5Query_EmptyInput_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_EmptyInput_Properties)
+}
+
+func FuzzEscapeFTS5Query_EmptyInput_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_EmptyInput_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query strips null bytes
+// =============================================================================
+
+func testEscapeFTS5Query_NullBytesStripped_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := EscapeFTS5Query(input)
+
+	// Property: null bytes are never present in output
+	if strings.Contains(result, "\x00") {
+		t.Fatalf("EscapeFTS5Query(%q) = %q contains null bytes", input, result)
+	}
+}
+
+func TestEscapeFTS5Query_NullBytesStripped_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_NullBytesStripped_Properties)
+}
+
+func FuzzEscapeFTS5Query_NullBytesStripped_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_NullBytesStripped_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query output is valid FTS5 syntax (actual DB test)
+// =============================================================================
+
+func testEscapeFTS5Query_ValidFTS5Syntax_Properties(t *rapid.T) {
+	ctx := context.Background()
+
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := NewUserDBInMemory(userID)
+	if err != nil {
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
+	}
+	defer mustCloseUserDB(t, userDB)
+
+	now := drawUnixEpoch(t, "nowUnixEscapeSyntax")
+
+	// Create a note so we have an FTS index to query against
+	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
+		ID:        nextTestNoteID("fts-syntax-test-note"),
+		Title:     "Test Note for FTS5 syntax validation",
+		Content:   "Hello world this is searchable content with various words",
+		IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create test note: %v", err)
+	}
+
+	// Generate arbitrary input
+	input := testutil.ArbitrarySearchQuery().Draw(t, "query")
+	escaped := EscapeFTS5Query(input)
+
+	if escaped == "" {
+		return // empty queries are valid (produce no results)
+	}
+
+	// Property: the escaped query must be valid FTS5 MATCH syntax
+	// (no syntax errors when executed against a real FTS5 table)
+	var matchCount int
+	err = userDB.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM fts_notes
+		WHERE fts_notes MATCH ?
+	`, escaped).Scan(&matchCount)
+	if err != nil {
+		t.Fatalf("EscapeFTS5Query(%q) = %q produced FTS5 error: %v", input, escaped, err)
+	}
+}
+
+func TestEscapeFTS5Query_ValidFTS5Syntax_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_ValidFTS5Syntax_Properties)
+}
+
+func FuzzEscapeFTS5Query_ValidFTS5Syntax_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_ValidFTS5Syntax_Properties))
+}
+
+// =============================================================================
+// Property: EscapeFTS5Query output has no unescaped FTS5 special characters
+// =============================================================================
+
+func testEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *rapid.T) {
+	input := rapid.String().Draw(t, "input")
+	result := EscapeFTS5Query(input)
+
+	if result == "" {
+		return
+	}
+
+	// FTS5 special characters that should never appear bare in output:
+	// ( ) { } [ ] ^ : + ~ NEAR/
+	// Allowed special: * (prefix), " (phrase delimiters), NOT/OR (operators)
+	//
+	// Walk the output, skipping inside quoted phrases
+	inQuote := false
+	for i, r := range result {
+		if r == '"' {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue // anything goes inside quotes
+		}
+		switch r {
+		case '(', ')', '{', '}', '[', ']', '^', ':', '+', '~':
+			t.Fatalf("EscapeFTS5Query(%q) = %q contains unescaped special character %q at index %d",
+				input, result, r, i)
+		}
+	}
+
+	// Check for NEAR/ operator outside quotes
+	if strings.Contains(result, "NEAR/") {
+		t.Fatalf("EscapeFTS5Query(%q) = %q contains NEAR/ operator", input, result)
+	}
+	if strings.Contains(result, "NEAR ") {
+		// Check NEAR as standalone token (not part of a word like "nearby*")
+		parts := strings.Fields(result)
+		for _, p := range parts {
+			if p == "NEAR" {
+				t.Fatalf("EscapeFTS5Query(%q) = %q contains standalone NEAR operator", input, result)
+			}
+		}
+	}
+}
+
+func TestEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *testing.T) {
+	rapid.Check(t, testEscapeFTS5Query_NoUnescapedSpecialChars_Properties)
+}
+
+func FuzzEscapeFTS5Query_NoUnescapedSpecialChars_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_NoUnescapedSpecialChars_Properties))
 }

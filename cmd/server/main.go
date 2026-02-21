@@ -565,7 +565,9 @@ func (h *AuthenticatedNotesHandler) getService(r *http.Request) (*notes.Service,
 	if err == nil && account.SubscriptionStatus.Valid {
 		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 	}
-	return notes.NewService(userDB, storageLimit), nil
+	svc := notes.NewService(userDB, storageLimit)
+	_ = svc.Purge(30 * 24 * time.Hour)
+	return svc, nil
 }
 
 // ListNotes handles GET /api/notes - returns a paginated list of notes
@@ -682,6 +684,14 @@ func (h *AuthenticatedNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Re
 
 	note, err := svc.Update(id, params)
 	if err != nil {
+		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, notes.ErrRevisionConflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if errors.Is(err, notes.ErrStorageLimitExceeded) {
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
@@ -790,6 +800,7 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 	}
 	notesSvc := notes.NewService(userDB, storageLimit)
+	_ = notesSvc.Purge(30 * 24 * time.Hour)
 	mcpServer := mcp.NewServer(notesSvc)
 	mcpServer.ServeHTTP(w, r)
 }

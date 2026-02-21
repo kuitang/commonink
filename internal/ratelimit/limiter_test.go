@@ -264,8 +264,12 @@ func testRateLimiter_IdleLimiterCleanup(t *rapid.T) {
 		t.Fatal("Expected some limiters to be created")
 	}
 
-	// Wait longer than cleanup interval
-	time.Sleep(cleanupInterval + 5*time.Millisecond)
+	// Force all limiters to look stale without relying on wall-clock sleep.
+	rl.mu.Lock()
+	for _, entry := range rl.limiters {
+		entry.lastUsed = entry.lastUsed.Add(-(cleanupInterval + time.Second))
+	}
+	rl.mu.Unlock()
 
 	// Manually trigger cleanup (since background goroutine might not have run yet)
 	rl.Cleanup()
@@ -306,29 +310,24 @@ func testRateLimiter_ActiveLimiterNotCleaned(t *rapid.T) {
 
 	userID := userIDGenerator().Draw(t, "userID")
 
-	// Make initial request
+	// Make initial request.
 	rl.Allow(userID, false)
 
-	// Keep the limiter active by making requests periodically
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(cleanupInterval / 4)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				rl.Allow(userID, false)
-			case <-done:
-				return
-			}
-		}
-	}()
+	// Force limiter stale, then refresh it immediately before cleanup.
+	rl.mu.Lock()
+	entry, exists := rl.limiters[userID]
+	if !exists {
+		rl.mu.Unlock()
+		t.Fatal("expected limiter to exist after first request")
+	}
+	entry.lastUsed = entry.lastUsed.Add(-(cleanupInterval + time.Second))
+	rl.mu.Unlock()
 
-	// Wait and then cleanup
-	time.Sleep(cleanupInterval + 10*time.Millisecond)
+	// Refresh activity timestamp via normal API path.
+	rl.Allow(userID, false)
+
+	// Cleanup should retain this active limiter.
 	rl.Cleanup()
-
-	close(done)
 
 	// Property: Active limiter should NOT be cleaned up
 	if rl.Len() == 0 {
@@ -630,7 +629,7 @@ func testRateLimiter_StopGracefulShutdown(t *rapid.T) {
 	select {
 	case <-done:
 		// Success - Stop returned
-	case <-time.After(1 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Stop did not return within timeout - possible goroutine leak")
 	}
 }

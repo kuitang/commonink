@@ -1955,42 +1955,79 @@ func testIntegration_MCPFullCRUD_PropertiesWithServer(t *rapid.T, ts *fullAppSer
 		t.Fatalf("note_view failed: %v", errObj)
 	}
 
-	// Property 3: Viewed note should have expected content
+	// Property 3: Viewed note should have expected title and total_lines
+	// note_view now returns NoteViewResult with line-numbered content (cat -n style)
 	viewContent := viewResult["result"].(map[string]interface{})["content"].([]interface{})
 	viewText := viewContent[0].(map[string]interface{})["text"].(string)
 	var viewedNote struct {
-		ID      string `json:"id"`
-		Title   string `json:"title"`
-		Content string `json:"content"`
+		ID         string `json:"id"`
+		Title      string `json:"title"`
+		Content    string `json:"content"`
+		TotalLines int    `json:"total_lines"`
+		Revision   string `json:"revision_hash"`
 	}
 	json.Unmarshal([]byte(viewText), &viewedNote)
-	if viewedNote.Content != noteContent {
-		t.Fatalf("Viewed note content mismatch: expected %s, got %s", noteContent, viewedNote.Content)
+	if viewedNote.Title != noteTitle {
+		t.Fatalf("Viewed note title mismatch: expected %s, got %s", noteTitle, viewedNote.Title)
+	}
+	// Content is now line-numbered; verify it contains the original text
+	// Strip line number prefixes to extract raw content
+	viewedLines := strings.Split(viewedNote.Content, "\n")
+	rawLines := make([]string, 0, len(viewedLines))
+	for _, line := range viewedLines {
+		if idx := strings.IndexByte(line, '\t'); idx >= 0 {
+			rawLines = append(rawLines, line[idx+1:])
+		} else {
+			rawLines = append(rawLines, line)
+		}
+	}
+	rawContent := strings.Join(rawLines, "\n")
+	if rawContent != noteContent {
+		t.Fatalf("Viewed note content mismatch: expected %q, got %q (raw extracted from line-numbered)", noteContent, rawContent)
 	}
 
 	// Step 5: Update note
 	updateResult, _ := makeMCPCall("tools/call", map[string]interface{}{
 		"name": "note_update",
 		"arguments": map[string]interface{}{
-			"id":      noteID,
-			"content": updatedContent,
+			"id":         noteID,
+			"content":    updatedContent,
+			"prior_hash": viewedNote.Revision,
 		},
 	}, 5)
 	if errObj, ok := updateResult["error"]; ok {
 		t.Fatalf("note_update failed: %v", errObj)
 	}
 
-	// Property 4: Updated note should have new content
-	updateContent := updateResult["result"].(map[string]interface{})["content"].([]interface{})
-	updateText := updateContent[0].(map[string]interface{})["text"].(string)
-	var updatedNote struct {
-		ID      string `json:"id"`
-		Title   string `json:"title"`
+	// Property 4: Verify update took effect by reading the note back via note_view
+	verifyViewResult, _ := makeMCPCall("tools/call", map[string]interface{}{
+		"name": "note_view",
+		"arguments": map[string]interface{}{
+			"id": noteID,
+		},
+	}, 5)
+	if errObj, ok := verifyViewResult["error"]; ok {
+		t.Fatalf("note_view after update failed: %v", errObj)
+	}
+	verifyContent := verifyViewResult["result"].(map[string]interface{})["content"].([]interface{})
+	verifyText := verifyContent[0].(map[string]interface{})["text"].(string)
+	var verifiedNote struct {
 		Content string `json:"content"`
 	}
-	json.Unmarshal([]byte(updateText), &updatedNote)
-	if updatedNote.Content != updatedContent {
-		t.Fatalf("Updated note content mismatch: expected %s, got %s", updatedContent, updatedNote.Content)
+	json.Unmarshal([]byte(verifyText), &verifiedNote)
+	// Strip line numbers to get raw content
+	verifyLines := strings.Split(verifiedNote.Content, "\n")
+	verifyRaw := make([]string, 0, len(verifyLines))
+	for _, line := range verifyLines {
+		if idx := strings.IndexByte(line, '\t'); idx >= 0 {
+			verifyRaw = append(verifyRaw, line[idx+1:])
+		} else {
+			verifyRaw = append(verifyRaw, line)
+		}
+	}
+	verifyRawContent := strings.Join(verifyRaw, "\n")
+	if verifyRawContent != updatedContent {
+		t.Fatalf("Updated note content mismatch: expected %q, got %q", updatedContent, verifyRawContent)
 	}
 
 	// Step 6: Search notes (search for part of the content)

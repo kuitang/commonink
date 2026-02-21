@@ -92,19 +92,22 @@ All CI commands go through `make`. The Makefile handles goenv, CGO flags, and de
 ```bash
 make test
 ```
-- Runs all `Test*` functions (rapid property tests)
-- Excludes e2e conformance and browser tests
-- No coverage collection
-- Fails fast
+- Runs all `Test*` functions (rapid property tests, unit tests, e2e API/MCP tests)
+- **Excludes**: `tests/e2e/claude/`, `tests/e2e/openai/`, `tests/browser/` (conformance + browser)
+- No coverage collection, no external API keys needed
+- Fails fast — **always run this before committing**
 
 ### Full CI (~5 min) - Run Before PR
 ```bash
 make test-full
 ```
-- All `Test*` functions with coverage (including Claude conformance tests)
-- Coverage report generation
-- **Requires**: `OPENAI_API_KEY` in environment (for conformance tests)
+- Everything in `make test` PLUS Claude conformance, OpenAI conformance, and browser tests
+- Runs coverage instrumentation and writes coverage artifacts
+- **Requires**: `OPENAI_API_KEY`, `NGROK_AUTHTOKEN`, `claude` CLI, `ngrok` CLI
+- Uses an auto-selected free local port for the ngrok tunnel
+- Rapid checks: non-conformance packages use `RAPID_CHECKS_FULL` (default 100), conformance packages use `RAPID_CHECKS_CONFORMANCE` (default 3)
 - **Output**: `test-results/coverage.html`, `test-results/full-test.log`
+- **When to run**: before opening/updating a PR, or after changing MCP tool definitions/descriptions
 
 ### Fuzz Testing (30+ min) - Run Nightly or When Changing Security Code
 ```bash
@@ -212,7 +215,7 @@ curl -s -X POST http://localhost:8080/mcp \
 ```
 
 ### MCP Tools Available
-`note_create`, `note_view`, `note_list`, `note_update`, `note_delete`, `note_search`
+`note_create`, `note_view`, `note_list`, `note_update`, `note_edit`, `note_delete`, `note_search`
 
 ## Writing Tests
 
@@ -304,6 +307,19 @@ page.WaitForTimeout(3000)                 // arbitrary sleep
 **Wait strategy**: Use `WaitForLoadState(DomContentLoaded)` for navigation, then `WaitFor(Visible, 5s)` on a specific element. Never use `NetworkIdle` unless you need all async requests to finish (e.g., after fetch()).
 
 **Test env**: Use `setupAuthTestEnv(t)` which creates httptest server with all routes (web + auth handlers). See `tests/browser/auth_flow_test.go`.
+
+### HTML Template Partial Reuse
+
+**NEVER duplicate HTML markup across templates.** Extract shared blocks into `{{define}}` partials in `base.html` and use `{{template "partial-name"}}` or `{{template "partial-name" .}}` in page templates.
+
+Existing partials in `base.html` (use these, don't re-inline):
+- **Alerts**: `alert-success`, `alert-error`, `alert-warning`, `alert-info` — pass the message string as pipeline
+- **Icon circles**: `icon-circle-success`, `icon-circle-error`, `icon-circle-primary`
+- **Logos**: `google-logo-svg` — the 4-color Google "G" SVG
+- **Pricing**: `pricing-check` (green checkmark), `pricing-free-features`, `pricing-pro-features`
+- **Note card**: `note-card` (defined in `notes/list.html`, used by SSR search)
+
+When adding new UI elements, check `base.html` for an existing partial first. If the same HTML block appears in 2+ templates, extract it.
 
 ## Common Commands
 
@@ -399,11 +415,11 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 
 ## When to Run Each CI Level
 
-| Level | Command | When | Duration | Purpose |
-|-------|---------|------|----------|---------|
-| **quick** | `make test` | Before every commit | ~45s | Fast feedback loop |
-| **full** | `make test-full` | Before PR, after feature complete | ~5min | Comprehensive validation + coverage |
-| **fuzz** | `make test-fuzz` | Nightly, after security changes | 30+ min | Deep edge case discovery |
+| Level | Command | When | Duration | What it runs | Requirements |
+|-------|---------|------|----------|--------------|--------------|
+| **quick** | `make test` | Before every commit | ~45s | Unit, property, e2e API/MCP (excludes conformance + browser) | None (deterministic secrets auto-injected) |
+| **full** | `make test-full` | Before PR, after MCP tool changes | ~5min+ | Everything: quick + OpenAI conformance + Claude conformance + browser + coverage artifacts | `OPENAI_API_KEY`, `NGROK_AUTHTOKEN`, `claude` CLI, `ngrok` |
+| **fuzz** | `make test-fuzz` | Nightly, after security changes | 30+ min | Coverage-guided fuzzing of all `Fuzz*` functions | None |
 
 ## Coverage Targets
 
@@ -459,6 +475,36 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 | Clean | `make clean` |
 | Deploy | `make deploy` |
 | Show targets | `make help` |
+
+## Staging Deploy Checklist (Mandatory)
+
+When a user asks to deploy to staging preview, run this exact flow:
+
+```bash
+# 0) Ensure Fly auth is active (local)
+~/.fly/bin/flyctl auth whoami
+
+# 1) One-time/bootstrap (or after secret rotation) for all preview slots
+./scripts/bootstrap-staging-preview.sh staging-1-commonink
+./scripts/bootstrap-staging-preview.sh staging-2-commonink
+./scripts/bootstrap-staging-preview.sh staging-3-commonink
+
+# 2) Deploy by pushing branch updates to an open PR
+#    (GitHub Actions CI job `deploy-preview` runs scripts/deploy-staging-preview.sh)
+git push
+gh run watch --workflow CI
+```
+
+Do NOT run `scripts/deploy-staging-preview.sh` manually for normal staging deploy requests.
+Use PR + GitHub CI deploy-preview, then do the final manual Playwright check.
+
+Final step after deploy-preview succeeds: run a manual Playwright smoke check against the deployed URL and verify both:
+- Stripe checkout shows test-mode behavior/indicator.
+- Google OIDC flow reaches a Google sign-in page.
+
+Recommended Playwright smoke flow:
+1. Open `https://staging-<slot>-commonink.fly.dev/pricing`, exercise upgrade/checkout path, confirm Stripe test-mode indicator.
+2. Trigger `/auth/google` from the UI and confirm redirect to Google Accounts sign-in.
 
 ---
 

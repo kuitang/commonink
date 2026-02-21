@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -506,12 +507,11 @@ func TestRenderHelpers_FormatTimeAndTruncate(t *testing.T) {
 	listBody, _ := io.ReadAll(listResp.Body)
 	listHTML := string(listBody)
 
-	// formatTime outputs dates like "Jan 2, 2006"
-	// The note was just created, so the current date should appear
-	now := time.Now()
-	expectedMonth := now.Format("Jan")
-	if !strings.Contains(listHTML, expectedMonth) {
-		t.Errorf("formatTime: expected month %q in notes list HTML", expectedMonth)
+	// formatTime outputs dates like "Jan 2, 2006".
+	// Assert rendered shape instead of relying on current wall-clock month.
+	datePattern := regexp.MustCompile(`\b[A-Z][a-z]{2} [0-9]{1,2}, [0-9]{4}\b`)
+	if !datePattern.MatchString(listHTML) {
+		t.Error("formatTime: expected at least one rendered date in 'Jan 2, 2006' format")
 	}
 
 	// truncate: the list view truncates content to 150 chars.

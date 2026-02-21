@@ -28,7 +28,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/stretchr/testify/assert"
@@ -975,7 +974,7 @@ func recordTestConsent(t testing.TB, ts *oauthTestServer, userID, clientID strin
 
 	ctx := context.Background()
 	scopeStr := strings.Join(scopes, " ")
-	now := time.Now().Unix()
+	now := int64(1700000000) // Fixed timestamp keeps tests independent from wall-clock time.
 
 	_, err := ts.sessionsDB.DB().ExecContext(ctx, `
 		INSERT INTO oauth_consents (id, user_id, client_id, scopes, granted_at)
@@ -991,7 +990,7 @@ func recordTestConsent(t testing.TB, ts *oauthTestServer, userID, clientID strin
 func recordTestConsentRapid(ts *oauthTestServer, userID, clientID string, scopes []string) {
 	ctx := context.Background()
 	scopeStr := strings.Join(scopes, " ")
-	now := time.Now().Unix()
+	now := int64(1700000000) // Fixed timestamp keeps tests independent from wall-clock time.
 
 	_, err := ts.sessionsDB.DB().ExecContext(ctx, `
 		INSERT INTO oauth_consents (id, user_id, client_id, scopes, granted_at)

@@ -29,7 +29,7 @@ func ExampleInitSchemas() {
 	}
 
 	// Insert a test note using sqlc-generated queries
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 		ID:        "example-note",
 		Title:     "Example Note",
@@ -102,7 +102,7 @@ func ExampleUserDB_SearchNotes() {
 	}
 
 	// Insert some notes
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	notes := []struct {
 		id, title, content string
 	}{

@@ -32,6 +32,11 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+func drawMagicBaseTime(t *rapid.T, label string) time.Time {
+	sec := rapid.Int64Range(946684800, 4102444800).Draw(t, label) // 2000-01-01 .. 2100-01-01 UTC
+	return time.Unix(sec, 0).UTC()
+}
+
 // setupMagicTestService creates a UserService with a fake clock backed by a
 // fresh in-memory sessions database. The caller controls time via the returned
 // fakeClock.
@@ -53,7 +58,7 @@ func setupMagicTestService(t testing.TB) (*UserService, *fakeClock, *email.MockE
 	keyManager := crypto.NewKeyManager(masterKey, sessionsDB)
 	svc := NewUserService(sessionsDB, keyManager, emailSvc, "http://test.local", FakeInsecureHasher{})
 
-	clk := newFakeClock(time.Now())
+	clk := newFakeClock(time.Now().UTC())
 	svc.SetClock(clk)
 
 	return svc, clk, emailSvc
@@ -188,7 +193,7 @@ func testMagicToken_ValidBeforeExpiry(t *rapid.T, svc *UserService, clk *fakeClo
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@test\.com`).Draw(t, "email")
 
 	// Reset clock to a known base for this iteration.
-	clk.now = time.Now()
+	clk.now = drawMagicBaseTime(t, "baseUnixValidBefore")
 
 	ctx := context.Background()
 	if err := svc.SendMagicLink(ctx, emailAddr); err != nil {
@@ -234,7 +239,7 @@ func FuzzMagicToken_ValidBeforeExpiry_Properties(f *testing.F) {
 func testMagicToken_InvalidAtExpiry(t *rapid.T, svc *UserService, clk *fakeClock, emailSvc *email.MockEmailService) {
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@boundary\.com`).Draw(t, "email")
 
-	clk.now = time.Now()
+	clk.now = drawMagicBaseTime(t, "baseUnixAtExpiry")
 
 	ctx := context.Background()
 	if err := svc.SendMagicLink(ctx, emailAddr); err != nil {
@@ -282,7 +287,7 @@ func testMagicToken_InvalidAfterExpiry(t *rapid.T, svc *UserService, clk *fakeCl
 
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@expired\.com`).Draw(t, "email")
 
-	clk.now = time.Now()
+	clk.now = drawMagicBaseTime(t, "baseUnixAfterExpiry")
 
 	ctx := context.Background()
 	if err := svc.SendMagicLink(ctx, emailAddr); err != nil {
@@ -325,7 +330,7 @@ func FuzzMagicToken_InvalidAfterExpiry_Properties(f *testing.F) {
 func testMagicToken_SingleUse(t *rapid.T, svc *UserService, clk *fakeClock, emailSvc *email.MockEmailService) {
 	emailAddr := rapid.StringMatching(`[a-z]{5,10}@replay\.com`).Draw(t, "email")
 
-	clk.now = time.Now()
+	clk.now = drawMagicBaseTime(t, "baseUnixSingleUse")
 
 	ctx := context.Background()
 	if err := svc.SendMagicLink(ctx, emailAddr); err != nil {

@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"pgregory.net/rapid"
 
@@ -73,7 +72,7 @@ func (h *webFormAPIKeyHelper) createUserWithPassword(t interface {
 		UserID:       user.ID,
 		Email:        email,
 		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-		CreatedAt:    time.Now().Unix(),
+		CreatedAt:    1700000000, // Fixed timestamp to keep tests deterministic.
 	})
 	if err != nil {
 		// Account may already exist, try update

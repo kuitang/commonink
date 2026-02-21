@@ -35,7 +35,7 @@ func TestMilestone1Setup(t *testing.T) {
 	}
 
 	// Insert a test session using sqlc
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	expires := now + 86400 // 24 hours
 	sessionID := "test-session-123"
 
@@ -156,8 +156,11 @@ func TestMilestone1Setup(t *testing.T) {
 		t.Errorf("Expected content %q, got %q", newContent, note.Content)
 	}
 
-	// Test note deletion using sqlc
-	err = userDB.Queries().DeleteNote(ctx, "note-2")
+	// Test note deletion using sqlc (soft delete)
+	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
+		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
+		ID:        "note-2",
+	})
 	if err != nil {
 		t.Fatalf("Failed to delete note: %v", err)
 	}
@@ -195,7 +198,7 @@ func TestDatabaseEncryption(t *testing.T) {
 
 	// Insert sensitive data using sqlc
 	sensitiveData := "This is highly sensitive information that must be encrypted."
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 		ID:        "sensitive-note",
@@ -273,7 +276,7 @@ func TestMilestone1QuickStart(t *testing.T) {
 	}
 
 	// Step 3: Verify it works by doing a simple CRUD operation using sqlc
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 
 	// Create
 	err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
@@ -318,8 +321,11 @@ func TestMilestone1QuickStart(t *testing.T) {
 		t.Errorf("Expected 'Updated content', got %q", note.Content)
 	}
 
-	// Delete
-	err = userDB.Queries().DeleteNote(ctx, "quick-start-note")
+	// Delete (soft delete)
+	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
+		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
+		ID:        "quick-start-note",
+	})
 	if err != nil {
 		t.Fatalf("Failed to delete note: %v", err)
 	}
@@ -367,7 +373,7 @@ func TestMilestone1FTS5Search(t *testing.T) {
 		{"note-4", "Go Concurrency", "Deep dive into Go goroutines and channels."},
 	}
 
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	for _, n := range notes {
 		err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
 			ID:        n.id,
@@ -458,7 +464,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 			defer wg.Done()
 			localSuccess := 0
 			for j := 0; j < operationsPerGoroutine; j++ {
-				now := time.Now().Unix()
+				now := time.Now().UTC().Unix()
 				noteID := fmt.Sprintf("note-%d-%d", workerID, j)
 				title := fmt.Sprintf("Note from worker %d, op %d", workerID, j)
 				content := fmt.Sprintf("Content %d-%d", workerID, j)
