@@ -189,6 +189,25 @@ Code: `internal/auth/middleware.go`.
 
 This is required for automatic connector re-auth UX in MCP clients.[1][2][3]
 
+## App Management REST Auth Behavior
+
+The app management REST endpoints use the same auth middleware as notes APIs and therefore support:
+- Session cookie (`session_id`)
+- API key bearer token (`Authorization: Bearer agentnotes_key_...`)
+- OAuth access token bearer (`Authorization: Bearer <JWT>`)
+
+Protected app management routes:
+- `GET /api/apps`
+- `GET /api/apps/{name}`
+- `DELETE /api/apps/{name}`
+- `GET /api/apps/{name}/files`
+- `GET /api/apps/{name}/files/{path...}`
+- `GET /api/apps/{name}/logs`
+
+Operational split:
+- REST is read/manage (`/api/apps*`)
+- Deployment/execution is MCP-only (`app_create`, `app_write`, `app_bash` on `/mcp/apps` or `/mcp`)
+
 ## Known Interop Gaps (Current Runtime)
 - Consent persistence used by runtime OAuth handler is placeholder-backed, so prior consents are not durably reused.
   - `internal/auth/consent.go`

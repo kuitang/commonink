@@ -81,6 +81,14 @@ sequenceDiagram
 - Per-user DB handles are cached in-process.
 - `sessions.db` is shared and currently unencrypted.
 - Rate limiting is per-user in memory (free/paid tiers configured, paid detection currently stubbed).
+- App management REST API is mounted under `/api/apps` (auth + rate limiting):
+- `GET /api/apps`
+- `GET /api/apps/{name}`
+- `DELETE /api/apps/{name}`
+- `GET /api/apps/{name}/files`
+- `GET /api/apps/{name}/files/{path...}`
+- `GET /api/apps/{name}/logs` (`?lines=<n>` optional)
+- App deployment remains MCP-only via `app_create`, `app_write`, `app_bash`.
 - MCP is mounted in stateless POST mode at top-level router:
 - `POST /mcp` (all tools)
 - `POST /mcp/notes` (notes toolset)
