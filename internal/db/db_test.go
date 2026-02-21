@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1660,4 +1661,153 @@ func TestEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *testing.T) {
 func FuzzEscapeFTS5Query_NoUnescapedSpecialChars_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testEscapeFTS5Query_NoUnescapedSpecialChars_Properties))
+}
+
+// =============================================================================
+// Property: MigrateUserDB is idempotent (safe to call multiple times)
+// =============================================================================
+
+func testMigrateUserDB_Idempotent_Properties(t *rapid.T) {
+	userID := testutil.ValidUserID().Draw(t, "userID")
+	userDB, err := NewUserDBInMemory(userID)
+	if err != nil {
+		t.Fatalf("NewUserDBInMemory failed: %v", err)
+	}
+	defer mustCloseUserDB(t, userDB)
+
+	// Run migration N times — must never fail.
+	runs := rapid.IntRange(1, 5).Draw(t, "runs")
+	for i := 0; i < runs; i++ {
+		if err := userDB.MigrateUserDB(); err != nil {
+			t.Fatalf("MigrateUserDB failed on run %d: %v", i+1, err)
+		}
+	}
+
+	// Property: all migration-added columns remain queryable.
+	ctx := context.Background()
+	var n int64
+	if err := userDB.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL").Scan(&n); err != nil {
+		t.Fatalf("Migration column not accessible after %d runs: %v", runs, err)
+	}
+}
+
+func TestMigrateUserDB_Idempotent_Properties(t *testing.T) {
+	rapid.Check(t, testMigrateUserDB_Idempotent_Properties)
+}
+
+func FuzzMigrateUserDB_Idempotent_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testMigrateUserDB_Idempotent_Properties))
+}
+
+// =============================================================================
+// Property: OpenUserDB on a pre-existing DB with any random subset of
+// migration columns produces a DB where ALL migration columns are accessible.
+//
+// Each column that can be added by migration is independently drawn as
+// present/absent in the old schema. The property: regardless of what was
+// already in the old DB, after OpenUserDB every migration column is queryable.
+//
+// migrationColumns lists the notes columns added by UserDBMigrations.
+// Extend this list whenever a new migration column is added.
+// =============================================================================
+
+// migrationColumn describes a column added by UserDBMigrations and how to
+// verify it's queryable.
+type migrationColumn struct {
+	colDef      string // SQL fragment for CREATE TABLE (e.g., "deleted_at INTEGER")
+	checkQuery  string // query that errors if the column is missing
+	indexName   string // optional: index name that must exist (empty = no check)
+}
+
+// knownMigrationColumns enumerates every column+index added by UserDBMigrations.
+// Add entries here whenever a new migration is written.
+var knownMigrationColumns = []migrationColumn{
+	{
+		colDef:     "deleted_at INTEGER",
+		checkQuery: "SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL",
+		indexName:  "idx_notes_deleted_at",
+	},
+}
+
+func testMigrateUserDB_PreExistingDB_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
+	ctx := context.Background()
+	userID := testutil.ValidUserID().Draw(t, "userID")
+
+	// For each migration column, randomly decide whether the old DB already had it.
+	// This generates all 2^N combinations of "old schema" states.
+	presentInOld := make([]bool, len(knownMigrationColumns))
+	for i := range knownMigrationColumns {
+		presentInOld[i] = rapid.Bool().Draw(t, fmt.Sprintf("col_%d_present", i))
+	}
+
+	// Build a minimal notes table with the randomly selected optional columns.
+	optionalCols := ""
+	for i, col := range knownMigrationColumns {
+		if presentInOld[i] {
+			optionalCols += ",\n    " + col.colDef
+		}
+	}
+	oldSchemaSQL := fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    is_public INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL%s
+);`, optionalCols)
+
+	// Seed an encrypted file DB with this randomly-constructed old schema.
+	dbPath := filepath.Join(DataDirectory, userID+".db")
+	dekHex := hex.EncodeToString(hardcodedDEK)
+	dsn := fmt.Sprintf("%s?_pragma_key=x'%s'&_pragma_cipher_page_size=4096&_fts5_tokenizer=porter", dbPath, dekHex)
+	dsn = appendSQLiteParams(dsn, sqliteCommonParams())
+
+	seedDB, err := sql.Open(SQLiteDriverName, dsn)
+	if err != nil {
+		t.Fatalf("Failed to open seed DB: %v", err)
+	}
+	if _, err := seedDB.Exec(oldSchemaSQL); err != nil {
+		seedDB.Close()
+		t.Fatalf("Failed to seed old schema (presentInOld=%v): %v", presentInOld, err)
+	}
+	seedDB.Close()
+
+	// Open via the normal path (UserDBSchema exec + MigrateUserDB).
+	// Property: must always succeed regardless of which migration columns were missing.
+	db, err := OpenUserDB(userID)
+	if err != nil {
+		t.Fatalf("OpenUserDB failed (presentInOld=%v): %v", presentInOld, err)
+	}
+
+	// Property: every migration column is queryable after open.
+	for _, col := range knownMigrationColumns {
+		var n int64
+		if err := db.DB().QueryRowContext(ctx, col.checkQuery).Scan(&n); err != nil {
+			t.Fatalf("Migration column check failed (presentInOld=%v): query=%q err=%v",
+				presentInOld, col.checkQuery, err)
+		}
+		if col.indexName != "" {
+			var idxName string
+			if err := db.DB().QueryRowContext(ctx,
+				"SELECT name FROM sqlite_master WHERE type='index' AND name=?",
+				col.indexName,
+			).Scan(&idxName); err != nil {
+				t.Fatalf("Migration index %q missing (presentInOld=%v): %v",
+					col.indexName, presentInOld, err)
+			}
+		}
+	}
+}
+
+func TestMigrateUserDB_PreExistingDB_Properties(t *testing.T) {
+	rapid.Check(t, testMigrateUserDB_PreExistingDB_Properties)
+}
+
+func FuzzMigrateUserDB_PreExistingDB_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testMigrateUserDB_PreExistingDB_Properties))
 }
