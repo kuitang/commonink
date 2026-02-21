@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 	"pgregory.net/rapid"
@@ -366,146 +367,11 @@ func FuzzAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(f *testing.F) {
 }
 
 // ---------------------------------------------------------------------------
-// Roundtrip Create-Get-Delete Property Test
-// Creates an app via MCP app_create, verifies it via REST API, deletes it,
-// then verifies it returns 404.
+// Roundtrip Create-Get-Delete Test (single happy path)
+// Creates one app via MCP app_create, verifies it via REST API, deletes it,
+// then verifies it returns 404. Not a property test — sprites are expensive
+// to create and rate-limited (10/min), so one happy path is sufficient.
 // ---------------------------------------------------------------------------
-
-func testAppsAPI_Roundtrip_CreateGetDelete_Properties(rt *rapid.T, env *appsAPIEnv) {
-	suffix := rapid.StringMatching(`[a-z0-9]{6,12}`).Draw(rt, "suffix")
-	appName := "prop-rt-" + suffix
-
-	// Cleanup: always try to delete the app at the end in case the test fails partway.
-	defer func() {
-		// Best-effort delete via MCP (ignores errors).
-		_ = env.deleteAppViaMCP(appName)
-	}()
-
-	// Step 1: Create app via MCP app_create.
-	result, err := env.mcpCallTool("app_create", map[string]any{
-		"names": []any{appName},
-	})
-	if err != nil {
-		rt.Fatalf("app_create MCP call failed: %v", err)
-	}
-
-	// Parse the MCP tool result to extract the created app name.
-	var toolResult struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
-	}
-	if err := json.Unmarshal(result, &toolResult); err != nil {
-		rt.Fatalf("failed to parse MCP result: %v (%s)", err, string(result))
-	}
-	if toolResult.IsError {
-		// Rate limiting is expected when running many rapid iterations.
-		if len(toolResult.Content) > 0 && strings.Contains(toolResult.Content[0].Text, "rate_limited") {
-			rt.Skipf("sprite creation rate limited, skipping iteration")
-		}
-		rt.Fatalf("app_create returned isError=true: %s", string(result))
-	}
-
-	// The text content contains a JSON object with the create result.
-	var createPayloadText string
-	for _, c := range toolResult.Content {
-		if c.Type == "text" {
-			createPayloadText = c.Text
-			break
-		}
-	}
-	if createPayloadText == "" {
-		rt.Fatalf("app_create returned no text content: %s", string(result))
-	}
-
-	var createResult struct {
-		Created bool   `json:"created"`
-		Name    string `json:"name"`
-		Status  string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(createPayloadText), &createResult); err != nil {
-		rt.Fatalf("failed to parse app_create payload: %v (%s)", err, createPayloadText)
-	}
-	if !createResult.Created {
-		rt.Fatalf("app_create did not create the app: %s", createPayloadText)
-	}
-	if createResult.Name != appName {
-		rt.Fatalf("app_create returned unexpected name: got %q, want %q", createResult.Name, appName)
-	}
-
-	// Step 2: GET /api/apps -> assert app appears in the list.
-	listStatus, _, listBody, err := env.doRequest(http.MethodGet, "/api/apps", env.accessToken)
-	if err != nil {
-		rt.Fatalf("list request failed: %v", err)
-	}
-	if listStatus != http.StatusOK {
-		rt.Fatalf("expected 200 from list, got %d: %s", listStatus, string(listBody))
-	}
-
-	var listPayload struct {
-		Apps []struct {
-			Name   string `json:"name"`
-			Status string `json:"status"`
-		} `json:"apps"`
-	}
-	if err := json.Unmarshal(listBody, &listPayload); err != nil {
-		rt.Fatalf("failed to decode list response: %v (%s)", err, string(listBody))
-	}
-
-	found := false
-	for _, item := range listPayload.Apps {
-		if item.Name == appName {
-			found = true
-			break
-		}
-	}
-	if !found {
-		rt.Fatalf("app %q not found in list after create", appName)
-	}
-
-	// Step 3: GET /api/apps/{name} -> assert metadata matches.
-	getStatus, _, getBody, err := env.doRequest(http.MethodGet, "/api/apps/"+appName, env.accessToken)
-	if err != nil {
-		rt.Fatalf("get request failed: %v", err)
-	}
-	if getStatus != http.StatusOK {
-		rt.Fatalf("expected 200 from get, got %d: %s", getStatus, string(getBody))
-	}
-
-	var getPayload struct {
-		Name   string `json:"name"`
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal(getBody, &getPayload); err != nil {
-		rt.Fatalf("failed to decode get response: %v (%s)", err, string(getBody))
-	}
-	if getPayload.Name != appName {
-		rt.Fatalf("get returned wrong name: got %q, want %q", getPayload.Name, appName)
-	}
-	if strings.TrimSpace(getPayload.Status) == "" {
-		rt.Fatalf("get returned empty status for %q", appName)
-	}
-
-	// Step 4: DELETE /api/apps/{name} -> assert 200.
-	delStatus, _, delBody, err := env.doRequest(http.MethodDelete, "/api/apps/"+appName, env.accessToken)
-	if err != nil {
-		rt.Fatalf("delete request failed: %v", err)
-	}
-	if delStatus != http.StatusOK {
-		rt.Fatalf("expected 200 from delete, got %d: %s", delStatus, string(delBody))
-	}
-
-	// Step 5: GET /api/apps/{name} -> assert 404.
-	gone404Status, _, gone404Body, err := env.doRequest(http.MethodGet, "/api/apps/"+appName, env.accessToken)
-	if err != nil {
-		rt.Fatalf("get-after-delete request failed: %v", err)
-	}
-	if gone404Status != http.StatusNotFound {
-		rt.Fatalf("expected 404 after delete, got %d: %s", gone404Status, string(gone404Body))
-	}
-}
 
 // deleteAppViaMCP is a best-effort cleanup helper that deletes an app via MCP.
 func (e *appsAPIEnv) deleteAppViaMCP(appName string) error {
@@ -515,25 +381,109 @@ func (e *appsAPIEnv) deleteAppViaMCP(appName string) error {
 	return err
 }
 
-func TestAppsAPI_Roundtrip_CreateGetDelete_Properties(t *testing.T) {
+func TestAppsAPI_Roundtrip_CreateGetDelete(t *testing.T) {
 	if !spriteTokenIsReal() {
 		t.Skip("SPRITE_TOKEN is not set or looks like a dummy token; skipping roundtrip test")
 	}
 	env := getAppsAPIEnv(t)
-	rapid.Check(t, func(rt *rapid.T) {
-		testAppsAPI_Roundtrip_CreateGetDelete_Properties(rt, env)
-	})
-}
+	appName := "e2e-rt-" + strconv.FormatInt(time.Now().UnixMilli()%100000, 10)
 
-func FuzzAppsAPI_Roundtrip_CreateGetDelete_Properties(f *testing.F) {
-	if !spriteTokenIsReal() {
-		f.Skip("SPRITE_TOKEN is not set or looks like a dummy token; skipping roundtrip fuzz")
+	defer func() {
+		_ = env.deleteAppViaMCP(appName)
+	}()
+
+	// Step 1: Create app via MCP.
+	result, err := env.mcpCallTool("app_create", map[string]any{
+		"names": []any{appName},
+	})
+	if err != nil {
+		t.Fatalf("app_create MCP call failed: %v", err)
 	}
-	env := getAppsAPIEnv(f)
-	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
-		testAppsAPI_Roundtrip_CreateGetDelete_Properties(rt, env)
-	}))
+
+	var toolResult struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(result, &toolResult); err != nil {
+		t.Fatalf("failed to parse MCP result: %v (%s)", err, string(result))
+	}
+	if toolResult.IsError {
+		t.Fatalf("app_create returned isError=true: %s", string(result))
+	}
+
+	var createPayloadText string
+	for _, c := range toolResult.Content {
+		if c.Type == "text" {
+			createPayloadText = c.Text
+			break
+		}
+	}
+	if createPayloadText == "" {
+		t.Fatalf("app_create returned no text content: %s", string(result))
+	}
+
+	var createResult struct {
+		Created bool   `json:"created"`
+		Name    string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(createPayloadText), &createResult); err != nil {
+		t.Fatalf("failed to parse app_create payload: %v (%s)", err, createPayloadText)
+	}
+	if !createResult.Created || createResult.Name != appName {
+		t.Fatalf("app_create: created=%v name=%q, want true/%q", createResult.Created, createResult.Name, appName)
+	}
+
+	// Step 2: GET /api/apps -> app in list.
+	listStatus, _, listBody, err := env.doRequest(http.MethodGet, "/api/apps", env.accessToken)
+	if err != nil {
+		t.Fatalf("list request failed: %v", err)
+	}
+	if listStatus != http.StatusOK {
+		t.Fatalf("expected 200 from list, got %d: %s", listStatus, string(listBody))
+	}
+	if !strings.Contains(string(listBody), appName) {
+		t.Fatalf("app %q not found in list response", appName)
+	}
+
+	// Step 3: GET /api/apps/{name} -> metadata matches.
+	getStatus, _, getBody, err := env.doRequest(http.MethodGet, "/api/apps/"+appName, env.accessToken)
+	if err != nil {
+		t.Fatalf("get request failed: %v", err)
+	}
+	if getStatus != http.StatusOK {
+		t.Fatalf("expected 200 from get, got %d: %s", getStatus, string(getBody))
+	}
+	var getPayload struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(getBody, &getPayload); err != nil {
+		t.Fatalf("failed to decode get response: %v (%s)", err, string(getBody))
+	}
+	if getPayload.Name != appName || strings.TrimSpace(getPayload.Status) == "" {
+		t.Fatalf("get: name=%q status=%q", getPayload.Name, getPayload.Status)
+	}
+
+	// Step 4: DELETE -> 200.
+	delStatus, _, delBody, err := env.doRequest(http.MethodDelete, "/api/apps/"+appName, env.accessToken)
+	if err != nil {
+		t.Fatalf("delete request failed: %v", err)
+	}
+	if delStatus != http.StatusOK {
+		t.Fatalf("expected 200 from delete, got %d: %s", delStatus, string(delBody))
+	}
+
+	// Step 5: GET after delete -> 404.
+	goneStatus, _, goneBody, err := env.doRequest(http.MethodGet, "/api/apps/"+appName, env.accessToken)
+	if err != nil {
+		t.Fatalf("get-after-delete request failed: %v", err)
+	}
+	if goneStatus != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d: %s", goneStatus, string(goneBody))
+	}
 }
 
 // ---------------------------------------------------------------------------

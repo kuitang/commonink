@@ -30,7 +30,7 @@ export LISTEN_ADDR := :8080
 export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-export SPRITE_TOKEN ?= $(shell ./scripts/resolve-sprite-token.sh 2>/dev/null)
+export SPRITE_TOKEN ?= $(or $(shell ./scripts/resolve-sprite-token.sh 2>/dev/null),test-ci-no-flyctl)
 
 # Optional regex for go test -skip (CI-friendly filtering)
 TEST_SKIP_PATTERNS ?=
