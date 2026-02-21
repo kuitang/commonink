@@ -47,6 +47,7 @@ echo "  STRIPE_PUBLISHABLE_KEY"
 echo "  STRIPE_WEBHOOK_SECRET"
 echo "  STRIPE_PRICE_MONTHLY"
 echo "  STRIPE_PRICE_ANNUAL"
+echo "  SPRITE_TOKEN"
 echo ""
 
 if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
@@ -74,6 +75,7 @@ required_secrets=(
   STRIPE_WEBHOOK_SECRET
   STRIPE_PRICE_MONTHLY
   STRIPE_PRICE_ANNUAL
+  SPRITE_TOKEN
 )
 
 missing=()
