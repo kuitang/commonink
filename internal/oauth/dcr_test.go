@@ -37,6 +37,26 @@ func TestValidateRedirectURI_HTTPSAccepted_Properties(t *testing.T) {
 	})
 }
 
+func TestValidateRedirectURI_HTTPLoopbackAccepted_Properties(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		path := drawPath(rt, "path")
+		host := rapid.SampledFrom([]string{
+			"localhost",
+			"localhost:8080",
+			"127.0.0.1",
+			"127.0.0.1:8080",
+			"[::1]",
+			"[::1]:8080",
+		}).Draw(rt, "host")
+
+		redirectURI := "http://" + host + path
+
+		if err := validateRedirectURI(redirectURI); err != nil {
+			rt.Fatalf("expected loopback http redirect URI to be accepted, got error: %v (uri=%q)", err, redirectURI)
+		}
+	})
+}
+
 func TestValidateRedirectURI_HTTPRejected_Properties(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		host := drawHost(rt, "host")

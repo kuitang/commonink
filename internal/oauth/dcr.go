@@ -5,6 +5,7 @@ package oauth
 import (
 	"database/sql"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -205,7 +206,11 @@ func validateRedirectURI(raw string) error {
 	}
 
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "https" {
+	if scheme == "http" {
+		if !isAllowedInsecureLoopbackRedirectHost(parsed.Hostname()) {
+			return &redirectURIError{uri: raw, reason: "scheme must be https"}
+		}
+	} else if scheme != "https" {
 		return &redirectURIError{uri: raw, reason: "scheme must be https"}
 	}
 
@@ -214,6 +219,15 @@ func validateRedirectURI(raw string) error {
 	}
 
 	return nil
+}
+
+func isAllowedInsecureLoopbackRedirectHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isPublicClient determines if the client is public based on auth method.
