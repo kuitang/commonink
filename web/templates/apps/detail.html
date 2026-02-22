@@ -20,7 +20,27 @@
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
             <div class="themed-card p-4 lg:col-span-1 overflow-y-auto" style="max-height: 70vh;">
                 <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Files</h3>
-                <div id="file-list" class="space-y-1"><p class="text-xs text-gray-400">Loading...</p></div>
+                <div id="file-list" class="space-y-1">
+                    {{if .FilesErr}}
+                    <p class="text-xs text-error-500">{{.FilesErr}}</p>
+                    {{else if .Files}}
+                    {{range .Files}}
+                    {{if eq .Kind "file"}}
+                    <button data-path="{{.Path}}" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">
+                        <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        {{.Path}}
+                    </button>
+                    {{else}}
+                    <div class="block w-full px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 truncate">
+                        <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7l1.664-1.664A2 2 0 016.078 5H10l2 2h5.922a2 2 0 011.414.586L21 9M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9M3 7h18"/></svg>
+                        {{.Path}}/
+                    </div>
+                    {{end}}
+                    {{end}}
+                    {{else}}
+                    <p class="text-xs text-gray-400">No files found</p>
+                    {{end}}
+                </div>
             </div>
 
             <div class="lg:col-span-3 flex flex-col gap-6 min-h-0">
@@ -46,7 +66,7 @@
                         <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">Logs</h3>
                         <div class="flex items-center gap-3">
                             <label class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-                                <input type="checkbox" id="auto-refresh" class="rounded border-gray-300 dark:border-gray-600">
+                                <input type="checkbox" id="auto-refresh" class="rounded border-gray-300 dark:border-gray-600" checked>
                                 Auto-refresh
                             </label>
                             <button onclick="fetchLogs()" class="text-xs text-primary-600 dark:text-primary-400 hover:underline">Refresh</button>
@@ -62,7 +82,52 @@
 <script>
 (function() {
     var appName = "{{.App.Name}}";
-    var autoRefreshInterval = null;
+    var filesSource = null;
+    var logsSource = null;
+    var logsQuery = "lines=100";
+
+    function escapeHTML(text) {
+        return (text || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function bindFileButtons() {
+        document.querySelectorAll('.file-btn').forEach(function(btn) {
+            btn.onclick = function() { loadFile(this.getAttribute('data-path'), this); };
+        });
+    }
+
+    function renderFilesList(files, errorText) {
+        var list = document.getElementById('file-list');
+        if (errorText) {
+            list.innerHTML = '<p class="text-xs text-error-500">' + escapeHTML(errorText) + '</p>';
+            return;
+        }
+        if (!files || files.length === 0) {
+            list.innerHTML = '<p class="text-xs text-gray-400">No files found</p>';
+            return;
+        }
+
+        var html = '';
+        files.forEach(function(f) {
+            var path = escapeHTML(f.path || '');
+            if (f.kind === 'file') {
+                html += '<button data-path="' + path + '" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">' +
+                    '<svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>' +
+                    path + '</button>';
+            } else {
+                html += '<div class="block w-full px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 truncate">' +
+                    '<svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7l1.664-1.664A2 2 0 016.078 5H10l2 2h5.922a2 2 0 011.414.586L21 9M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9M3 7h18"/></svg>' +
+                    path + '/</div>';
+            }
+        });
+        list.innerHTML = html;
+        bindFileButtons();
+    }
 
     function fetchFiles() {
         fetch('/api/apps/' + encodeURIComponent(appName) + '/files', {credentials: 'same-origin'})
@@ -73,22 +138,32 @@
                 });
             })
             .then(function(data) {
-                var list = document.getElementById('file-list');
-                if (!data.files || data.files.length === 0) { list.innerHTML = '<p class="text-xs text-gray-400">No files found</p>'; return; }
-                var html = '';
-                data.files.forEach(function(f) {
-                    if (f.kind === 'file') {
-                        html += '<button data-path="' + f.path.replace(/"/g, '&quot;') + '" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">' +
-                            '<svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>' +
-                            f.path + '</button>';
-                    }
-                });
-                list.innerHTML = html || '<p class="text-xs text-gray-400">No files found</p>';
-                list.querySelectorAll('.file-btn').forEach(function(btn) {
-                    btn.addEventListener('click', function() { loadFile(this.getAttribute('data-path'), this); });
-                });
+                renderFilesList(data.files || [], '');
             })
-            .catch(function() { document.getElementById('file-list').innerHTML = '<p class="text-xs text-error-500">Failed to load files</p>'; });
+            .catch(function(e) { renderFilesList([], e.message || 'Failed to load files'); });
+    }
+
+    function startFilesStream() {
+        if (!window.EventSource) {
+            fetchFiles();
+            return;
+        }
+        if (filesSource) filesSource.close();
+        filesSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/files/stream');
+        filesSource.onmessage = function(event) {
+            var payload;
+            try { payload = JSON.parse(event.data); } catch (_err) { return; }
+            if (payload.error) {
+                renderFilesList([], payload.error);
+                return;
+            }
+            renderFilesList(payload.files || [], '');
+        };
+        filesSource.onerror = function() {
+            if (filesSource) filesSource.close();
+            filesSource = null;
+            setTimeout(startFilesStream, 3000);
+        };
     }
 
     function loadFile(path, btn) {
@@ -97,9 +172,20 @@
         document.querySelectorAll('.file-btn').forEach(function(b) { b.classList.remove('bg-primary-50', 'dark:bg-primary-900/30'); });
         if (btn) btn.classList.add('bg-primary-50', 'dark:bg-primary-900/30');
         fetch('/api/apps/' + encodeURIComponent(appName) + '/files/' + encodeURIComponent(path), {credentials: 'same-origin'})
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                return r.json().then(function(data) {
+                    if (!r.ok) throw new Error(data.error || 'Failed to load file');
+                    return data;
+                });
+            })
             .then(function(data) { document.getElementById('editor-content').value = data.content || ''; })
             .catch(function(e) { document.getElementById('editor-content').value = 'Error: ' + e.message; });
+    }
+
+    function setLogOutput(text) {
+        var el = document.getElementById('log-output');
+        el.textContent = text || 'No logs available';
+        el.scrollTop = el.scrollHeight;
     }
 
     window.doAction = function(action) {
@@ -108,32 +194,81 @@
         resultDiv.classList.remove('hidden');
         pre.textContent = 'Running ' + action + '...';
         fetch('/api/apps/' + encodeURIComponent(appName) + '/' + action, {method: 'POST', credentials: 'same-origin'})
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
+            .then(function(r) {
+                return r.json().then(function(data) { return {ok: r.ok, data: data}; });
+            })
+            .then(function(result) {
+                var data = result.data || {};
                 var output = '';
                 if (data.stdout) output += data.stdout;
                 if (data.stderr) output += (output ? '\n' : '') + data.stderr;
                 if (data.error) output = 'Error: ' + data.error;
-                pre.textContent = output || action + ' completed';
-                setTimeout(fetchLogs, 1000);
+                if (!result.ok && !output) output = 'Error: Action request failed';
+                pre.textContent = output || (action + ' completed');
+                setTimeout(window.fetchLogs, 1000);
             })
             .catch(function(e) { pre.textContent = 'Error: ' + e.message; });
     };
 
     window.fetchLogs = function() {
         fetch('/api/apps/' + encodeURIComponent(appName) + '/logs?lines=100', {credentials: 'same-origin'})
-            .then(function(r) { return r.json(); })
-            .then(function(data) { var el = document.getElementById('log-output'); el.textContent = data.output || data.error || 'No logs available'; el.scrollTop = el.scrollHeight; })
-            .catch(function(e) { document.getElementById('log-output').textContent = 'Error: ' + e.message; });
+            .then(function(r) {
+                return r.json().then(function(data) {
+                    if (!r.ok) throw new Error(data.error || 'Failed to load logs');
+                    return data;
+                });
+            })
+            .then(function(data) { setLogOutput(data.output || data.error || 'No logs available'); })
+            .catch(function(e) { setLogOutput('Error: ' + (e.message || 'Failed to load logs')); });
     };
 
+    function startLogsStream() {
+        if (!window.EventSource) {
+            window.fetchLogs();
+            return;
+        }
+        if (logsSource) logsSource.close();
+        logsSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/logs/stream?' + logsQuery);
+        logsSource.onmessage = function(event) {
+            var payload;
+            try { payload = JSON.parse(event.data); } catch (_err) { return; }
+            if (payload.error) {
+                setLogOutput('Error: ' + payload.error);
+                return;
+            }
+            setLogOutput(payload.output || payload.error || 'No logs available');
+        };
+        logsSource.onerror = function() {
+            if (logsSource) logsSource.close();
+            logsSource = null;
+            if (document.getElementById('auto-refresh').checked) {
+                setTimeout(startLogsStream, 3000);
+            }
+        };
+    }
+
+    bindFileButtons();
+    startFilesStream();
+
     document.getElementById('auto-refresh').addEventListener('change', function() {
-        if (this.checked) { fetchLogs(); autoRefreshInterval = setInterval(fetchLogs, 5000); }
-        else { clearInterval(autoRefreshInterval); autoRefreshInterval = null; }
+        if (this.checked) {
+            startLogsStream();
+        } else if (logsSource) {
+            logsSource.close();
+            logsSource = null;
+        }
     });
 
-    fetchFiles();
-    fetchLogs();
+    if (document.getElementById('auto-refresh').checked) {
+        startLogsStream();
+    } else {
+        window.fetchLogs();
+    }
+
+    window.addEventListener('beforeunload', function() {
+        if (filesSource) filesSource.close();
+        if (logsSource) logsSource.close();
+    });
 })();
 </script>
 {{end}}

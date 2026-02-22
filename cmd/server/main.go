@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -316,8 +317,10 @@ func main() {
 	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
 	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
 	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
+	mux.Handle("GET /api/apps/{name}/files/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamFiles))))
 	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
 	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	mux.Handle("GET /api/apps/{name}/logs/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamLogs))))
 	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
 	log.Println("Protected apps API routes registered at /api/apps with rate limiting")
 
@@ -433,8 +436,10 @@ func main() {
 	log.Println("    GET  /api/apps/{name}            - Get app metadata (protected)")
 	log.Println("    DELETE /api/apps/{name}          - Delete app + sprite (protected)")
 	log.Println("    GET  /api/apps/{name}/files      - List app files on sprite (protected)")
+	log.Println("    GET  /api/apps/{name}/files/stream - Stream app file list updates (SSE, protected)")
 	log.Println("    GET  /api/apps/{name}/files/{path...} - Read app file (protected)")
 	log.Println("    GET  /api/apps/{name}/logs       - Tail app logs (protected)")
+	log.Println("    GET  /api/apps/{name}/logs/stream - Stream app logs updates (SSE, protected)")
 	log.Println("  Billing:")
 	log.Println("    GET  /pricing                    - Pricing page")
 	log.Println("    POST /billing/checkout           - Create checkout session")
@@ -830,6 +835,79 @@ func (h *AuthenticatedAppsHandler) getService(r *http.Request) (*apps.Service, e
 	return apps.NewService(userDB, userID, h.SpriteToken), nil
 }
 
+func firstServiceName(servicesOutput string) string {
+	output := strings.TrimSpace(servicesOutput)
+	if output == "" {
+		return ""
+	}
+
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &list); err == nil {
+		for _, item := range list {
+			name := strings.TrimSpace(item.Name)
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	var item struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &item); err == nil {
+		name := strings.TrimSpace(item.Name)
+		if name != "" {
+			return name
+		}
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.Contains(strings.ToLower(trimmed), "no services") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[name:") && strings.HasSuffix(trimmed, "]") {
+			trimmed = strings.TrimSuffix(strings.TrimPrefix(trimmed, "[name:"), "]")
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 {
+			return strings.TrimSpace(fields[0])
+		}
+	}
+	return ""
+}
+
+func hashJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func writeSSEJSON(w http.ResponseWriter, flusher http.Flusher, payload any) bool {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func writeSSEPing(w http.ResponseWriter, flusher http.Flusher) bool {
+	if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
 func appErrorStatus(err error) int {
 	if err == nil {
 		return http.StatusInternalServerError
@@ -1011,6 +1089,162 @@ func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, result)
 }
 
+// StreamFiles handles GET /api/apps/{name}/files/stream - streams file list changes over SSE.
+func (h *AuthenticatedAppsHandler) StreamFiles(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	initial, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "list app files", err)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	lastHash := hashJSON(initial.Files)
+	if !writeSSEJSON(w, flusher, map[string]any{
+		"app":   name,
+		"files": initial.Files,
+	}) {
+		return
+	}
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			result, err := svc.ListFiles(r.Context(), name)
+			if err != nil {
+				if !writeSSEJSON(w, flusher, map[string]any{"error": err.Error()}) {
+					return
+				}
+				continue
+			}
+			nextHash := hashJSON(result.Files)
+			if nextHash == lastHash {
+				if !writeSSEPing(w, flusher) {
+					return
+				}
+				continue
+			}
+			lastHash = nextHash
+			if !writeSSEJSON(w, flusher, map[string]any{
+				"app":   name,
+				"files": result.Files,
+			}) {
+				return
+			}
+		}
+	}
+}
+
+// StreamLogs handles GET /api/apps/{name}/logs/stream - streams log output over SSE.
+func (h *AuthenticatedAppsHandler) StreamLogs(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	lines := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid lines parameter: must be a positive integer")
+			return
+		}
+		lines = parsed
+	}
+
+	initial, err := svc.TailLogs(r.Context(), name, lines)
+	if err != nil {
+		writeAppError(w, "tail app logs", err)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	lastHash := hashJSON(map[string]any{
+		"output":   initial.Output,
+		"stderr":   initial.Stderr,
+		"exit_code": initial.ExitCode,
+	})
+	if !writeSSEJSON(w, flusher, initial) {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			result, err := svc.TailLogs(r.Context(), name, lines)
+			if err != nil {
+				if !writeSSEJSON(w, flusher, map[string]any{"error": err.Error()}) {
+					return
+				}
+				continue
+			}
+			nextHash := hashJSON(map[string]any{
+				"output":   result.Output,
+				"stderr":   result.Stderr,
+				"exit_code": result.ExitCode,
+			})
+			if nextHash == lastHash {
+				if !writeSSEPing(w, flusher) {
+					return
+				}
+				continue
+			}
+			lastHash = nextHash
+			if !writeSSEJSON(w, flusher, result) {
+				return
+			}
+		}
+	}
+}
+
 // HandleAction handles POST /api/apps/{name}/{action} - performs start/stop/restart.
 func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
@@ -1039,14 +1273,7 @@ func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	svcName := ""
-	for _, line := range strings.Split(listResult.Stdout, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.Contains(strings.ToLower(trimmed), "no services") {
-			svcName = trimmed
-			break
-		}
-	}
+	svcName := firstServiceName(listResult.Stdout)
 	if svcName == "" {
 		writeError(w, http.StatusBadRequest, "No service registered. Use sprite-env services create first.")
 		return
@@ -1055,11 +1282,11 @@ func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 	var cmd string
 	switch action {
 	case "start":
-		cmd = fmt.Sprintf("sprite-env services start %s", svcName)
+		cmd = fmt.Sprintf("sprite-env services start %q", svcName)
 	case "stop":
-		cmd = fmt.Sprintf("sprite-env services stop %s", svcName)
+		cmd = fmt.Sprintf("sprite-env services stop %q", svcName)
 	case "restart":
-		cmd = fmt.Sprintf("sprite-env services stop %s && sprite-env services start %s", svcName, svcName)
+		cmd = fmt.Sprintf("sprite-env services stop %q && sprite-env services start %q", svcName, svcName)
 	}
 
 	result, err := svc.RunBash(r.Context(), name, cmd, 30)

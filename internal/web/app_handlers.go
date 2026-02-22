@@ -11,7 +11,9 @@ import (
 // AppDetailData contains data for the app detail page.
 type AppDetailData struct {
 	PageData
-	App *apps.AppMetadata
+	App       *apps.AppMetadata
+	Files     []apps.AppFileEntry
+	FilesErr  string
 }
 
 // HandleAppDetail handles GET /apps/{name} - shows app detail page.
@@ -36,12 +38,23 @@ func (h *WebHandler) HandleAppDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filesResult, filesErr := appSvc.ListFiles(r.Context(), name)
+	files := []apps.AppFileEntry{}
+	filesErrMsg := ""
+	if filesErr != nil {
+		filesErrMsg = filesErr.Error()
+	} else {
+		files = filesResult.Files
+	}
+
 	data := AppDetailData{
 		PageData: PageData{
 			Title: app.Name,
 			User:  getUserWithEmail(r),
 		},
-		App: app,
+		App:      app,
+		Files:    files,
+		FilesErr: filesErrMsg,
 	}
 
 	if err := h.renderer.Render(w, "apps/detail.html", data); err != nil {

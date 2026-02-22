@@ -394,8 +394,8 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	}
 }
 
-// TestBrowser_AppDetail_ActionButtons verifies that the app detail page
-// shows Start, Restart, and Stop action buttons.
+// TestBrowser_AppDetail_ActionButtons verifies that Start/Stop/Restart buttons
+// are visible and invoke sprite-env service actions successfully.
 func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping browser test in short mode")
@@ -456,6 +456,44 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stop button not visible: %v", err)
 	}
+
+	actionOutput := page.Locator("#action-result pre")
+	waitForAction := func(action string) string {
+		_, err = page.WaitForFunction(`(act) => {
+			const el = document.querySelector('#action-result pre');
+			if (!el) return false;
+			const text = (el.textContent || '').toLowerCase();
+			if (!text) return false;
+			return text.indexOf(('running ' + act + '...').toLowerCase()) === -1;
+		}`, action, playwright.PageWaitForFunctionOptions{
+			Timeout: playwright.Float(spriteTimeoutMS),
+		})
+		if err != nil {
+			text, _ := actionOutput.TextContent()
+			t.Fatalf("Action %q did not complete (output: %q): %v", action, text, err)
+		}
+		text, _ := actionOutput.TextContent()
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "service not found") || strings.Contains(lower, "requested url returned error") {
+			t.Fatalf("Action %q failed: %q", action, text)
+		}
+		return text
+	}
+
+	if err := stopBtn.Click(); err != nil {
+		t.Fatalf("Failed to click stop: %v", err)
+	}
+	waitForAction("stop")
+
+	if err := startBtn.Click(); err != nil {
+		t.Fatalf("Failed to click start: %v", err)
+	}
+	waitForAction("start")
+
+	if err := restartBtn.Click(); err != nil {
+		t.Fatalf("Failed to click restart: %v", err)
+	}
+	waitForAction("restart")
 }
 
 func min(a, b int) int {
