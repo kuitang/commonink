@@ -196,7 +196,7 @@ func AppToolDefinitions() []*mcp.Tool {
 		},
 		{
 			Name:        "app_write",
-			Description: "Apps tool. Write a file on the app Sprite. Paths are always rooted under /home/sprite (the runtime workspace root). Use this for source code, templates, config, and static assets.",
+			Description: "Apps tool. Write one or more files on the app Sprite in a single request. Paths are always rooted under /home/sprite (the runtime workspace root). Use this for source code, templates, config, and static assets.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -204,21 +204,36 @@ func AppToolDefinitions() []*mcp.Tool {
 						"type":        "string",
 						"description": "App name returned by app_create.",
 					},
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Path relative to /home/sprite.",
-					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "Full file content to write.",
+					"files": map[string]any{
+						"type":        "array",
+						"description": "Files to write. Each path is relative to /home/sprite.",
+						"minItems":    1,
+						"maxItems":    64,
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]any{
+								"path": map[string]any{
+									"type":        "string",
+									"description": "Path relative to /home/sprite.",
+									"maxLength":   1024,
+								},
+								"content": map[string]any{
+									"type":        "string",
+									"description": "Full file content to write.",
+									"maxLength":   1048576,
+								},
+							},
+							"required": []string{"path", "content"},
+						},
 					},
 				},
-				"required": []string{"app", "path", "content"},
+				"required": []string{"app", "files"},
 			},
 		},
 		{
 			Name:        "app_read",
-			Description: "Apps tool. Read a file from the app Sprite. Paths are always rooted under /home/sprite.",
+			Description: "Apps tool. Read one or more files from the app Sprite. Paths are always rooted under /home/sprite. The response shape matches app_write input: {app, files:[{path,content}]}.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -226,17 +241,31 @@ func AppToolDefinitions() []*mcp.Tool {
 						"type":        "string",
 						"description": "App name returned by app_create.",
 					},
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Path relative to /home/sprite.",
+					"files": map[string]any{
+						"type":        "array",
+						"description": "Files to read. Each item identifies one path relative to /home/sprite.",
+						"minItems":    1,
+						"maxItems":    64,
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]any{
+								"path": map[string]any{
+									"type":        "string",
+									"description": "Path relative to /home/sprite.",
+									"maxLength":   1024,
+								},
+							},
+							"required": []string{"path"},
+						},
 					},
 				},
-				"required": []string{"app", "path"},
+				"required": []string{"app", "files"},
 			},
 		},
 		{
 			Name:        "app_bash",
-			Description: "Apps tool. Run a shell command on the app Sprite. Every app_bash invocation starts in /home/sprite; directory changes (cd) do not persist across separate app_bash calls. Use for install/build/debug/deploy operations. Optional timeout_seconds defaults to 120 and maxes at 600. Response includes runtime_ms. The app must listen on port 8080. For persistent runtime, pass command and arguments separately (do not pass a space-joined shell string to --cmd). Examples to run via app_bash: sprite-env services list ; sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080 ; curl -sf http://localhost:8080 ; tail -n 100 /.sprite/logs/services/web.log. When stack is unspecified, use Flask conventions and verify with curl http://localhost:8080.",
+			Description: "Apps tool. Run a shell command on the app Sprite. Every app_bash invocation starts in /home/sprite; directory changes (cd) do not persist across separate app_bash calls. Use for install/build/debug/deploy operations. Optional timeout_seconds defaults to 120 and maxes at 600. Response includes runtime_ms and bounded stdout/stderr (with truncation flags when output is clipped). app_bash does not auto-append filesystem listings. The app must listen on port 8080. For persistent runtime, pass command and arguments separately (do not pass a space-joined shell string to --cmd). Examples to run via app_bash: sprite-env services list ; sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080 ; curl -sf http://localhost:8080 ; tail -n 100 /.sprite/logs/services/web.log. When stack is unspecified, use Flask conventions and verify with curl http://localhost:8080.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -247,6 +276,7 @@ func AppToolDefinitions() []*mcp.Tool {
 					"command": map[string]any{
 						"type":        "string",
 						"description": "Command to run on the sprite shell.",
+						"maxLength":   32768,
 					},
 					"timeout_seconds": map[string]any{
 						"type":        "integer",

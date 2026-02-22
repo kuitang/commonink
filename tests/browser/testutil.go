@@ -1051,7 +1051,7 @@ func (h *authenticatedAppsHandler) GetFile(w http.ResponseWriter, r *http.Reques
 	}
 	name := r.PathValue("name")
 	filePath := r.PathValue("path")
-	result, err := svc.ReadFile(r.Context(), name, filePath)
+	result, err := svc.ReadFiles(r.Context(), name, []string{filePath})
 	if err != nil {
 		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

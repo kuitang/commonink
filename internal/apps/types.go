@@ -46,24 +46,38 @@ type AppCreateResult struct {
 	Message   string             `json:"message,omitempty"`
 }
 
-// AppWriteResult is the response payload for app_write.
-type AppWriteResult struct {
-	App          string `json:"app"`
+// AppWriteFileInput is one file write request in app_write.
+type AppWriteFileInput struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// AppWriteFileResult reports one successfully written file.
+type AppWriteFileResult struct {
 	Path         string `json:"path"`
 	BytesWritten int    `json:"bytes_written"`
 }
 
+// AppWriteResult is the response payload for app_write.
+type AppWriteResult struct {
+	App               string               `json:"app"`
+	FilesWritten      []AppWriteFileResult `json:"files_written"`
+	TotalBytesWritten int                  `json:"total_bytes_written"`
+	TotalFilesWritten int                  `json:"total_files_written"`
+}
+
 // AppReadResult is the response payload for app_read.
 type AppReadResult struct {
-	App     string `json:"app"`
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	App   string              `json:"app"`
+	Files []AppWriteFileInput `json:"files"`
 }
 
 // AppBashResult is the response payload for app_bash.
 type AppBashResult struct {
 	Stdout         string `json:"stdout"`
 	Stderr         string `json:"stderr"`
+	StdoutTruncated bool   `json:"stdout_truncated"`
+	StderrTruncated bool   `json:"stderr_truncated"`
 	ExitCode       int    `json:"exit_code"`
 	RuntimeMS      int64  `json:"runtime_ms"`
 	PortStatus     string `json:"port_status,omitempty"`

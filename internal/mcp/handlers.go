@@ -2,16 +2,26 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 
 	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/logutil"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const (
+	maxAppWriteFilesInput         = 64
+	maxAppWritePathBytesInput     = 1024
+	maxAppWriteFileBytesInput     = 1 << 20
+	maxAppWriteTotalBytesInput    = 8 << 20
+	maxAppBashCommandBytesInput   = 32768
 )
 
 // Handler implements MCP tool call handling.
@@ -488,25 +498,67 @@ func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (*mcp
 		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid reason=%q", "app must be a string")
 		return newToolResultError("app must be a string"), nil
 	}
-	filePath, ok := args["path"].(string)
+	rawFiles, ok := args["files"].([]any)
 	if !ok {
-		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q", appName, "path must be a string")
-		return newToolResultError("path must be a string"), nil
+		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q", appName, "files must be an array")
+		return newToolResultError("files must be an array"), nil
 	}
-	content, ok := args["content"].(string)
-	if !ok {
-		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q path=%q reason=%q", appName, filePath, "content must be a string")
-		return newToolResultError("content must be a string"), nil
+	if len(rawFiles) == 0 {
+		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q", appName, "files must not be empty")
+		return newToolResultError("files must not be empty"), nil
 	}
-	log.Printf("[MCP][APPS] tool=app_write stage=validated app=%q path=%q content_bytes=%d", appName, filePath, len(content))
+	if len(rawFiles) > maxAppWriteFilesInput {
+		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q files=%d", appName, "too many files", len(rawFiles))
+		return newToolResultError(fmt.Sprintf("files must contain <= %d items", maxAppWriteFilesInput)), nil
+	}
 
-	log.Printf("[MCP][APPS] tool=app_write stage=service_call app=%q path=%q", appName, filePath)
-	result, err := h.appsSvc.WriteFile(ctx, appName, filePath, content)
-	if err != nil {
-		log.Printf("[MCP][APPS] tool=app_write stage=service_call status=error app=%q path=%q err=%v", appName, filePath, err)
-		return newToolResultError(fmt.Sprintf("failed to write file: %v", err)), nil
+	files := make([]apps.AppWriteFileInput, 0, len(rawFiles))
+	totalBytes := 0
+	for i, rawFile := range rawFiles {
+		fileObj, ok := rawFile.(map[string]any)
+		if !ok {
+			log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q index=%d", appName, "each files item must be an object", i)
+			return newToolResultError(fmt.Sprintf("files[%d] must be an object", i)), nil
+		}
+		filePath, ok := fileObj["path"].(string)
+		if !ok {
+			log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q index=%d", appName, "path must be a string", i)
+			return newToolResultError(fmt.Sprintf("files[%d].path must be a string", i)), nil
+		}
+		content, ok := fileObj["content"].(string)
+		if !ok {
+			log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q index=%d path=%q", appName, "content must be a string", i, filePath)
+			return newToolResultError(fmt.Sprintf("files[%d].content must be a string", i)), nil
+		}
+		if len(filePath) > maxAppWritePathBytesInput {
+			log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q index=%d path=%q", appName, "path too long", i, filePath)
+			return newToolResultError(fmt.Sprintf("files[%d].path must be <= %d bytes", i, maxAppWritePathBytesInput)), nil
+		}
+		contentBytes := len(content)
+		if contentBytes > maxAppWriteFileBytesInput {
+			log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q index=%d path=%q bytes=%d", appName, "file too large", i, filePath, contentBytes)
+			return newToolResultError(fmt.Sprintf("files[%d].content must be <= %d bytes", i, maxAppWriteFileBytesInput)), nil
+		}
+		totalBytes += contentBytes
+		if totalBytes > maxAppWriteTotalBytesInput {
+			log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q total_bytes=%d", appName, "aggregate content too large", totalBytes)
+			return newToolResultError(fmt.Sprintf("total file content must be <= %d bytes", maxAppWriteTotalBytesInput)), nil
+		}
+
+		files = append(files, apps.AppWriteFileInput{
+			Path:    filePath,
+			Content: content,
+		})
 	}
-	log.Printf("[MCP][APPS] tool=app_write stage=response status=ok app=%q path=%q bytes_written=%d", result.App, result.Path, result.BytesWritten)
+	log.Printf("[MCP][APPS] tool=app_write stage=validated app=%q files=%d total_bytes=%d", appName, len(files), totalBytes)
+
+	log.Printf("[MCP][APPS] tool=app_write stage=service_call app=%q files=%d", appName, len(files))
+	result, err := h.appsSvc.WriteFiles(ctx, appName, files)
+	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_write stage=service_call status=error app=%q files=%d err=%v", appName, len(files), err)
+		return newToolResultError(fmt.Sprintf("failed to write files: %v", err)), nil
+	}
+	log.Printf("[MCP][APPS] tool=app_write stage=response status=ok app=%q files=%d total_bytes=%d", result.App, result.TotalFilesWritten, result.TotalBytesWritten)
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
@@ -522,20 +574,47 @@ func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (*mcp.
 		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid reason=%q", "app must be a string")
 		return newToolResultError("app must be a string"), nil
 	}
-	filePath, ok := args["path"].(string)
+	rawFiles, ok := args["files"].([]any)
 	if !ok {
-		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q", appName, "path must be a string")
-		return newToolResultError("path must be a string"), nil
+		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q", appName, "files must be an array")
+		return newToolResultError("files must be an array"), nil
 	}
-	log.Printf("[MCP][APPS] tool=app_read stage=validated app=%q path=%q", appName, filePath)
+	if len(rawFiles) == 0 {
+		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q", appName, "files must not be empty")
+		return newToolResultError("files must not be empty"), nil
+	}
+	if len(rawFiles) > maxAppWriteFilesInput {
+		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q files=%d", appName, "too many files", len(rawFiles))
+		return newToolResultError(fmt.Sprintf("files must contain <= %d items", maxAppWriteFilesInput)), nil
+	}
 
-	log.Printf("[MCP][APPS] tool=app_read stage=service_call app=%q path=%q", appName, filePath)
-	result, err := h.appsSvc.ReadFile(ctx, appName, filePath)
-	if err != nil {
-		log.Printf("[MCP][APPS] tool=app_read stage=service_call status=error app=%q path=%q err=%v", appName, filePath, err)
-		return newToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
+	paths := make([]string, 0, len(rawFiles))
+	for i, rawFile := range rawFiles {
+		fileObj, ok := rawFile.(map[string]any)
+		if !ok {
+			log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q index=%d", appName, "each files item must be an object", i)
+			return newToolResultError(fmt.Sprintf("files[%d] must be an object", i)), nil
+		}
+		filePath, ok := fileObj["path"].(string)
+		if !ok {
+			log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q index=%d", appName, "path must be a string", i)
+			return newToolResultError(fmt.Sprintf("files[%d].path must be a string", i)), nil
+		}
+		if len(filePath) > maxAppWritePathBytesInput {
+			log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q index=%d path=%q", appName, "path too long", i, filePath)
+			return newToolResultError(fmt.Sprintf("files[%d].path must be <= %d bytes", i, maxAppWritePathBytesInput)), nil
+		}
+		paths = append(paths, filePath)
 	}
-	log.Printf("[MCP][APPS] tool=app_read stage=response status=ok app=%q path=%q content_bytes=%d", result.App, result.Path, len(result.Content))
+	log.Printf("[MCP][APPS] tool=app_read stage=validated app=%q files=%d", appName, len(paths))
+
+	log.Printf("[MCP][APPS] tool=app_read stage=service_call app=%q files=%d", appName, len(paths))
+	result, err := h.appsSvc.ReadFiles(ctx, appName, paths)
+	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_read stage=service_call status=error app=%q files=%d err=%v", appName, len(paths), err)
+		return newToolResultError(fmt.Sprintf("failed to read files: %v", err)), nil
+	}
+	log.Printf("[MCP][APPS] tool=app_read stage=response status=ok app=%q files=%d", result.App, len(result.Files))
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
@@ -556,6 +635,10 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.
 		log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q", appName, "command must be a string")
 		return newToolResultError("command must be a string"), nil
 	}
+	if len(command) > maxAppBashCommandBytesInput {
+		log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q command_bytes=%d", appName, "command too long", len(command))
+		return newToolResultError(fmt.Sprintf("command must be <= %d bytes", maxAppBashCommandBytesInput)), nil
+	}
 
 	timeoutSeconds := 0
 	if raw, exists := args["timeout_seconds"]; exists {
@@ -564,9 +647,17 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.
 			log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q", appName, "timeout_seconds must be an integer")
 			return newToolResultError("timeout_seconds must be an integer"), nil
 		}
+		if parsed != math.Trunc(parsed) {
+			log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q value=%v", appName, "timeout_seconds must be a whole number", parsed)
+			return newToolResultError("timeout_seconds must be an integer"), nil
+		}
 		timeoutSeconds = int(parsed)
+		if timeoutSeconds < 0 {
+			log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q value=%d", appName, "timeout_seconds must be >= 0", timeoutSeconds)
+			return newToolResultError("timeout_seconds must be >= 0"), nil
+		}
 	}
-	log.Printf("[MCP][APPS] tool=app_bash stage=validated app=%q timeout_seconds=%d command=%q", appName, timeoutSeconds, logutil.TruncateForLog(command, 512))
+	log.Printf("[MCP][APPS] tool=app_bash stage=validated app=%q timeout_seconds=%d command=%q", appName, timeoutSeconds, summarizeCommandForLog(command))
 
 	log.Printf("[MCP][APPS] tool=app_bash stage=service_call app=%q", appName)
 	result, err := h.appsSvc.RunBash(ctx, appName, command, timeoutSeconds)
@@ -624,4 +715,9 @@ func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (*mc
 	}
 	log.Printf("[MCP][APPS] tool=app_delete stage=response status=ok app=%q deleted=%t", result.App, result.Deleted)
 	return newToolResultText(marshalToolJSON(result)), nil
+}
+
+func summarizeCommandForLog(command string) string {
+	sum := sha256.Sum256([]byte(command))
+	return fmt.Sprintf("len=%d sha256=%x", len(command), sum[:6])
 }

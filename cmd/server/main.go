@@ -1181,7 +1181,7 @@ func (h *AuthenticatedAppsHandler) GetFile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	result, err := svc.ReadFile(r.Context(), name, filePath)
+	result, err := svc.ReadFiles(r.Context(), name, []string{filePath})
 	if err != nil {
 		writeAppError(w, "read app file", err)
 		return

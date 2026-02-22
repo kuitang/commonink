@@ -50,7 +50,7 @@ Code: `internal/web/handlers.go`, `internal/notes/public.go`, `internal/notes/re
 - `POST /mcp` for all tools
 - `POST /mcp/notes` for notes-only toolset
 - `POST /mcp/apps` for apps-only toolset
-6. For app workflows, client uses `app_create` (candidate names), `app_write`, and `app_bash`.
+6. For app workflows, client uses `app_create` (candidate names), `app_write` (batched `files[]` writes), and `app_bash`.
 
 Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/handlers.go`, `internal/mcp/server.go`, `internal/mcp/handlers.go`.
 

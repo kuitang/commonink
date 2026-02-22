@@ -171,9 +171,13 @@ func SeedApp(t testing.TB, baseURL, sessionID, appName string) string {
 	setupDeadline := time.Now().Add(30 * time.Second)
 
 	callToolWithRetry(t, baseURL, sessionID, "app_write", map[string]any{
-		"app":     appName,
-		"path":    "server.py",
-		"content": seedAppPythonServer,
+		"app": appName,
+		"files": []map[string]any{
+			{
+				"path":    "server.py",
+				"content": seedAppPythonServer,
+			},
+		},
 	}, setupDeadline, pollInterval)
 
 	fileReady := false
