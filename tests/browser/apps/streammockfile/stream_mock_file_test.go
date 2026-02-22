@@ -2,7 +2,6 @@ package browser
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
@@ -52,12 +51,9 @@ func TestBrowser_AppDetail_StreamMock_FileEvent(t *testing.T) {
 	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
 
 	streamPattern := "**/api/apps/" + appName + "/stream?*"
-	mockSSE := strings.Join([]string{
-		"event: file",
-		`data: {"html":"<button data-path=\"mock.txt\" class=\"file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate\">mock.txt</button>"}`,
-		"",
-		"",
-	}, "\n")
+	mockSSE := BuildTestSSEEventBody("file", map[string]any{
+		"html": `<button data-path="mock.txt" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">mock.txt</button>`,
+	})
 
 	if err := page.Route(streamPattern, func(route playwright.Route) {
 		_ = route.Fulfill(playwright.RouteFulfillOptions{

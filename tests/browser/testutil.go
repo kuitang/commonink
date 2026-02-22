@@ -4,6 +4,7 @@ package browser
 
 import (
 	"context"
+	"bytes"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -857,6 +858,19 @@ func hashTestJSON(v any) string {
 	}
 	sum := sha256.Sum256(b)
 	return fmt.Sprintf("%x", sum[:])
+}
+
+// TestSSEEventBody builds a valid SSE payload for an event and payload.
+// This keeps browser fixtures aligned with the server-side SSE encoding.
+func TestSSEEventBody(event string, payload any) string {
+	var buf bytes.Buffer
+	if err := sse.Encode(&buf, sse.Event{
+		Event: event,
+		Data:  payload,
+	}); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 func writeTestSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, payload any) bool {

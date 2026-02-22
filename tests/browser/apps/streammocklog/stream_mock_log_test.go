@@ -2,7 +2,6 @@ package browser
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
@@ -52,12 +51,11 @@ func TestBrowser_AppDetail_StreamMock_LogEvent(t *testing.T) {
 	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
 
 	streamPattern := "**/api/apps/" + appName + "/stream?*"
-	mockSSE := strings.Join([]string{
-		"event: log",
-		`data: {"output":"mock log line","stderr":"","exit_code":0}`,
-		"",
-		"",
-	}, "\n")
+	mockSSE := BuildTestSSEEventBody("log", map[string]any{
+		"output": "mock log line",
+		"stderr": "",
+		"exit_code": 0,
+	})
 
 	if err := page.Route(streamPattern, func(route playwright.Route) {
 		_ = route.Fulfill(playwright.RouteFulfillOptions{

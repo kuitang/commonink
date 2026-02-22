@@ -18,4 +18,5 @@ var (
 	GenerateUniqueEmail   = root.GenerateUniqueEmail
 	GenerateUniqueAppName = root.GenerateUniqueAppName
 	testFirstServiceName  = root.TestFirstServiceName
+	BuildTestSSEEventBody = root.TestSSEEventBody
 )
