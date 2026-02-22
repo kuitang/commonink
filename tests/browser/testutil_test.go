@@ -926,14 +926,19 @@ func (h *authenticatedAppsHandler) renderFilesHTML(files []apps.AppFileEntry, fi
 	if h.Renderer == nil {
 		return "", fmt.Errorf("renderer is not configured")
 	}
-	return h.Renderer.RenderPartialToString(
+	rec := httptest.NewRecorder()
+	if err := h.Renderer.RenderPartial(
+		rec,
 		"apps/detail.html",
 		"app-files-list",
 		map[string]any{
 			"Files":    files,
 			"FilesErr": filesErr,
 		},
-	)
+	); err != nil {
+		return "", err
+	}
+	return rec.Body.String(), nil
 }
 
 func (h *authenticatedAppsHandler) ListApps(w http.ResponseWriter, r *http.Request) {
