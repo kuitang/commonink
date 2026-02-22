@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kuitang/agent-notes/internal/apps"
+	"github.com/kuitang/agent-notes/internal/logutil"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -29,8 +30,17 @@ func NewHandler(notesSvc *notes.Service, appsSvc *apps.Service) *Handler {
 
 // createToolHandler returns a tool handler function for the given tool name.
 func (h *Handler) createToolHandler(name string) func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
-		result, err := h.HandleToolCall(ctx, name, args)
+	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (result *mcp.CallToolResult, extra any, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[ERROR] MCP tool %s panic recovered: %v", name, recovered)
+				result = newToolResultError("internal tool panic")
+				extra = nil
+				err = nil
+			}
+		}()
+
+		result, err = h.HandleToolCall(ctx, name, args)
 		if err != nil {
 			log.Printf("[ERROR] MCP tool %s failed: %v", name, err)
 		} else if result != nil && result.IsError {
@@ -428,91 +438,122 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 }
 
 func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	log.Printf("[MCP][APPS] tool=app_create stage=start")
 	if err := h.requireApps(); err != nil {
+		log.Printf("[MCP][APPS] tool=app_create stage=reject reason=%q", err.Error())
 		return newToolResultError(err.Error()), nil
 	}
 
 	namesRaw, ok := args["names"].([]any)
 	if !ok || len(namesRaw) == 0 {
+		log.Printf("[MCP][APPS] tool=app_create stage=validate status=invalid reason=%q", "names must be a non-empty array of strings")
 		return newToolResultError("names must be a non-empty array of strings"), nil
 	}
 	names := make([]string, 0, len(namesRaw))
 	for _, item := range namesRaw {
 		name, ok := item.(string)
 		if !ok {
+			log.Printf("[MCP][APPS] tool=app_create stage=validate status=invalid reason=%q", "names must be a non-empty array of strings")
 			return newToolResultError("names must be a non-empty array of strings"), nil
 		}
 		names = append(names, name)
 	}
+	log.Printf("[MCP][APPS] tool=app_create stage=validated names_count=%d", len(names))
 
+	log.Printf("[MCP][APPS] tool=app_create stage=service_call")
 	result, err := h.appsSvc.Create(ctx, names)
 	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_create stage=service_call status=error err=%v", err)
 		return newToolResultError(fmt.Sprintf("failed to create app: %v", err)), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_create stage=service_call status=ok created=%t app=%q attempts=%d", result.Created, result.Name, len(result.Attempts))
 	payload := marshalToolJSON(result)
 	if !result.Created {
+		log.Printf("[MCP][APPS] tool=app_create stage=response status=is_error payload=%q", logutil.TruncateForLog(payload, 512))
 		return newToolResultError(payload), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_create stage=response status=ok app=%q", result.Name)
 	return newToolResultText(payload), nil
 }
 
 func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	log.Printf("[MCP][APPS] tool=app_write stage=start")
 	if err := h.requireApps(); err != nil {
+		log.Printf("[MCP][APPS] tool=app_write stage=reject reason=%q", err.Error())
 		return newToolResultError(err.Error()), nil
 	}
 
 	appName, ok := args["app"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid reason=%q", "app must be a string")
 		return newToolResultError("app must be a string"), nil
 	}
 	filePath, ok := args["path"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q reason=%q", appName, "path must be a string")
 		return newToolResultError("path must be a string"), nil
 	}
 	content, ok := args["content"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_write stage=validate status=invalid app=%q path=%q reason=%q", appName, filePath, "content must be a string")
 		return newToolResultError("content must be a string"), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_write stage=validated app=%q path=%q content_bytes=%d", appName, filePath, len(content))
 
+	log.Printf("[MCP][APPS] tool=app_write stage=service_call app=%q path=%q", appName, filePath)
 	result, err := h.appsSvc.WriteFile(ctx, appName, filePath, content)
 	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_write stage=service_call status=error app=%q path=%q err=%v", appName, filePath, err)
 		return newToolResultError(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_write stage=response status=ok app=%q path=%q bytes_written=%d", result.App, result.Path, result.BytesWritten)
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
 func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	log.Printf("[MCP][APPS] tool=app_read stage=start")
 	if err := h.requireApps(); err != nil {
+		log.Printf("[MCP][APPS] tool=app_read stage=reject reason=%q", err.Error())
 		return newToolResultError(err.Error()), nil
 	}
 
 	appName, ok := args["app"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid reason=%q", "app must be a string")
 		return newToolResultError("app must be a string"), nil
 	}
 	filePath, ok := args["path"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_read stage=validate status=invalid app=%q reason=%q", appName, "path must be a string")
 		return newToolResultError("path must be a string"), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_read stage=validated app=%q path=%q", appName, filePath)
 
+	log.Printf("[MCP][APPS] tool=app_read stage=service_call app=%q path=%q", appName, filePath)
 	result, err := h.appsSvc.ReadFile(ctx, appName, filePath)
 	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_read stage=service_call status=error app=%q path=%q err=%v", appName, filePath, err)
 		return newToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_read stage=response status=ok app=%q path=%q content_bytes=%d", result.App, result.Path, len(result.Content))
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
 func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	log.Printf("[MCP][APPS] tool=app_bash stage=start")
 	if err := h.requireApps(); err != nil {
+		log.Printf("[MCP][APPS] tool=app_bash stage=reject reason=%q", err.Error())
 		return newToolResultError(err.Error()), nil
 	}
 
 	appName, ok := args["app"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid reason=%q", "app must be a string")
 		return newToolResultError("app must be a string"), nil
 	}
 	command, ok := args["command"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q", appName, "command must be a string")
 		return newToolResultError("command must be a string"), nil
 	}
 
@@ -520,25 +561,34 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.
 	if raw, exists := args["timeout_seconds"]; exists {
 		parsed, ok := raw.(float64)
 		if !ok {
+			log.Printf("[MCP][APPS] tool=app_bash stage=validate status=invalid app=%q reason=%q", appName, "timeout_seconds must be an integer")
 			return newToolResultError("timeout_seconds must be an integer"), nil
 		}
 		timeoutSeconds = int(parsed)
 	}
+	log.Printf("[MCP][APPS] tool=app_bash stage=validated app=%q timeout_seconds=%d command=%q", appName, timeoutSeconds, logutil.TruncateForLog(command, 512))
 
+	log.Printf("[MCP][APPS] tool=app_bash stage=service_call app=%q", appName)
 	result, err := h.appsSvc.RunBash(ctx, appName, command, timeoutSeconds)
 	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_bash stage=service_call status=error app=%q err=%v", appName, err)
 		return newToolResultError(fmt.Sprintf("failed to run command: %v", err)), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_bash stage=response status=ok app=%q exit_code=%d runtime_ms=%d port_status=%q stdout_bytes=%d stderr_bytes=%d", appName, result.ExitCode, result.RuntimeMS, result.PortStatus, len(result.Stdout), len(result.Stderr))
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
 func (h *Handler) handleAppList(ctx context.Context) (*mcp.CallToolResult, error) {
+	log.Printf("[MCP][APPS] tool=app_list stage=start")
 	if err := h.requireApps(); err != nil {
+		log.Printf("[MCP][APPS] tool=app_list stage=reject reason=%q", err.Error())
 		return newToolResultError(err.Error()), nil
 	}
 
+	log.Printf("[MCP][APPS] tool=app_list stage=service_call")
 	items, err := h.appsSvc.List(ctx)
 	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_list stage=service_call status=error err=%v", err)
 		return newToolResultError(fmt.Sprintf("failed to list apps: %v", err)), nil
 	}
 	response := struct {
@@ -548,22 +598,30 @@ func (h *Handler) handleAppList(ctx context.Context) (*mcp.CallToolResult, error
 		Apps:       items,
 		TotalCount: len(items),
 	}
+	log.Printf("[MCP][APPS] tool=app_list stage=response status=ok total_count=%d", response.TotalCount)
 
 	return newToolResultText(marshalToolJSON(response)), nil
 }
 
 func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	log.Printf("[MCP][APPS] tool=app_delete stage=start")
 	if err := h.requireApps(); err != nil {
+		log.Printf("[MCP][APPS] tool=app_delete stage=reject reason=%q", err.Error())
 		return newToolResultError(err.Error()), nil
 	}
 
 	appName, ok := args["app"].(string)
 	if !ok {
+		log.Printf("[MCP][APPS] tool=app_delete stage=validate status=invalid reason=%q", "app must be a string")
 		return newToolResultError("app must be a string"), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_delete stage=validated app=%q", appName)
+	log.Printf("[MCP][APPS] tool=app_delete stage=service_call app=%q", appName)
 	result, err := h.appsSvc.Delete(ctx, appName)
 	if err != nil {
+		log.Printf("[MCP][APPS] tool=app_delete stage=service_call status=error app=%q err=%v", appName, err)
 		return newToolResultError(fmt.Sprintf("failed to delete app: %v", err)), nil
 	}
+	log.Printf("[MCP][APPS] tool=app_delete stage=response status=ok app=%q deleted=%t", result.App, result.Deleted)
 	return newToolResultText(marshalToolJSON(result)), nil
 }

@@ -456,9 +456,9 @@ func main() {
 		SpriteToken: resolvedSpriteToken,
 	}
 
-	mcpAllRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP)))
-	mcpNotesRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP)))
-	mcpAppsRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP)))
+	mcpAllRoute := mcpRouteGuard(rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP))))
+	mcpNotesRoute := mcpRouteGuard(rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP))))
+	mcpAppsRoute := mcpRouteGuard(rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP))))
 
 	mountMCPRoute(mux, "/mcp", mcpAllRoute)
 	mountMCPRoute(mux, "/mcp/notes", mcpNotesRoute)
@@ -1463,6 +1463,50 @@ func mountMCPRoute(mux *http.ServeMux, route string, handler http.Handler) {
 	mux.Handle("POST "+route, handler)
 	mux.Handle("DELETE "+route, handler)
 	mux.Handle("OPTIONS "+route, handler)
+}
+
+type responseWriteTracker struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *responseWriteTracker) WriteHeader(code int) {
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *responseWriteTracker) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *responseWriteTracker) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func mcpRouteGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tracked := &responseWriteTracker{ResponseWriter: w}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[ERROR] MCP route panic recovered: method=%s path=%s remote=%s panic=%v", r.Method, r.URL.Path, r.RemoteAddr, recovered)
+				if !tracked.wroteHeader {
+					http.Error(tracked, "Internal server error", http.StatusInternalServerError)
+				}
+			}
+
+			if (r.Method == http.MethodPost || r.Method == http.MethodDelete) && !tracked.wroteHeader {
+				log.Printf("[ERROR] MCP route returned without writing response: method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
+				http.Error(tracked, "MCP route returned without writing response", http.StatusInternalServerError)
+			}
+		}()
+
+		next.ServeHTTP(tracked, r)
+	})
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.

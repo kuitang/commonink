@@ -2,17 +2,15 @@ package mcp
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/apps"
+	"github.com/kuitang/agent-notes/internal/logutil"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -31,9 +29,10 @@ const (
 
 type mcpResponseLogger struct {
 	http.ResponseWriter
-	statusCode int
-	body       []byte
-	truncated  bool
+	statusCode  int
+	body        []byte
+	truncated   bool
+	wroteHeader bool
 }
 
 func newMCPResponseLogger(w http.ResponseWriter) *mcpResponseLogger {
@@ -45,11 +44,15 @@ func newMCPResponseLogger(w http.ResponseWriter) *mcpResponseLogger {
 }
 
 func (w *mcpResponseLogger) WriteHeader(code int) {
+	w.wroteHeader = true
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *mcpResponseLogger) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+	}
 	if len(w.body) < mcpDebugBodyLogLimitBytes {
 		remaining := mcpDebugBodyLogLimitBytes - len(w.body)
 		if len(p) <= remaining {
@@ -80,126 +83,13 @@ func mcpDebugEnabled() bool {
 	}
 }
 
-func isSensitiveLogField(key string) bool {
-	key = strings.ToLower(strings.TrimSpace(key))
-	key = strings.ReplaceAll(key, "-", "")
-	key = strings.ReplaceAll(key, "_", "")
-
-	switch {
-	case key == "authorization":
-		return true
-	case strings.Contains(key, "token"):
-		return true
-	case strings.Contains(key, "secret"):
-		return true
-	case strings.Contains(key, "password"):
-		return true
-	case strings.Contains(key, "apikey"):
-		return true
-	case strings.Contains(key, "cookie"):
-		return true
-	case strings.Contains(key, "auth"):
-		return true
-	default:
-		return false
-	}
-}
-
-func redactHeaderValue(key, value string) string {
-	if isSensitiveLogField(key) {
-		return "[REDACTED]"
-	}
-	return value
-}
-
-func formatHeadersForLog(headers http.Header) string {
-	if len(headers) == 0 {
-		return "{}"
-	}
-
-	keys := make([]string, 0, len(headers))
-	for k := range headers {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var parts []string
-	for _, k := range keys {
-		values := headers.Values(k)
-		if len(values) == 0 {
-			parts = append(parts, fmt.Sprintf("%s=<empty>", strings.ToLower(k)))
-			continue
-		}
-
-		redacted := make([]string, len(values))
-		for i, v := range values {
-			redacted[i] = redactHeaderValue(k, v)
-		}
-		parts = append(parts, fmt.Sprintf("%s=%q", strings.ToLower(k), strings.Join(redacted, ", ")))
-	}
-	return strings.Join(parts, "; ")
-}
-
-func redactBodyForLog(contentType string, body []byte) string {
-	text := string(body)
-	if !strings.Contains(strings.ToLower(contentType), "json") {
-		return text
-	}
-
-	var payload any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return text
-	}
-
-	var redact func(v any)
-	redact = func(v any) {
-		switch typed := v.(type) {
-		case map[string]any:
-			for k, child := range typed {
-				if isSensitiveLogField(k) {
-					typed[k] = "[REDACTED]"
-					continue
-				}
-				redact(child)
-			}
-		case []any:
-			for _, child := range typed {
-				redact(child)
-			}
-		}
-	}
-
-	redact(payload)
-	safeJSON, err := json.Marshal(payload)
-	if err != nil {
-		return text
-	}
-	return string(safeJSON)
-}
-
-func formatBodyForLog(contentType string, b []byte, truncated bool) string {
-	if len(b) == 0 {
-		return ""
-	}
-	textBytes := b
-	if len(textBytes) > mcpDebugBodyLogLimitBytes {
-		textBytes = textBytes[:mcpDebugBodyLogLimitBytes]
-		truncated = true
-	}
-	text := redactBodyForLog(contentType, textBytes)
-	if truncated {
-		return text + " [truncated]"
-	}
-	return text
-}
-
 func logMCPResponse(r *http.Request, respLogger *mcpResponseLogger, debug bool) {
 	contentType := respLogger.Header().Get("Content-Type")
 	if debug {
 		log.Printf("MCP[debug]: response status=%d method=%s path=%s content_type=%q", respLogger.statusCode, r.Method, r.URL.Path, contentType)
-		log.Printf("MCP[debug]: response headers: %s", formatHeadersForLog(respLogger.Header()))
+		log.Printf("MCP[debug]: response headers: %s", logutil.FormatHeadersForLog(respLogger.Header()))
 		if len(respLogger.body) > 0 {
-			log.Printf("MCP[debug]: response body: %s", formatBodyForLog(contentType, respLogger.body, respLogger.truncated))
+			log.Printf("MCP[debug]: response body: %s", logutil.FormatBodyForLog(contentType, respLogger.body, mcpDebugBodyLogLimitBytes, respLogger.truncated))
 		}
 	}
 
@@ -210,7 +100,7 @@ func logMCPResponse(r *http.Request, respLogger *mcpResponseLogger, debug bool) 
 	}
 
 	if respLogger.statusCode >= http.StatusBadRequest {
-		responseBody := formatBodyForLog(contentType, respLogger.body, respLogger.truncated)
+		responseBody := logutil.FormatBodyForLog(contentType, respLogger.body, mcpDebugBodyLogLimitBytes, respLogger.truncated)
 		if responseBody != "" {
 			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s response=%q", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr, responseBody)
 		} else {
@@ -309,23 +199,37 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("%s %s %s from %s (ua=%q content_type=%q accept=%q mcp_session_id=%q)", reqLogPrefix, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent(), r.Header.Get("Content-Type"), r.Header.Get("Accept"), r.Header.Get("Mcp-Session-Id"))
 	if debug {
-		log.Printf("MCP[debug]: request headers: %s", formatHeadersForLog(r.Header))
+		log.Printf("MCP[debug]: request headers: %s", logutil.FormatHeadersForLog(r.Header))
 	}
 	if reqBodyReadErr != nil {
 		log.Printf("[ERROR] MCP request body read failed: method=%s path=%s err=%v", r.Method, r.URL.Path, reqBodyReadErr)
 	}
 	if debug && len(reqBody) > 0 {
-		log.Printf("MCP[debug]: request body: %s", formatBodyForLog(r.Header.Get("Content-Type"), reqBody, false))
+		log.Printf("MCP[debug]: request body: %s", logutil.FormatBodyForLog(r.Header.Get("Content-Type"), reqBody, mcpDebugBodyLogLimitBytes, false))
 	}
 
 	respLogger := newMCPResponseLogger(w)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("[ERROR] MCP handler panic recovered: method=%s path=%s remote=%s panic=%v", r.Method, r.URL.Path, r.RemoteAddr, recovered)
+			if !respLogger.wroteHeader {
+				http.Error(respLogger, "Internal server error", http.StatusInternalServerError)
+			}
+		}
+
+		if (r.Method == http.MethodPost || r.Method == http.MethodDelete) && !respLogger.wroteHeader {
+			log.Printf("[ERROR] MCP handler returned without writing response: method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
+			http.Error(respLogger, "MCP handler returned without writing response", http.StatusInternalServerError)
+		}
+
+		logMCPResponse(r, respLogger, debug)
+	}()
 
 	// In stateless mode we intentionally do not offer GET/SSE streams.
 	// Return a clean 405 rather than surfacing SDK session-specific wording.
 	if r.Method == http.MethodGet {
 		respLogger.Header().Set("Allow", "POST, DELETE, OPTIONS")
 		http.Error(respLogger, mcpGetNotSupportedMessage, http.StatusMethodNotAllowed)
-		logMCPResponse(r, respLogger, debug)
 		return
 	}
 
@@ -336,7 +240,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// - Session management (Mcp-Session-Id header)
 	// - Stream resumption (Last-Event-ID header)
 	s.httpHandler.ServeHTTP(respLogger, r)
-	logMCPResponse(r, respLogger, debug)
 }
 
 // Start is a helper to run the MCP server standalone (for testing)

@@ -82,6 +82,7 @@ secret_args=(
   "STRIPE_PRICE_ANNUAL=${STRIPE_PRICE_ANNUAL}" \
   "BUCKET_NAME=${BUCKET_NAME}" \
   "SPRITE_TOKEN=${SPRITE_TOKEN}" \
+  "DEBUG=1" \
 )
 
 if [ -n "${S3_PUBLIC_URL:-}" ]; then

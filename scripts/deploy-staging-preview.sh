@@ -65,6 +65,7 @@ if [ -n "${SPRITE_TOKEN:-}" ]; then
   echo "Syncing SPRITE_TOKEN secret from environment..."
   flyctl secrets set \
     "SPRITE_TOKEN=${SPRITE_TOKEN}" \
+    "DEBUG=1" \
     --app "${APP_NAME}" >/dev/null
 fi
 
@@ -106,6 +107,7 @@ fi
 echo "Deploying..."
 flyctl secrets set \
   "BUCKET_NAME=${BUCKET_NAME}" \
+  "DEBUG=1" \
   --app "${APP_NAME}"
 
 flyctl deploy \
