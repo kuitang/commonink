@@ -61,7 +61,7 @@
 
 <script>
 (function() {
-    var appName = {{printf "%q" .App.Name}};
+    var appName = "{{.App.Name}}";
     var autoRefreshInterval = null;
 
     function fetchFiles() {
