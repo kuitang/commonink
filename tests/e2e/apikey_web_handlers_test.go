@@ -5,7 +5,6 @@ package e2e
 
 import (
 	"context"
-	"database/sql"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/db"
-	"github.com/kuitang/agent-notes/internal/db/userdb"
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
@@ -36,50 +34,16 @@ type webFormAPIKeyHelper struct {
 	ts *webFormServer
 }
 
-// createUserWithPassword creates a user with a password set in their user DB.
-// Returns userID, the email, the password, and a session cookie.
-func (h *webFormAPIKeyHelper) createUserWithPassword(t interface {
+// createAuthenticatedUser creates a user and returns an authenticated session cookie.
+func (h *webFormAPIKeyHelper) createAuthenticatedUser(t interface {
 	Fatalf(format string, args ...any)
-}, email, password string) (userID string, sessionCookie *http.Cookie) {
+}, email string) (userID string, sessionCookie *http.Cookie) {
 	ctx := context.Background()
 
 	// Create user
 	user, err := h.ts.userService.FindOrCreateByProvider(ctx, email)
 	if err != nil {
 		t.Fatalf("Failed to create user: %v", err)
-	}
-
-	// Open user DB and set password
-	dek, err := h.ts.keyManager.GetOrCreateUserDEK(user.ID)
-	if err != nil {
-		t.Fatalf("Failed to get user DEK: %v", err)
-	}
-	userDB, err := db.OpenUserDBWithDEK(user.ID, dek)
-	if err != nil {
-		t.Fatalf("Failed to open user DB: %v", err)
-	}
-
-	// Hash password and create account
-	passwordHash, err := auth.FakeInsecureHasher{}.HashPassword(password)
-	if err != nil {
-		t.Fatalf("Failed to hash password: %v", err)
-	}
-
-	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
-		UserID:       user.ID,
-		Email:        email,
-		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-		CreatedAt:    1700000000, // Fixed timestamp to keep tests deterministic.
-	})
-	if err != nil {
-		// Account may already exist, try update
-		err = userDB.Queries().UpdateAccountPasswordHash(ctx, userdb.UpdateAccountPasswordHashParams{
-			PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-			UserID:       user.ID,
-		})
-		if err != nil {
-			t.Fatalf("Failed to set account password: %v", err)
-		}
 	}
 
 	// Create session
@@ -138,21 +102,18 @@ func (h *webFormAPIKeyHelper) postForm(client *http.Client, path string, formDat
 
 func testAPIKeyWeb_Roundtrip_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Property 1: POST /api-keys with valid form data creates a key
-	// The form POSTs to /api-keys (the alias route, matching the new.html form action)
+	// The form POSTs to /api-keys.
 	createForm := url.Values{
 		"name":       {keyName},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 
 	status, _, body := helper.postForm(client, "/api-keys", createForm)
@@ -216,10 +177,9 @@ func FuzzAPIKeyWeb_Roundtrip_Properties(f *testing.F) {
 
 func testAPIKeyWeb_PageRendering_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Property 1: GET /settings/api-keys returns 200 with expected page elements
@@ -373,16 +333,15 @@ func TestAPIKeyWeb_GetAPIKeys_MethodNotAllowed(t *testing.T) {
 }
 
 // =============================================================================
-// Property 4: Password Verification - Wrong/missing password rejects creation
+// Property 4: Session-only create - login required, re-auth credentials not required
 // =============================================================================
 
 func testAPIKeyWeb_PasswordVerification_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Property 1: Creation succeeds with only name (no credentials required)
@@ -437,10 +396,9 @@ func FuzzAPIKeyWeb_PasswordVerification_Properties(f *testing.F) {
 
 func testAPIKeyWeb_EmptyName_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Property: Empty name redirects with error
@@ -448,8 +406,6 @@ func testAPIKeyWeb_EmptyName_Properties(rt *rapid.T, ts *webFormServer) {
 		"name":       {""},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 	status, location, _ := helper.postForm(client, "/api-keys", emptyNameForm)
 	if status != http.StatusFound {
@@ -484,11 +440,10 @@ func FuzzAPIKeyWeb_EmptyName_Properties(f *testing.F) {
 
 func testAPIKeyWeb_Revocation_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Create a key first
@@ -496,8 +451,6 @@ func testAPIKeyWeb_Revocation_Properties(rt *rapid.T, ts *webFormServer) {
 		"name":       {keyName},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 	createStatus, _, createBody := helper.postForm(client, "/api-keys", createForm)
 	if createStatus != http.StatusOK {
@@ -569,10 +522,9 @@ func FuzzAPIKeyWeb_Revocation_Properties(f *testing.F) {
 
 func testAPIKeyWeb_RevokeNonexistent_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Property: Revoking a nonexistent key redirects with error (no crash)
@@ -610,11 +562,10 @@ func FuzzAPIKeyWeb_RevokeNonexistent_Properties(f *testing.F) {
 
 func testAPIKeyWeb_MultipleKeys_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	numKeys := rapid.IntRange(2, 4).Draw(rt, "numKeys")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	keyNames := make([]string, numKeys)
@@ -624,8 +575,6 @@ func testAPIKeyWeb_MultipleKeys_Properties(rt *rapid.T, ts *webFormServer) {
 			"name":       {keyNames[i]},
 			"scope":      {"read_write"},
 			"expires_in": {"31536000"},
-			"email":      {email},
-			"password":   {password},
 		}
 		status, _, _ := helper.postForm(client, "/api-keys", createForm)
 		if status != http.StatusOK {
@@ -670,11 +619,10 @@ func FuzzAPIKeyWeb_MultipleKeys_Properties(f *testing.F) {
 
 func testAPIKeyWeb_SettingsRoute_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Create a key via POST /api-keys.
@@ -682,8 +630,6 @@ func testAPIKeyWeb_SettingsRoute_Properties(rt *rapid.T, ts *webFormServer) {
 		"name":       {keyName},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 	status, _, body := helper.postForm(client, "/api-keys", createForm)
 	if status != http.StatusOK {
@@ -739,19 +685,16 @@ func FuzzAPIKeyWeb_SettingsRoute_Properties(f *testing.F) {
 
 func testAPIKeyWeb_DefaultScope_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Create a key without specifying scope (should default to read_write)
 	createForm := url.Values{
 		"name":       {keyName},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 	status, _, body := helper.postForm(client, "/api-keys", createForm)
 	if status != http.StatusOK {
@@ -795,10 +738,9 @@ func FuzzAPIKeyWeb_DefaultScope_Properties(f *testing.F) {
 
 func testAPIKeyWeb_ErrorDisplay_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	errorMsg := "Test+error+message"
@@ -837,11 +779,10 @@ func TestAPIKeyWeb_ErrorDisplay_Properties(t *testing.T) {
 
 func testAPIKeyWeb_TokenOneTimeReveal_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Create a key
@@ -849,8 +790,6 @@ func testAPIKeyWeb_TokenOneTimeReveal_Properties(rt *rapid.T, ts *webFormServer)
 		"name":       {keyName},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 	status, _, body := helper.postForm(client, "/api-keys", createForm)
 	if status != http.StatusOK {
@@ -900,11 +839,10 @@ func FuzzAPIKeyWeb_TokenOneTimeReveal_Properties(f *testing.F) {
 
 func testAPIKeyWeb_CreatedTokenWorks_Properties(rt *rapid.T, ts *webFormServer) {
 	email := testutil.EmailGenerator().Draw(rt, "email")
-	password := "TestPassword123!"
 	keyName := rapid.StringMatching(`[a-zA-Z0-9_-]{1,50}`).Draw(rt, "keyName")
 
 	helper := &webFormAPIKeyHelper{ts: ts}
-	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
+	_, sessionCookie := helper.createAuthenticatedUser(rt, email)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
 	// Create a key via web form
@@ -912,8 +850,6 @@ func testAPIKeyWeb_CreatedTokenWorks_Properties(rt *rapid.T, ts *webFormServer) 
 		"name":       {keyName},
 		"scope":      {"read_write"},
 		"expires_in": {"31536000"},
-		"email":      {email},
-		"password":   {password},
 	}
 	status, _, body := helper.postForm(client, "/api-keys", createForm)
 	if status != http.StatusOK {

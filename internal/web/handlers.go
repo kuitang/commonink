@@ -69,8 +69,8 @@ func NewWebHandler(
 
 // RegisterRoutes registers all web UI routes on the given mux.
 func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Middleware) {
-	// Landing page
-	mux.Handle("GET /", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleLanding)))
+	// Landing page (exact root only; avoid catching unrelated paths)
+	mux.Handle("GET /{$}", authMiddleware.OptionalAuth(http.HandlerFunc(h.HandleLanding)))
 
 	// Auth pages (HTML pages only - POST routes are registered by internal/auth/handlers.go)
 	mux.HandleFunc("GET /login", h.HandleLoginPage)
