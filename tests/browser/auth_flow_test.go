@@ -1716,7 +1716,7 @@ func TestBrowser_Auth_LandingRedirect_Unauthenticated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to read landing page heading: %v", err)
 	}
-	if !strings.Contains(headingText, "Notes") {
+	if !strings.Contains(headingText, "Ink") {
 		t.Errorf("Landing page heading missing expected text, got: %q", headingText)
 	}
 }

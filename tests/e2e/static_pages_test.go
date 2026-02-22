@@ -158,6 +158,7 @@ func createStaticPageServer(tempDir string) *staticPageServer {
 		nil, // shortURLSvc
 		billing.NewMockService(),
 		server.URL,
+		"", // spriteToken
 	)
 	webHandler.RegisterRoutes(mux, authMiddleware)
 

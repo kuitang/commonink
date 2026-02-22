@@ -39,6 +39,7 @@ BUCKET_NAME="${BUCKET_NAME:-${APP_NAME}-public}"
 : "${STRIPE_WEBHOOK_SECRET:?Set STRIPE_WEBHOOK_SECRET in environment}"
 : "${STRIPE_PRICE_MONTHLY:?Set STRIPE_PRICE_MONTHLY in environment}"
 : "${STRIPE_PRICE_ANNUAL:?Set STRIPE_PRICE_ANNUAL in environment}"
+: "${SPRITE_TOKEN:?Set SPRITE_TOKEN in environment (Fly Sprites API token)}"
 
 if ! command -v flyctl >/dev/null 2>&1; then
   echo "ERROR: flyctl is required."
@@ -80,6 +81,7 @@ secret_args=(
   "STRIPE_PRICE_MONTHLY=${STRIPE_PRICE_MONTHLY}" \
   "STRIPE_PRICE_ANNUAL=${STRIPE_PRICE_ANNUAL}" \
   "BUCKET_NAME=${BUCKET_NAME}" \
+  "SPRITE_TOKEN=${SPRITE_TOKEN}" \
 )
 
 if [ -n "${S3_PUBLIC_URL:-}" ]; then

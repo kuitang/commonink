@@ -43,17 +43,12 @@ var (
 	testMu       sync.Mutex
 )
 
-const (
-	testMasterKey    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testOAuthHMACKey = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	testOAuthSignKey = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-)
-
 // ServerFixture holds the running server instance
 type ServerFixture struct {
 	cmd        *exec.Cmd
 	BaseURL    string
 	Port       int
+	Label      string
 	Logs       *LogCapture
 	Outbox     *EmailOutbox
 	DataDir    string
@@ -356,6 +351,14 @@ func Cleanup() {
 
 func startServer(t testing.TB) (*ServerFixture, func(), error) {
 	projectRoot := FindProjectRoot()
+	serverLabel := strings.TrimSpace(os.Getenv("TEST_SERVER_LABEL"))
+	if serverLabel == "" {
+		serverLabel = "default"
+	}
+	// Isolate each server fixture so tokens and auth state cannot cross instances.
+	masterKey := generateSecureRandom(64)
+	oauthHMACKey := generateSecureRandom(64)
+	oauthSignKey := generateSecureRandom(64)
 
 	// Create temp data dir
 	dataDir, err := os.MkdirTemp("", "e2e-test-*")
@@ -398,9 +401,9 @@ func startServer(t testing.TB) (*ServerFixture, func(), error) {
 		fmt.Sprintf("LISTEN_ADDR=:%d", port),
 		fmt.Sprintf("DATABASE_PATH=%s", dataDir),
 		fmt.Sprintf("TEMPLATES_DIR=%s", filepath.Join(projectRoot, "web/templates")),
-		fmt.Sprintf("MASTER_KEY=%s", testMasterKey),
-		fmt.Sprintf("OAUTH_HMAC_SECRET=%s", testOAuthHMACKey),
-		fmt.Sprintf("OAUTH_SIGNING_KEY=%s", testOAuthSignKey),
+		fmt.Sprintf("MASTER_KEY=%s", masterKey),
+		fmt.Sprintf("OAUTH_HMAC_SECRET=%s", oauthHMACKey),
+		fmt.Sprintf("OAUTH_SIGNING_KEY=%s", oauthSignKey),
 		fmt.Sprintf("MOCK_EMAIL_OUTBOX_DIR=%s", outboxDir),
 	)
 
@@ -418,7 +421,7 @@ func startServer(t testing.TB) (*ServerFixture, func(), error) {
 		for scanner.Scan() {
 			line := scanner.Text()
 			logs.Write([]byte(line + "\n"))
-			fmt.Println("[SERVER]", line)
+			fmt.Printf("[SERVER-%s] %s\n", serverLabel, line)
 		}
 	}()
 	go func() {
@@ -426,7 +429,7 @@ func startServer(t testing.TB) (*ServerFixture, func(), error) {
 		for scanner.Scan() {
 			line := scanner.Text()
 			logs.Write([]byte(line + "\n"))
-			fmt.Println("[SERVER-ERR]", line)
+			fmt.Printf("[SERVER-ERR-%s] %s\n", serverLabel, line)
 		}
 	}()
 
@@ -441,12 +444,13 @@ func startServer(t testing.TB) (*ServerFixture, func(), error) {
 		return nil, nil, fmt.Errorf("%w. logs:\n%s", err, strings.Join(logs.Lines(), "\n"))
 	}
 
-	t.Logf("Server started on port %d", port)
+	t.Logf("Server fixture %q started on port %d (baseURL=%s)", serverLabel, port, baseURL)
 
 	fixture := &ServerFixture{
 		cmd:        cmd,
 		BaseURL:    baseURL,
 		Port:       port,
+		Label:      serverLabel,
 		Logs:       logs,
 		Outbox:     outbox,
 		DataDir:    dataDir,

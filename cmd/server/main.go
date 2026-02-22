@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
+	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/config"
@@ -88,6 +90,8 @@ func main() {
 
 	// Step 3: Print startup summary
 	cfg.PrintStartupSummary()
+
+	resolvedSpriteToken := cfg.SpriteToken
 
 	// Wire DatabasePath to db package before any DB operations
 	db.DataDirectory = cfg.DatabasePath
@@ -228,6 +232,7 @@ func main() {
 		shortURLSvc,
 		billingService,
 		"",
+		resolvedSpriteToken,
 	)
 
 	// Create HTTP mux
@@ -295,6 +300,7 @@ func main() {
 
 	// Create authenticated notes handler with rate limiting
 	notesHandler := &AuthenticatedNotesHandler{}
+	appsHandler := &AuthenticatedAppsHandler{SpriteToken: resolvedSpriteToken}
 
 	// Register protected notes API routes with rate limiting
 	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.ListNotes))))
@@ -306,6 +312,18 @@ func main() {
 	mux.Handle("GET /api/storage", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.GetStorageUsage))))
 	log.Println("Protected notes API routes registered at /api/notes with rate limiting")
 
+	// Register protected apps management API routes with rate limiting
+	mux.Handle("GET /api/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListApps))))
+	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
+	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
+	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
+	mux.Handle("GET /api/apps/{name}/files/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamFiles))))
+	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
+	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	mux.Handle("GET /api/apps/{name}/logs/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamLogs))))
+	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
+	log.Println("Protected apps API routes registered at /api/apps with rate limiting")
+
 	// Register API Key routes
 	apiKeyHandler := auth.NewAPIKeyHandler(userService)
 	mux.Handle("POST /api/keys", authMiddleware.RequireAuth(http.HandlerFunc(apiKeyHandler.CreateAPIKey)))
@@ -313,20 +331,28 @@ func main() {
 	mux.Handle("DELETE /api/keys/{id}", authMiddleware.RequireAuth(http.HandlerFunc(apiKeyHandler.RevokeAPIKey)))
 	log.Println("API Key routes registered at /api/keys")
 
-	// Create and mount MCP server (requires auth + rate limiting)
-	mcpHandler := &AuthenticatedMCPHandler{}
-	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
-	// GET /mcp: MCP spec allows GET for SSE streaming; return 405 in stateless mode
-	// DELETE /mcp: session termination; return 405 in stateless mode
-	mux.Handle("GET /mcp", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "GET not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
-	})))
-	mux.Handle("DELETE /mcp", authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "DELETE not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
-	})))
-	log.Println("MCP server mounted at POST /mcp (protected with rate limiting)")
+	// Create and mount MCP servers (requires auth + rate limiting)
+	mcpAllHandler := &AuthenticatedMCPHandler{
+		Toolset:     mcp.ToolsetAll,
+		SpriteToken: resolvedSpriteToken,
+	}
+	mcpNotesHandler := &AuthenticatedMCPHandler{
+		Toolset:     mcp.ToolsetNotes,
+		SpriteToken: resolvedSpriteToken,
+	}
+	mcpAppsHandler := &AuthenticatedMCPHandler{
+		Toolset:     mcp.ToolsetApps,
+		SpriteToken: resolvedSpriteToken,
+	}
+
+	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP))))
+	mux.Handle("POST /mcp/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP))))
+	mux.Handle("POST /mcp/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP))))
+
+	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp")
+	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp/notes")
+	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp/apps")
+	log.Println("MCP server mounted at POST /mcp, /mcp/notes, /mcp/apps (protected with rate limiting)")
 
 	// Wrap mux with request logging middleware
 	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -405,6 +431,15 @@ func main() {
 	log.Println("    GET  /api/keys                   - List API keys (protected)")
 	log.Println("    POST /api/keys                   - Create API key (protected)")
 	log.Println("    DELETE /api/keys/{id}            - Revoke API key (protected)")
+	log.Println("  Apps API (management, rate limited):")
+	log.Println("    GET  /api/apps                   - List apps (protected)")
+	log.Println("    GET  /api/apps/{name}            - Get app metadata (protected)")
+	log.Println("    DELETE /api/apps/{name}          - Delete app + sprite (protected)")
+	log.Println("    GET  /api/apps/{name}/files      - List app files on sprite (protected)")
+	log.Println("    GET  /api/apps/{name}/files/stream - Stream app file list updates (SSE, protected)")
+	log.Println("    GET  /api/apps/{name}/files/{path...} - Read app file (protected)")
+	log.Println("    GET  /api/apps/{name}/logs       - Tail app logs (protected)")
+	log.Println("    GET  /api/apps/{name}/logs/stream - Stream app logs updates (SSE, protected)")
 	log.Println("  Billing:")
 	log.Println("    GET  /pricing                    - Pricing page")
 	log.Println("    POST /billing/checkout           - Create checkout session")
@@ -413,7 +448,9 @@ func main() {
 	log.Println("    POST /billing/portal             - Stripe customer portal (protected)")
 	log.Println("    GET  /settings/billing           - Billing settings (protected)")
 	log.Println("  MCP (rate limited):")
-	log.Println("    POST /mcp                        - MCP endpoint (protected)")
+	log.Println("    POST /mcp                        - MCP endpoint (all tools, protected)")
+	log.Println("    POST /mcp/notes                  - MCP endpoint (notes toolset, protected)")
+	log.Println("    POST /mcp/apps                   - MCP endpoint (apps toolset, protected)")
 	log.Println("  Health:")
 	log.Println("    GET  /health                     - Health check")
 	log.Println("")
@@ -784,8 +821,488 @@ func (h *AuthenticatedNotesHandler) GetStorageUsage(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, usage)
 }
 
+// AuthenticatedAppsHandler wraps apps management operations with auth context.
+type AuthenticatedAppsHandler struct {
+	SpriteToken string
+}
+
+func (h *AuthenticatedAppsHandler) getService(r *http.Request) (*apps.Service, error) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		return nil, fmt.Errorf("no user database in context")
+	}
+	userID := auth.GetUserID(r.Context())
+	return apps.NewService(userDB, userID, h.SpriteToken), nil
+}
+
+func firstServiceName(servicesOutput string) string {
+	output := strings.TrimSpace(servicesOutput)
+	if output == "" {
+		return ""
+	}
+
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &list); err == nil {
+		for _, item := range list {
+			name := strings.TrimSpace(item.Name)
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	var item struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &item); err == nil {
+		name := strings.TrimSpace(item.Name)
+		if name != "" {
+			return name
+		}
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.Contains(strings.ToLower(trimmed), "no services") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[name:") && strings.HasSuffix(trimmed, "]") {
+			trimmed = strings.TrimSuffix(strings.TrimPrefix(trimmed, "[name:"), "]")
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 {
+			return strings.TrimSpace(fields[0])
+		}
+	}
+	return ""
+}
+
+func hashJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func writeSSEJSON(w http.ResponseWriter, flusher http.Flusher, payload any) bool {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func writeSSEPing(w http.ResponseWriter, flusher http.Flusher) bool {
+	if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func appErrorStatus(err error) int {
+	if err == nil {
+		return http.StatusInternalServerError
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "not found"):
+		return http.StatusNotFound
+	case strings.Contains(msg, "path is required"),
+		strings.Contains(msg, "must be relative"),
+		strings.Contains(msg, "invalid lines parameter"):
+		return http.StatusBadRequest
+	case strings.Contains(msg, "not configured"):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeAppError(w http.ResponseWriter, action string, err error) {
+	status := appErrorStatus(err)
+	if status == http.StatusInternalServerError {
+		writeError(w, status, "Failed to "+action+": "+err.Error())
+		return
+	}
+	writeError(w, status, err.Error())
+}
+
+// ListApps handles GET /api/apps - returns all apps for current user.
+func (h *AuthenticatedAppsHandler) ListApps(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	items, err := svc.List(r.Context())
+	if err != nil {
+		writeAppError(w, "list apps", err)
+		return
+	}
+
+	response := struct {
+		Apps []apps.AppMetadata `json:"apps"`
+	}{
+		Apps: items,
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// GetApp handles GET /api/apps/{name} - returns app metadata.
+func (h *AuthenticatedAppsHandler) GetApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	item, err := svc.Get(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "get app", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, item)
+}
+
+// DeleteApp handles DELETE /api/apps/{name} - destroys sprite and deletes metadata.
+func (h *AuthenticatedAppsHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	result, err := svc.Delete(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "delete app", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ListFiles handles GET /api/apps/{name}/files - lists app files on sprite.
+func (h *AuthenticatedAppsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	result, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "list app files", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// GetFile handles GET /api/apps/{name}/files/{path...} - reads one app file.
+func (h *AuthenticatedAppsHandler) GetFile(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	filePath := strings.TrimSpace(r.PathValue("path"))
+	if filePath == "" {
+		writeError(w, http.StatusBadRequest, "File path is required")
+		return
+	}
+
+	result, err := svc.ReadFile(r.Context(), name, filePath)
+	if err != nil {
+		writeAppError(w, "read app file", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// GetLogs handles GET /api/apps/{name}/logs - tails recent app logs.
+func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	lines := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid lines parameter: must be a positive integer")
+			return
+		}
+		lines = parsed
+	}
+
+	result, err := svc.TailLogs(r.Context(), name, lines)
+	if err != nil {
+		writeAppError(w, "tail app logs", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// StreamFiles handles GET /api/apps/{name}/files/stream - streams file list changes over SSE.
+func (h *AuthenticatedAppsHandler) StreamFiles(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	initial, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "list app files", err)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	lastHash := hashJSON(initial.Files)
+	if !writeSSEJSON(w, flusher, map[string]any{
+		"app":   name,
+		"files": initial.Files,
+	}) {
+		return
+	}
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			result, err := svc.ListFiles(r.Context(), name)
+			if err != nil {
+				if !writeSSEJSON(w, flusher, map[string]any{"error": err.Error()}) {
+					return
+				}
+				continue
+			}
+			nextHash := hashJSON(result.Files)
+			if nextHash == lastHash {
+				if !writeSSEPing(w, flusher) {
+					return
+				}
+				continue
+			}
+			lastHash = nextHash
+			if !writeSSEJSON(w, flusher, map[string]any{
+				"app":   name,
+				"files": result.Files,
+			}) {
+				return
+			}
+		}
+	}
+}
+
+// StreamLogs handles GET /api/apps/{name}/logs/stream - streams log output over SSE.
+func (h *AuthenticatedAppsHandler) StreamLogs(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	lines := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid lines parameter: must be a positive integer")
+			return
+		}
+		lines = parsed
+	}
+
+	initial, err := svc.TailLogs(r.Context(), name, lines)
+	if err != nil {
+		writeAppError(w, "tail app logs", err)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	lastHash := hashJSON(map[string]any{
+		"output":   initial.Output,
+		"stderr":   initial.Stderr,
+		"exit_code": initial.ExitCode,
+	})
+	if !writeSSEJSON(w, flusher, initial) {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			result, err := svc.TailLogs(r.Context(), name, lines)
+			if err != nil {
+				if !writeSSEJSON(w, flusher, map[string]any{"error": err.Error()}) {
+					return
+				}
+				continue
+			}
+			nextHash := hashJSON(map[string]any{
+				"output":   result.Output,
+				"stderr":   result.Stderr,
+				"exit_code": result.ExitCode,
+			})
+			if nextHash == lastHash {
+				if !writeSSEPing(w, flusher) {
+					return
+				}
+				continue
+			}
+			lastHash = nextHash
+			if !writeSSEJSON(w, flusher, result) {
+				return
+			}
+		}
+	}
+}
+
+// HandleAction handles POST /api/apps/{name}/{action} - performs start/stop/restart.
+func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "App name is required")
+		return
+	}
+
+	action := strings.TrimSpace(r.PathValue("action"))
+	switch action {
+	case "start", "stop", "restart":
+	default:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid action %q: must be start, stop, or restart", action))
+		return
+	}
+
+	listResult, err := svc.RunBash(r.Context(), name, "sprite-env services list", 30)
+	if err != nil {
+		writeAppError(w, "discover service", err)
+		return
+	}
+
+	svcName := firstServiceName(listResult.Stdout)
+	if svcName == "" {
+		writeError(w, http.StatusBadRequest, "No service registered. Use sprite-env services create first.")
+		return
+	}
+
+	var cmd string
+	switch action {
+	case "start":
+		cmd = fmt.Sprintf("sprite-env services start %q", svcName)
+	case "stop":
+		cmd = fmt.Sprintf("sprite-env services stop %q", svcName)
+	case "restart":
+		cmd = fmt.Sprintf("sprite-env services stop %q && sprite-env services start %q", svcName, svcName)
+	}
+
+	result, err := svc.RunBash(r.Context(), name, cmd, 30)
+	if err != nil {
+		writeAppError(w, action+" service", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // AuthenticatedMCPHandler wraps MCP with auth context
-type AuthenticatedMCPHandler struct{}
+type AuthenticatedMCPHandler struct {
+	Toolset     mcp.Toolset
+	SpriteToken string
+}
 
 func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
@@ -793,16 +1310,38 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	storageLimit := notes.FreeStorageLimitBytes
+
 	userID := auth.GetUserID(r.Context())
-	account, err := userDB.Queries().GetAccount(r.Context(), userID)
-	if err == nil && account.SubscriptionStatus.Valid {
-		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+
+	var notesSvc *notes.Service
+	if h.Toolset != mcp.ToolsetApps {
+		storageLimit := notes.FreeStorageLimitBytes
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err == nil && account.SubscriptionStatus.Valid {
+			storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+		}
+		notesSvc = notes.NewService(userDB, storageLimit)
+		_ = notesSvc.Purge(30 * 24 * time.Hour)
 	}
-	notesSvc := notes.NewService(userDB, storageLimit)
-	_ = notesSvc.Purge(30 * 24 * time.Hour)
-	mcpServer := mcp.NewServer(notesSvc)
+
+	var appsSvc *apps.Service
+	if h.Toolset != mcp.ToolsetNotes {
+		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
+	}
+
+	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
 	mcpServer.ServeHTTP(w, r)
+}
+
+func registerStatelessMCPMethodGuards(mux *http.ServeMux, authMiddleware *auth.Middleware, route string) {
+	mux.Handle("GET "+route, authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "GET not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
+	})))
+	mux.Handle("DELETE "+route, authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "DELETE not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
+	})))
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.

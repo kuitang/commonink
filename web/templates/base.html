@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="common.ink - Secure note-taking for AI agents and humans">
+    <meta name="description" content="common.ink - Persistent memory and live deployment for your AI tools">
     <title>{{if .Title}}{{.Title}} - {{end}}common.ink</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -208,6 +208,9 @@
                     <a href="/docs/api" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 text-sm font-medium rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
                         API
                     </a>
+                    <a href="/faq" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 text-sm font-medium rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                        FAQ
+                    </a>
                     {{if .User}}
                     <!-- Auth navigation links -->
                     <a href="/notes" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 text-sm font-medium rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
@@ -370,6 +373,9 @@
                     <a href="/docs/api" class="flex items-center px-4 py-2 text-base font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700">
                         API
                     </a>
+                    <a href="/faq" class="flex items-center px-4 py-2 text-base font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700">
+                        FAQ
+                    </a>
                 </div>
             </div>
         </div>
@@ -389,6 +395,7 @@
                 </div>
                 <div class="flex justify-center flex-wrap items-center gap-x-6 gap-y-2 md:order-2">
                     <a href="/about" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 text-sm">About</a>
+                    <a href="/faq" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 text-sm">FAQ</a>
                     <a href="/privacy" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 text-sm">Privacy</a>
                     <a href="/terms" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 text-sm">Terms</a>
                     <div id="appearance-controls" class="flex items-center gap-2 pl-4 border-l border-gray-300 dark:border-gray-600">
@@ -610,7 +617,8 @@
 <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Free</h3>
 <p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$0</span><span class="text-gray-500 dark:text-gray-400">/mo</span></p>
 <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
-    <li class="flex items-center">{{template "pricing-check"}}100 MB storage</li>
+    <li class="flex items-center">{{template "pricing-check"}}100 MB note storage</li>
+    <li class="flex items-center">{{template "pricing-check"}}1 live app</li>
     <li class="flex items-center">{{template "pricing-check"}}10 requests/second</li>
     <li class="flex items-center">{{template "pricing-check"}}Web + MCP access</li>
 </ul>
@@ -618,9 +626,10 @@
 
 {{define "pricing-pro-features"}}
 <h3 class="text-2xl font-bold text-gray-900 dark:text-white">Pro</h3>
-<p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$2</span><span class="text-gray-500 dark:text-gray-400">/mo &nbsp;&middot;&nbsp; $20/yr</span></p>
+<p class="mt-4"><span class="text-4xl font-bold text-gray-900 dark:text-white">$5</span><span class="text-gray-500 dark:text-gray-400">/mo &nbsp;&middot;&nbsp; $50/yr</span></p>
 <ul class="mt-6 space-y-3 text-gray-600 dark:text-gray-300">
-    <li class="flex items-center">{{template "pricing-check"}}Unlimited storage</li>
+    <li class="flex items-center">{{template "pricing-check"}}Unlimited note storage</li>
+    <li class="flex items-center">{{template "pricing-check"}}5 live apps</li>
     <li class="flex items-center">{{template "pricing-check"}}1,000 requests/second</li>
     <li class="flex items-center">{{template "pricing-check"}}Priority support</li>
 </ul>

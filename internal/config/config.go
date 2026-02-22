@@ -67,6 +67,9 @@ type Config struct {
 	StripeWebhookSecret  string
 	StripePriceMonthly   string
 	StripePriceAnnual    string
+
+	// Fly Sprites
+	SpriteToken string
 }
 
 // ValidationError represents a configuration validation error with multiple issues.
@@ -164,6 +167,9 @@ func LoadConfig(noEmail, noS3, noOIDC bool, addr string) (*Config, error) {
 	cfg.StripePriceMonthly = trimEnv("STRIPE_PRICE_MONTHLY")
 	cfg.StripePriceAnnual = trimEnv("STRIPE_PRICE_ANNUAL")
 
+	// Fly Sprites (resolve token externally via scripts/resolve-sprite-token.sh)
+	cfg.SpriteToken = trimEnv("SPRITE_TOKEN")
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -249,6 +255,11 @@ func (c *Config) Validate() error {
 		errs = append(errs, "OAUTH_SIGNING_KEY must be 64 hex characters (ed25519 seed)")
 	}
 
+	// Sprites: require token
+	if c.SpriteToken == "" {
+		errs = append(errs, "SPRITE_TOKEN is required (set env var or use scripts/resolve-sprite-token.sh)")
+	}
+
 	// Validate rate limit config
 	if c.RateLimitConfig.FreeRPS <= 0 {
 		errs = append(errs, "RATE_LIMIT_FREE_RPS must be positive")
@@ -316,6 +327,13 @@ func (c *Config) PrintStartupSummary() {
 		fmt.Fprintln(os.Stderr, "  Billing: Mock (--test)")
 	} else {
 		fmt.Fprintln(os.Stderr, "  Billing: Stripe (real)")
+	}
+
+	// Sprites
+	if c.SpriteToken != "" {
+		fmt.Fprintln(os.Stderr, "  Sprites: Enabled")
+	} else {
+		fmt.Fprintln(os.Stderr, "  Sprites: Disabled (SPRITE_TOKEN unset)")
 	}
 
 	// Master key

@@ -408,8 +408,8 @@ func TestPricing_GoogleOptionForLoggedOut_Properties(t *testing.T) {
 	}
 
 	// Verify Pro plan card exists with pricing
-	if !strings.Contains(content, "$2") {
-		t.Error("Pro plan should show $2/mo pricing")
+	if !strings.Contains(content, "$5") {
+		t.Error("Pro plan should show $5/mo pricing")
 	}
 }
 

@@ -1,11 +1,36 @@
 package mcp
 
-import (
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+import "github.com/modelcontextprotocol/go-sdk/mcp"
+
+// Toolset controls which tool families are mounted for a route.
+type Toolset string
+
+const (
+	ToolsetAll   Toolset = "all"
+	ToolsetNotes Toolset = "notes"
+	ToolsetApps  Toolset = "apps"
 )
 
-// ToolDefinitions returns all 7 MCP tool definitions for notes operations
-func ToolDefinitions() []*mcp.Tool {
+// ToolDefinitions returns tool definitions for the requested toolset.
+func ToolDefinitions(toolset Toolset) []*mcp.Tool {
+	notesTools := NoteToolDefinitions()
+	appTools := AppToolDefinitions()
+
+	switch toolset {
+	case ToolsetNotes:
+		return notesTools
+	case ToolsetApps:
+		return appTools
+	default:
+		all := make([]*mcp.Tool, 0, len(notesTools)+len(appTools))
+		all = append(all, notesTools...)
+		all = append(all, appTools...)
+		return all
+	}
+}
+
+// NoteToolDefinitions returns the notes MCP tool definitions.
+func NoteToolDefinitions() []*mcp.Tool {
 	return []*mcp.Tool{
 		{
 			Name:        "note_view",
@@ -145,6 +170,112 @@ func ToolDefinitions() []*mcp.Tool {
 					},
 				},
 				"required": []string{"id"},
+			},
+		},
+	}
+}
+
+// AppToolDefinitions returns the app deployment MCP tool definitions.
+func AppToolDefinitions() []*mcp.Tool {
+	return []*mcp.Tool{
+		{
+			Name:        "app_create",
+			Description: "Create a public Fly Sprite app by trying candidate names in order. Pass an ordered array of candidate names. The server returns the chosen name or structured rejections for each candidate. If all are rejected, try another name. After create, use app_write for files, then app_bash to install dependencies and launch service on port 8080. If user does not specify a stack (e.g., says 'make me a todo list app'), default to a minimal Flask app: app.py + requirements.txt, then register sprite-env service on port 8080.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"names": map[string]any{
+						"type":        "array",
+						"description": "Ordered candidate app names to try on Fly Sprites.",
+						"items":       map[string]any{"type": "string"},
+						"minItems":    1,
+					},
+				},
+				"required": []string{"names"},
+			},
+		},
+		{
+			Name:        "app_write",
+			Description: "Write a file on the app Sprite. Path is relative to /home/sprite. Use this for source code, templates, config, and static assets.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"app": map[string]any{
+						"type":        "string",
+						"description": "App name returned by app_create.",
+					},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Path relative to /home/sprite.",
+					},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "Full file content to write.",
+					},
+				},
+				"required": []string{"app", "path", "content"},
+			},
+		},
+		{
+			Name:        "app_read",
+			Description: "Read a file from the app Sprite. Path is relative to /home/sprite.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"app": map[string]any{
+						"type":        "string",
+						"description": "App name returned by app_create.",
+					},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Path relative to /home/sprite.",
+					},
+				},
+				"required": []string{"app", "path"},
+			},
+		},
+		{
+			Name:        "app_bash",
+			Description: "Run a shell command on the app Sprite. Use for install/build/debug/deploy operations. Optional timeout_seconds defaults to 120 and maxes at 600. Response includes runtime_ms. The app must listen on port 8080. To register persistent runtime: sprite-env services create <name> --cmd '<command>' --http-port 8080. When stack is unspecified, use Flask conventions and verify with curl http://localhost:8080.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"app": map[string]any{
+						"type":        "string",
+						"description": "App name returned by app_create.",
+					},
+					"command": map[string]any{
+						"type":        "string",
+						"description": "Command to run on the sprite shell.",
+					},
+					"timeout_seconds": map[string]any{
+						"type":        "integer",
+						"description": "Optional command timeout in seconds (default 120, max 600).",
+					},
+				},
+				"required": []string{"app", "command"},
+			},
+		},
+		{
+			Name:        "app_list",
+			Description: "List all apps for the current user with status and public URL.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        "app_delete",
+			Description: "Delete an app and destroy its Fly Sprite. This cannot be undone.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"app": map[string]any{
+						"type":        "string",
+						"description": "App name to delete.",
+					},
+				},
+				"required": []string{"app"},
 			},
 		},
 	}

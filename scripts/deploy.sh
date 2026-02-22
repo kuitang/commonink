@@ -22,6 +22,7 @@ echo "  OAUTH_SIGNING_KEY    - OAuth Ed25519 signing key seed (64 hex chars)"
 echo "  GOOGLE_CLIENT_ID     - Google OAuth client ID"
 echo "  GOOGLE_CLIENT_SECRET - Google OAuth client secret"
 echo "  RESEND_API_KEY       - Resend email API key"
+echo "  SPRITE_TOKEN         - Fly Sprites API token"
 echo ""
 echo "Auto-set by Tigris (fly storage create):"
 echo "  AWS_ACCESS_KEY_ID    - Tigris access key"
@@ -46,6 +47,7 @@ required_secrets=(
   AWS_ACCESS_KEY_ID
   AWS_SECRET_ACCESS_KEY
   BUCKET_NAME
+  SPRITE_TOKEN
 )
 secret_list="$(flyctl secrets list --app "${APP_NAME}" 2>/dev/null || true)"
 missing=()
