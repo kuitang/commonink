@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/coreos/go-oidc/v3 v3.17.0
+	github.com/gin-contrib/sse v1.1.0
 	github.com/go-jose/go-jose/v3 v3.0.4
 	github.com/gomarkdown/markdown v0.0.0-20250810172220-2e2c11897d1a
 	github.com/google/uuid v1.6.0

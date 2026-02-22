@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gin-contrib/sse"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/playwright-community/playwright-go"
@@ -833,14 +834,10 @@ func hashTestJSON(v any) string {
 }
 
 func writeTestSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, payload any) bool {
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return false
-	}
-	if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
-		return false
-	}
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", payloadBytes); err != nil {
+	if err := sse.Encode(w, sse.Event{
+		Event: event,
+		Data:  payload,
+	}); err != nil {
 		return false
 	}
 	flusher.Flush()
