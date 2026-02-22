@@ -56,6 +56,18 @@ if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "${APP_NAME}" 
   exit 1
 fi
 
+if [ "${CI:-}" = "true" ] && [ -z "${SPRITE_TOKEN:-}" ]; then
+  echo "ERROR: SPRITE_TOKEN must be provided in CI for staging preview deploys."
+  exit 1
+fi
+
+if [ -n "${SPRITE_TOKEN:-}" ]; then
+  echo "Syncing SPRITE_TOKEN secret from environment..."
+  flyctl secrets set \
+    "SPRITE_TOKEN=${SPRITE_TOKEN}" \
+    --app "${APP_NAME}" >/dev/null
+fi
+
 secret_list="$(flyctl secrets list --app "${APP_NAME}")"
 required_secrets=(
   GOOGLE_CLIENT_ID

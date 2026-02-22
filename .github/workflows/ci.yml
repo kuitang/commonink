@@ -27,7 +27,7 @@ jobs:
       - name: Run CI test suite (no external conformance)
         env:
           GO_TEST_PACKAGE_PARALLEL: "1"
-          SPRITE_TOKEN: ${{ secrets.SPRITE_TOKEN }}
+          SPRITE_TOKEN: ${{ secrets.SPRITE_TOKEN_STAGING }}
         run: make ci
 
   deploy-preview:
@@ -49,6 +49,7 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+          SPRITE_TOKEN: ${{ secrets.SPRITE_TOKEN_STAGING }}
           PR_NUMBER: ${{ github.event.number }}
         run: |
           bash ./scripts/deploy-staging-preview.sh
