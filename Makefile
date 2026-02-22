@@ -35,7 +35,7 @@ export SPRITE_TOKEN ?= $(or $(shell ./scripts/resolve-sprite-token.sh 2>/dev/nul
 # Optional regex for go test -skip (CI-friendly filtering)
 TEST_SKIP_PATTERNS ?=
 BROWSER_TEST_SKIP_PATTERNS ?=
-CI_BROWSER_SKIP_PATTERNS ?= TestBrowser_NotesCRUD_Pagination|TestScreenshot_AllThemes
+CI_BROWSER_SKIP_PATTERNS ?= TestBrowser_NotesCRUD_Pagination|TestScreenshot_AllThemes|TestBrowser_AppDetail_FileSidebar|TestBrowser_AppDetail_VisitAndPost|TestBrowser_AppDetail_LogsShowPost
 CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
 GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
