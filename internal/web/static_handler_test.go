@@ -3,6 +3,7 @@ package web_test
 import (
 	"context"
 	crand "crypto/rand"
+	"html/template"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -22,11 +23,40 @@ import (
 	"github.com/kuitang/agent-notes/internal/web"
 )
 
+type baseNavTestData struct {
+	Title   string
+	User    *auth.User
+	Content template.HTML
+}
+
 // staticTestEnv holds a test server with static routes, auth middleware, and services.
 type staticTestEnv struct {
 	server         *httptest.Server
 	userService    *auth.UserService
 	sessionService *auth.SessionService
+}
+
+func renderBaseLayoutForNav(t *testing.T, user *auth.User) string {
+	t.Helper()
+
+	templatesDir := findTemplatesDir()
+	renderer, err := web.NewRenderer(templatesDir)
+	if err != nil {
+		t.Fatalf("Failed to create renderer: %v", err)
+	}
+
+	data := baseNavTestData{
+		Title:   "Navigation Test",
+		Content: template.HTML("<p>navigation test</p>"),
+		User:    user,
+	}
+
+	recorder := httptest.NewRecorder()
+	if err := renderer.Render(recorder, "static/page.html", data); err != nil {
+		t.Fatalf("Failed to render base layout: %v", err)
+	}
+
+	return recorder.Body.String()
 }
 
 func setupStaticTestEnv(t *testing.T) *staticTestEnv {
@@ -203,6 +233,69 @@ func TestStaticPages_LoggedOutHeader(t *testing.T) {
 				t.Errorf("GET %s: expected 'Sign in' in nav for logged-out user", path)
 			}
 		})
+	}
+}
+
+// =============================================================================
+// Base layout rendering by user segment
+// =============================================================================
+
+func TestBaseLayout_LoggedOutNav(t *testing.T) {
+	html := renderBaseLayoutForNav(t, nil)
+
+	if !strings.Contains(html, "Sign in") {
+		t.Error("Expected logged-out nav to show 'Sign in'")
+	}
+	if !strings.Contains(html, "Get Pro") {
+		t.Error("Expected logged-out nav to show 'Get Pro'")
+	}
+	if strings.Contains(html, "My Notes") {
+		t.Error("Expected logged-out nav to hide 'My Notes'")
+	}
+	if strings.Contains(html, "Billing") {
+		t.Error("Expected logged-out nav to hide 'Billing'")
+	}
+}
+
+func TestBaseLayout_LoggedInFreeNav(t *testing.T) {
+	html := renderBaseLayoutForNav(t, &auth.User{
+		ID:                 "free-user-id",
+		Email:              "free@example.com",
+		SubscriptionStatus: "free",
+	})
+
+	if !strings.Contains(html, "free@example.com") {
+		t.Error("Expected logged-in free nav to show user email")
+	}
+	if !strings.Contains(html, "My Notes") {
+		t.Error("Expected logged-in free nav to show 'My Notes'")
+	}
+	if !strings.Contains(html, "Get Pro") {
+		t.Error("Expected logged-in free nav to show 'Get Pro'")
+	}
+	if strings.Contains(html, "Billing") {
+		t.Error("Expected logged-in free nav to hide 'Billing'")
+	}
+}
+
+func TestBaseLayout_LoggedInProNav(t *testing.T) {
+	html := renderBaseLayoutForNav(t, &auth.User{
+		ID:                 "pro-user-id",
+		Email:              "pro@example.com",
+		SubscriptionStatus: "active",
+	})
+
+	if !strings.Contains(html, "pro@example.com") {
+		t.Error("Expected logged-in pro nav to show user email")
+	}
+	if !strings.Contains(html, "My Notes") {
+		t.Error("Expected logged-in pro nav to show 'My Notes'")
+	}
+	if strings.Contains(html, "Get Pro") {
+		t.Error("Expected logged-in pro nav to hide 'Get Pro'")
+	}
+	if !strings.Contains(html, "Billing") {
+		t.Error("Expected logged-in pro nav to show 'Billing'")
 	}
 }
 

@@ -5,8 +5,8 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,6 +26,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gin-contrib/sse"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/kuitang/agent-notes/internal/apps"
@@ -300,7 +301,10 @@ func main() {
 
 	// Create authenticated notes handler with rate limiting
 	notesHandler := &AuthenticatedNotesHandler{}
-	appsHandler := &AuthenticatedAppsHandler{SpriteToken: resolvedSpriteToken}
+	appsHandler := &AuthenticatedAppsHandler{
+		SpriteToken: resolvedSpriteToken,
+		Renderer:    renderer,
+	}
 
 	// Register protected notes API routes with rate limiting
 	mux.Handle("GET /api/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(notesHandler.ListNotes))))
@@ -317,10 +321,9 @@ func main() {
 	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
 	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
 	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
-	mux.Handle("GET /api/apps/{name}/files/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamFiles))))
 	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
 	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
-	mux.Handle("GET /api/apps/{name}/logs/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamLogs))))
+	mux.Handle("GET /api/apps/{name}/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamApp))))
 	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
 	log.Println("Protected apps API routes registered at /api/apps with rate limiting")
 
@@ -436,10 +439,9 @@ func main() {
 	log.Println("    GET  /api/apps/{name}            - Get app metadata (protected)")
 	log.Println("    DELETE /api/apps/{name}          - Delete app + sprite (protected)")
 	log.Println("    GET  /api/apps/{name}/files      - List app files on sprite (protected)")
-	log.Println("    GET  /api/apps/{name}/files/stream - Stream app file list updates (SSE, protected)")
 	log.Println("    GET  /api/apps/{name}/files/{path...} - Read app file (protected)")
 	log.Println("    GET  /api/apps/{name}/logs       - Tail app logs (protected)")
-	log.Println("    GET  /api/apps/{name}/logs/stream - Stream app logs updates (SSE, protected)")
+	log.Println("    GET  /api/apps/{name}/stream     - Stream app updates (SSE: ping/log/file, protected)")
 	log.Println("  Billing:")
 	log.Println("    GET  /pricing                    - Pricing page")
 	log.Println("    POST /billing/checkout           - Create checkout session")
@@ -824,6 +826,7 @@ func (h *AuthenticatedNotesHandler) GetStorageUsage(w http.ResponseWriter, r *ht
 // AuthenticatedAppsHandler wraps apps management operations with auth context.
 type AuthenticatedAppsHandler struct {
 	SpriteToken string
+	Renderer    *web.Renderer
 }
 
 func (h *AuthenticatedAppsHandler) getService(r *http.Request) (*apps.Service, error) {
@@ -868,12 +871,23 @@ func firstServiceName(servicesOutput string) string {
 		if trimmed == "" || strings.Contains(strings.ToLower(trimmed), "no services") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "[name:") && strings.HasSuffix(trimmed, "]") {
-			trimmed = strings.TrimSuffix(strings.TrimPrefix(trimmed, "[name:"), "]")
+		if idx := strings.Index(trimmed, "[name:"); idx >= 0 {
+			rest := trimmed[idx+len("[name:"):]
+			if end := strings.Index(rest, "]"); end > 0 {
+				name := strings.TrimSpace(rest[:end])
+				if name != "" {
+					return name
+				}
+			}
 		}
 		fields := strings.Fields(trimmed)
 		if len(fields) > 0 {
-			return strings.TrimSpace(fields[0])
+			token := strings.TrimSpace(fields[0])
+			token = strings.TrimPrefix(token, "[name:")
+			token = strings.TrimSuffix(token, "]")
+			if token != "" {
+				return token
+			}
 		}
 	}
 	return ""
@@ -888,24 +902,49 @@ func hashJSON(v any) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func writeSSEJSON(w http.ResponseWriter, flusher http.Flusher, payload any) bool {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return false
-	}
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, payload any) bool {
+	if err := sse.Encode(w, sse.Event{
+		Event: event,
+		Data:  payload,
+	}); err != nil {
 		return false
 	}
 	flusher.Flush()
 	return true
 }
 
-func writeSSEPing(w http.ResponseWriter, flusher http.Flusher) bool {
-	if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
-		return false
+func logStreamPayload(result *apps.AppLogsResult, err error) map[string]any {
+	if err != nil {
+		return map[string]any{
+			"error": err.Error(),
+		}
 	}
-	flusher.Flush()
-	return true
+	if result == nil {
+		return map[string]any{
+			"output":    "",
+			"stderr":    "",
+			"exit_code": 0,
+		}
+	}
+	return map[string]any{
+		"output":    result.Output,
+		"stderr":    result.Stderr,
+		"exit_code": result.ExitCode,
+	}
+}
+
+func (h *AuthenticatedAppsHandler) renderFilesHTML(files []apps.AppFileEntry, filesErr string) (string, error) {
+	if h.Renderer == nil {
+		return "", errors.New("renderer is not configured")
+	}
+	return h.Renderer.RenderPartialToString(
+		"apps/detail.html",
+		"app-files-list",
+		map[string]any{
+			"Files":    files,
+			"FilesErr": filesErr,
+		},
+	)
 }
 
 func appErrorStatus(err error) int {
@@ -1089,80 +1128,12 @@ func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, result)
 }
 
-// StreamFiles handles GET /api/apps/{name}/files/stream - streams file list changes over SSE.
-func (h *AuthenticatedAppsHandler) StreamFiles(w http.ResponseWriter, r *http.Request) {
-	svc, err := h.getService(r)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Internal server error")
-		return
-	}
-
-	name := strings.TrimSpace(r.PathValue("name"))
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "App name is required")
-		return
-	}
-
-	initial, err := svc.ListFiles(r.Context(), name)
-	if err != nil {
-		writeAppError(w, "list app files", err)
-		return
-	}
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "Streaming not supported")
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	lastHash := hashJSON(initial.Files)
-	if !writeSSEJSON(w, flusher, map[string]any{
-		"app":   name,
-		"files": initial.Files,
-	}) {
-		return
-	}
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-			result, err := svc.ListFiles(r.Context(), name)
-			if err != nil {
-				if !writeSSEJSON(w, flusher, map[string]any{"error": err.Error()}) {
-					return
-				}
-				continue
-			}
-			nextHash := hashJSON(result.Files)
-			if nextHash == lastHash {
-				if !writeSSEPing(w, flusher) {
-					return
-				}
-				continue
-			}
-			lastHash = nextHash
-			if !writeSSEJSON(w, flusher, map[string]any{
-				"app":   name,
-				"files": result.Files,
-			}) {
-				return
-			}
-		}
-	}
-}
-
-// StreamLogs handles GET /api/apps/{name}/logs/stream - streams log output over SSE.
-func (h *AuthenticatedAppsHandler) StreamLogs(w http.ResponseWriter, r *http.Request) {
+// StreamApp handles GET /api/apps/{name}/stream - streams app updates over SSE.
+// Events:
+// - file: {"html":"..."}    (server-rendered file list partial)
+// - log:  {"output":"...","stderr":"...","exit_code":0} or {"error":"..."}
+// - ping: {"ts":"..."}
+func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Internal server error")
@@ -1185,15 +1156,25 @@ func (h *AuthenticatedAppsHandler) StreamLogs(w http.ResponseWriter, r *http.Req
 		lines = parsed
 	}
 
-	initial, err := svc.TailLogs(r.Context(), name, lines)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	initialFiles, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeAppError(w, "list app files", err)
+		return
+	}
+	initialLogs, err := svc.TailLogs(r.Context(), name, lines)
 	if err != nil {
 		writeAppError(w, "tail app logs", err)
 		return
 	}
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+	filesHTML, err := h.renderFilesHTML(initialFiles.Files, "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to render file list stream")
 		return
 	}
 
@@ -1202,12 +1183,15 @@ func (h *AuthenticatedAppsHandler) StreamLogs(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	lastHash := hashJSON(map[string]any{
-		"output":   initial.Output,
-		"stderr":   initial.Stderr,
-		"exit_code": initial.ExitCode,
-	})
-	if !writeSSEJSON(w, flusher, initial) {
+	fileHash := hashJSON(map[string]string{"html": filesHTML})
+
+	initialLogPayload := logStreamPayload(initialLogs, nil)
+	logHash := hashJSON(initialLogPayload)
+
+	if !writeSSEEvent(w, flusher, "file", map[string]any{"html": filesHTML}) {
+		return
+	}
+	if !writeSSEEvent(w, flusher, "log", initialLogPayload) {
 		return
 	}
 
@@ -1219,26 +1203,46 @@ func (h *AuthenticatedAppsHandler) StreamLogs(w http.ResponseWriter, r *http.Req
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			result, err := svc.TailLogs(r.Context(), name, lines)
-			if err != nil {
-				if !writeSSEJSON(w, flusher, map[string]any{"error": err.Error()}) {
+			sentEvent := false
+
+			nextFiles, nextFilesErr := svc.ListFiles(r.Context(), name)
+			nextFilesList := []apps.AppFileEntry{}
+			nextFilesErrText := ""
+			if nextFilesErr != nil {
+				nextFilesErrText = nextFilesErr.Error()
+			} else {
+				nextFilesList = nextFiles.Files
+			}
+			nextFilesHTML, renderErr := h.renderFilesHTML(nextFilesList, nextFilesErrText)
+			if renderErr != nil {
+				log.Printf("apps stream render failed for app=%s: %v", name, renderErr)
+				return
+			}
+			nextFileHash := hashJSON(map[string]string{"html": nextFilesHTML})
+			if nextFileHash != fileHash {
+				fileHash = nextFileHash
+				if !writeSSEEvent(w, flusher, "file", map[string]any{"html": nextFilesHTML}) {
 					return
 				}
-				continue
+				sentEvent = true
 			}
-			nextHash := hashJSON(map[string]any{
-				"output":   result.Output,
-				"stderr":   result.Stderr,
-				"exit_code": result.ExitCode,
-			})
-			if nextHash == lastHash {
-				if !writeSSEPing(w, flusher) {
+
+			nextLogPayload := logStreamPayload(svc.TailLogs(r.Context(), name, lines))
+			nextLogHash := hashJSON(nextLogPayload)
+			if nextLogHash != logHash {
+				logHash = nextLogHash
+				if !writeSSEEvent(w, flusher, "log", nextLogPayload) {
 					return
 				}
+				sentEvent = true
+			}
+
+			if sentEvent {
 				continue
 			}
-			lastHash = nextHash
-			if !writeSSEJSON(w, flusher, result) {
+			if !writeSSEEvent(w, flusher, "ping", map[string]any{
+				"ts": time.Now().UTC().Format(time.RFC3339Nano),
+			}) {
 				return
 			}
 		}

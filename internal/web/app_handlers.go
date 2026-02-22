@@ -11,9 +11,9 @@ import (
 // AppDetailData contains data for the app detail page.
 type AppDetailData struct {
 	PageData
-	App       *apps.AppMetadata
-	Files     []apps.AppFileEntry
-	FilesErr  string
+	App      *apps.AppMetadata
+	Files    []apps.AppFileEntry
+	FilesErr string
 }
 
 // HandleAppDetail handles GET /apps/{name} - shows app detail page.

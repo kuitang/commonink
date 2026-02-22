@@ -2,6 +2,7 @@
 package web
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io"
@@ -79,6 +80,24 @@ func (r *Renderer) RenderPartial(w http.ResponseWriter, templateName, blockName 
 	}
 
 	return nil
+}
+
+// RenderPartialToString executes a named sub-template and returns the HTML.
+// Used by SSE handlers to ship server-rendered partial updates.
+func (r *Renderer) RenderPartialToString(templateName, blockName string, data interface{}) (string, error) {
+	r.mu.RLock()
+	tmpl, ok := r.templates[templateName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return "", fmt.Errorf("template %q not found", templateName)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, blockName, data); err != nil {
+		return "", fmt.Errorf("failed to execute partial %q in %q: %w", blockName, templateName, err)
+	}
+	return buf.String(), nil
 }
 
 // RenderError renders an error page with the given HTTP status code and message.

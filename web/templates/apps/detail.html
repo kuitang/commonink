@@ -1,3 +1,25 @@
+{{define "app-files-list"}}
+{{if .FilesErr}}
+<p class="text-xs text-error-500">{{.FilesErr}}</p>
+{{else if .Files}}
+{{range .Files}}
+{{if eq .Kind "file"}}
+<button data-path="{{.Path}}" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">
+    <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+    {{.Path}}
+</button>
+{{else}}
+<div class="block w-full px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 truncate">
+    <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7l1.664-1.664A2 2 0 016.078 5H10l2 2h5.922a2 2 0 011.414.586L21 9M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9M3 7h18"/></svg>
+    {{.Path}}/
+</div>
+{{end}}
+{{end}}
+{{else}}
+<p class="text-xs text-gray-400">No files found</p>
+{{end}}
+{{end}}
+
 {{define "content"}}
 <div class="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1 flex flex-col w-full">
@@ -16,30 +38,13 @@
             </div>
             {{if .App.PublicURL}}<a href="{{.App.PublicURL}}" target="_blank" rel="noopener noreferrer" class="themed-btn-secondary px-3 py-1.5 text-sm inline-flex items-center gap-1">Open &#8599;</a>{{end}}
         </div>
+        <div id="stream-inline-flash" class="hidden rounded-card p-3 border mb-4 text-sm" role="status"></div>
 
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
             <div class="themed-card p-4 lg:col-span-1 overflow-y-auto" style="max-height: 70vh;">
                 <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Files</h3>
                 <div id="file-list" class="space-y-1">
-                    {{if .FilesErr}}
-                    <p class="text-xs text-error-500">{{.FilesErr}}</p>
-                    {{else if .Files}}
-                    {{range .Files}}
-                    {{if eq .Kind "file"}}
-                    <button data-path="{{.Path}}" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">
-                        <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                        {{.Path}}
-                    </button>
-                    {{else}}
-                    <div class="block w-full px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                        <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7l1.664-1.664A2 2 0 016.078 5H10l2 2h5.922a2 2 0 011.414.586L21 9M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9M3 7h18"/></svg>
-                        {{.Path}}/
-                    </div>
-                    {{end}}
-                    {{end}}
-                    {{else}}
-                    <p class="text-xs text-gray-400">No files found</p>
-                    {{end}}
+                    {{template "app-files-list" .}}
                 </div>
             </div>
 
@@ -64,15 +69,12 @@
                 <div class="themed-card p-4">
                     <div class="flex items-center justify-between mb-3">
                         <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">Logs</h3>
-                        <div class="flex items-center gap-3">
-                            <label class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-                                <input type="checkbox" id="auto-refresh" class="rounded border-gray-300 dark:border-gray-600" checked>
-                                Auto-refresh
-                            </label>
-                            <button onclick="fetchLogs()" class="text-xs text-primary-600 dark:text-primary-400 hover:underline">Refresh</button>
-                        </div>
+                        <label class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+                            <input type="checkbox" id="auto-refresh" class="rounded border-gray-300 dark:border-gray-600" checked>
+                            Live tail
+                        </label>
                     </div>
-                    <pre id="log-output" class="text-xs bg-gray-50 dark:bg-gray-900 p-3 rounded-input overflow-x-auto max-h-64 overflow-y-auto text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700">Loading logs...</pre>
+                    <pre id="log-output" class="text-xs bg-gray-50 dark:bg-gray-900 p-3 rounded-input overflow-x-auto max-h-64 overflow-y-auto text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700">Waiting for live logs...</pre>
                 </div>
             </div>
         </div>
@@ -82,17 +84,46 @@
 <script>
 (function() {
     var appName = "{{.App.Name}}";
-    var filesSource = null;
-    var logsSource = null;
-    var logsQuery = "lines=100";
+    var streamSource = null;
+    var streamQuery = "lines=100";
+    var streamRetryTimer = null;
 
-    function escapeHTML(text) {
-        return (text || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+    function clearStreamFlash() {
+        var flash = document.getElementById('stream-inline-flash');
+        if (!flash) return;
+        flash.className = 'hidden rounded-card p-3 border mb-4 text-sm';
+        flash.textContent = '';
+    }
+
+    function showStreamFlash(message, tone) {
+        var flash = document.getElementById('stream-inline-flash');
+        if (!flash) return;
+        var cls = 'rounded-card p-3 border mb-4 text-sm';
+        if (tone === 'warning') {
+            cls += ' bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800 text-warning-800 dark:text-warning-200';
+        } else {
+            cls += ' bg-error-50 dark:bg-error-900/20 border-error-200 dark:border-error-800 text-error-800 dark:text-error-200';
+        }
+        flash.className = cls;
+        flash.textContent = message;
+    }
+
+    function probeStreamStartError() {
+        return fetch('/api/apps/' + encodeURIComponent(appName) + '/stream?' + streamQuery, {credentials: 'same-origin'})
+            .then(function(r) {
+                if (r.ok) return '';
+                return r.text().then(function(raw) {
+                    if (!raw) return 'HTTP ' + r.status;
+                    try {
+                        var payload = JSON.parse(raw);
+                        if (payload && payload.error) return payload.error;
+                    } catch (_err) {}
+                    return raw;
+                });
+            })
+            .catch(function(err) {
+                return (err && err.message) ? err.message : 'Network error while probing stream endpoint';
+            });
     }
 
     function bindFileButtons() {
@@ -101,69 +132,17 @@
         });
     }
 
-    function renderFilesList(files, errorText) {
+    function setLogOutput(text) {
+        var el = document.getElementById('log-output');
+        el.textContent = text || 'No logs available';
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function setFileListHTML(html) {
         var list = document.getElementById('file-list');
-        if (errorText) {
-            list.innerHTML = '<p class="text-xs text-error-500">' + escapeHTML(errorText) + '</p>';
-            return;
-        }
-        if (!files || files.length === 0) {
-            list.innerHTML = '<p class="text-xs text-gray-400">No files found</p>';
-            return;
-        }
-
-        var html = '';
-        files.forEach(function(f) {
-            var path = escapeHTML(f.path || '');
-            if (f.kind === 'file') {
-                html += '<button data-path="' + path + '" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">' +
-                    '<svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>' +
-                    path + '</button>';
-            } else {
-                html += '<div class="block w-full px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 truncate">' +
-                    '<svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7l1.664-1.664A2 2 0 016.078 5H10l2 2h5.922a2 2 0 011.414.586L21 9M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9M3 7h18"/></svg>' +
-                    path + '/</div>';
-            }
-        });
-        list.innerHTML = html;
+        if (!list) return;
+        list.innerHTML = html || '<p class="text-xs text-gray-400">No files found</p>';
         bindFileButtons();
-    }
-
-    function fetchFiles() {
-        fetch('/api/apps/' + encodeURIComponent(appName) + '/files', {credentials: 'same-origin'})
-            .then(function(r) {
-                return r.json().then(function(data) {
-                    if (!r.ok) throw new Error(data.error || 'Failed to load files');
-                    return data;
-                });
-            })
-            .then(function(data) {
-                renderFilesList(data.files || [], '');
-            })
-            .catch(function(e) { renderFilesList([], e.message || 'Failed to load files'); });
-    }
-
-    function startFilesStream() {
-        if (!window.EventSource) {
-            fetchFiles();
-            return;
-        }
-        if (filesSource) filesSource.close();
-        filesSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/files/stream');
-        filesSource.onmessage = function(event) {
-            var payload;
-            try { payload = JSON.parse(event.data); } catch (_err) { return; }
-            if (payload.error) {
-                renderFilesList([], payload.error);
-                return;
-            }
-            renderFilesList(payload.files || [], '');
-        };
-        filesSource.onerror = function() {
-            if (filesSource) filesSource.close();
-            filesSource = null;
-            setTimeout(startFilesStream, 3000);
-        };
     }
 
     function loadFile(path, btn) {
@@ -182,10 +161,71 @@
             .catch(function(e) { document.getElementById('editor-content').value = 'Error: ' + e.message; });
     }
 
-    function setLogOutput(text) {
-        var el = document.getElementById('log-output');
-        el.textContent = text || 'No logs available';
-        el.scrollTop = el.scrollHeight;
+    function stopStream() {
+        if (streamRetryTimer) {
+            clearTimeout(streamRetryTimer);
+            streamRetryTimer = null;
+        }
+        if (streamSource) {
+            streamSource.close();
+            streamSource = null;
+        }
+    }
+
+    function startStream() {
+        if (!window.EventSource) {
+            setLogOutput('Live logs unavailable in this browser');
+            showStreamFlash('Live updates are not supported in this browser.', 'error');
+            console.error('EventSource is unavailable in this browser');
+            return;
+        }
+        stopStream();
+        clearStreamFlash();
+        setLogOutput('Connecting to live logs...');
+        streamSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/stream?' + streamQuery);
+
+        streamSource.addEventListener('file', function(event) {
+            var payload;
+            try { payload = JSON.parse(event.data); } catch (_err) { return; }
+            if (!payload || typeof payload.html !== 'string') return;
+            setFileListHTML(payload.html);
+            clearStreamFlash();
+        });
+
+        streamSource.addEventListener('log', function(event) {
+            var payload;
+            try { payload = JSON.parse(event.data); } catch (_err) { return; }
+            if (!payload) return;
+            if (payload.error) {
+                setLogOutput('Error: ' + payload.error);
+                return;
+            }
+            var output = '';
+            if (payload.output) output += payload.output;
+            if (payload.stderr) output += (output ? '\n' : '') + payload.stderr;
+            setLogOutput(output || 'No logs available');
+            clearStreamFlash();
+        });
+
+        streamSource.addEventListener('ping', function(_event) {});
+
+        streamSource.onerror = function() {
+            stopStream();
+            setLogOutput('Live logs disconnected. Retrying...');
+            probeStreamStartError().then(function(errText) {
+                if (errText) {
+                    console.error('App stream startup failed:', errText);
+                    showStreamFlash('Live updates unavailable: ' + errText, 'error');
+                    setLogOutput('Live logs unavailable. See browser console for exact error.');
+                    return;
+                }
+                console.warn('App stream disconnected without HTTP error payload');
+                showStreamFlash('Live updates disconnected. Retrying...', 'warning');
+            });
+            if (document.getElementById('auto-refresh').checked) {
+                streamRetryTimer = setTimeout(startStream, 3000);
+            }
+        };
     }
 
     window.doAction = function(action) {
@@ -205,70 +245,25 @@
                 if (data.error) output = 'Error: ' + data.error;
                 if (!result.ok && !output) output = 'Error: Action request failed';
                 pre.textContent = output || (action + ' completed');
-                setTimeout(window.fetchLogs, 1000);
             })
             .catch(function(e) { pre.textContent = 'Error: ' + e.message; });
     };
 
-    window.fetchLogs = function() {
-        fetch('/api/apps/' + encodeURIComponent(appName) + '/logs?lines=100', {credentials: 'same-origin'})
-            .then(function(r) {
-                return r.json().then(function(data) {
-                    if (!r.ok) throw new Error(data.error || 'Failed to load logs');
-                    return data;
-                });
-            })
-            .then(function(data) { setLogOutput(data.output || data.error || 'No logs available'); })
-            .catch(function(e) { setLogOutput('Error: ' + (e.message || 'Failed to load logs')); });
-    };
-
-    function startLogsStream() {
-        if (!window.EventSource) {
-            window.fetchLogs();
-            return;
-        }
-        if (logsSource) logsSource.close();
-        logsSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/logs/stream?' + logsQuery);
-        logsSource.onmessage = function(event) {
-            var payload;
-            try { payload = JSON.parse(event.data); } catch (_err) { return; }
-            if (payload.error) {
-                setLogOutput('Error: ' + payload.error);
-                return;
-            }
-            setLogOutput(payload.output || payload.error || 'No logs available');
-        };
-        logsSource.onerror = function() {
-            if (logsSource) logsSource.close();
-            logsSource = null;
-            if (document.getElementById('auto-refresh').checked) {
-                setTimeout(startLogsStream, 3000);
-            }
-        };
-    }
-
     bindFileButtons();
-    startFilesStream();
-
+    if (document.getElementById('auto-refresh').checked) {
+        startStream();
+    }
     document.getElementById('auto-refresh').addEventListener('change', function() {
         if (this.checked) {
-            startLogsStream();
-        } else if (logsSource) {
-            logsSource.close();
-            logsSource = null;
+            startStream();
+        } else {
+            stopStream();
+            clearStreamFlash();
+            setLogOutput('Live logs paused');
         }
     });
 
-    if (document.getElementById('auto-refresh').checked) {
-        startLogsStream();
-    } else {
-        window.fetchLogs();
-    }
-
-    window.addEventListener('beforeunload', function() {
-        if (filesSource) filesSource.close();
-        if (logsSource) logsSource.close();
-    });
+    window.addEventListener('beforeunload', stopStream);
 })();
 </script>
 {{end}}

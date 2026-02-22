@@ -5,10 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -340,59 +341,57 @@ func (s *Service) ListFiles(ctx context.Context, appName string) (*AppListFilesR
 		return nil, err
 	}
 
-	script := fmt.Sprintf(`import json, pathlib
-root = pathlib.Path("/home/sprite")
-skip_names = {"node_modules",".git",".venv","venv","__pycache__"}
-entries = []
-for p in sorted(root.rglob("*")):
-    rel = p.relative_to(root).as_posix()
-    if not rel:
-        continue
-    parts = rel.split("/")
-    if any(part.startswith(".") for part in parts):
-        continue
-    if any(part in skip_names for part in parts):
-        continue
-    try:
-        st = p.stat()
-    except Exception:
-        continue
-    kind = "dir" if p.is_dir() else "file"
-    size = int(st.st_size) if p.is_file() else 0
-    entries.append({
-        "path": rel,
-        "kind": kind,
-        "size_bytes": size,
-        "modified_unix": int(st.st_mtime),
-    })
-    if len(entries) >= %d:
-        break
-print(json.dumps(entries))`, maxFileListEntries)
+	listCmd := "find /home/sprite -mindepth 1 " +
+		"\\( -path '*/.*' -o -path '*/node_modules' -o -path '*/node_modules/*' " +
+		"-o -path '*/venv' -o -path '*/venv/*' -o -path '*/__pycache__' -o -path '*/__pycache__/*' \\) " +
+		"-prune -o -printf '%P\\0%y\\0%s\\0%T@\\0'"
 
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "python3", "-c", script)
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "bash", "-lc", listCmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list files on sprite: %v: %s", err, strings.TrimSpace(string(output)))
 	}
 
-	var raw []struct {
-		Path         string `json:"path"`
-		Kind         string `json:"kind"`
-		SizeBytes    int64  `json:"size_bytes"`
-		ModifiedUnix int64  `json:"modified_unix"`
-	}
-	if err := json.Unmarshal(output, &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse file list: %w", err)
+	tokens := bytes.Split(output, []byte{0})
+	files := make([]AppFileEntry, 0, len(tokens)/4)
+	for i := 0; i+3 < len(tokens); i += 4 {
+		relPath := string(tokens[i])
+		if relPath == "" {
+			continue
+		}
+
+		kind := "file"
+		if string(tokens[i+1]) == "d" {
+			kind = "dir"
+		}
+
+		sizeBytes := int64(0)
+		if kind == "file" {
+			if parsed, parseErr := strconv.ParseInt(string(tokens[i+2]), 10, 64); parseErr == nil && parsed > 0 {
+				sizeBytes = parsed
+			}
+		}
+
+		modifiedAt := time.Unix(0, 0).UTC()
+		if modifiedRaw := string(tokens[i+3]); modifiedRaw != "" {
+			if parsed, parseErr := strconv.ParseFloat(modifiedRaw, 64); parseErr == nil && parsed >= 0 {
+				modifiedAt = time.Unix(int64(parsed), 0).UTC()
+			}
+		}
+
+		files = append(files, AppFileEntry{
+			Path:       relPath,
+			Kind:       kind,
+			SizeBytes:  sizeBytes,
+			ModifiedAt: modifiedAt,
+		})
 	}
 
-	files := make([]AppFileEntry, 0, len(raw))
-	for _, item := range raw {
-		files = append(files, AppFileEntry{
-			Path:       item.Path,
-			Kind:       item.Kind,
-			SizeBytes:  item.SizeBytes,
-			ModifiedAt: time.Unix(item.ModifiedUnix, 0).UTC(),
-		})
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	if len(files) > maxFileListEntries {
+		files = files[:maxFileListEntries]
 	}
 
 	return &AppListFilesResult{

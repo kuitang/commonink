@@ -62,6 +62,8 @@ internal/db/data/
 secrets.sh
 secrets.staging.sh
 stripe_keys*.sh
+stripe_prod.sh
+stripe_prod_extra.sh
 google_secret.json
 google_secrets.txt
 resend_api_key.txt
@@ -69,6 +71,7 @@ resend_api_key.txt
 
 # Server logs
 server.log
+server
 
 # Screenshots (Playwright verification)
 screenshots/

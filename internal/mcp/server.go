@@ -36,6 +36,7 @@ func NewServer(notesSvc *notes.Service, appsSvc *apps.Service, toolset Toolset) 
 		toolCopy := tool // avoid closure issues
 		mcp.AddTool(mcpServer, toolCopy, handler.createToolHandler(toolCopy.Name))
 	}
+	registerPrompts(mcpServer, toolset)
 
 	// Create Streamable HTTP handler (MCP Spec 2025-03-26)
 	// This creates a single endpoint that handles both POST and GET requests
