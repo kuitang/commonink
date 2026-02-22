@@ -3,8 +3,8 @@
 package browser
 
 import (
-	"bytes"
 	"context"
+	"bytes"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"

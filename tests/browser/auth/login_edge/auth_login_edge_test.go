@@ -300,3 +300,4 @@ func TestBrowser_Auth_RegisterDuplicateEmail(t *testing.T) {
 // =============================================================================
 // Password Reset Confirm Error Path Tests
 // =============================================================================
+

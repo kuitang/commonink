@@ -378,3 +378,4 @@ func TestCopyButton_NoteShareURL(t *testing.T) {
 		t.Errorf("Clipboard value should be a URL, got: %q", clipboardValue)
 	}
 }
+

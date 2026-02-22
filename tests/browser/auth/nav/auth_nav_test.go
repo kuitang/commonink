@@ -314,3 +314,4 @@ func TestBrowser_Auth_LandingRedirect_Authenticated(t *testing.T) {
 // =============================================================================
 // Magic Link Dialog Close Tests
 // =============================================================================
+

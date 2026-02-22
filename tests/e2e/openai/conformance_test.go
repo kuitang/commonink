@@ -32,7 +32,7 @@ import (
 
 const (
 	// Model to use - MUST be gpt-5-mini per CLAUDE.md requirements
-	OpenAIModel         = "gpt-5-mini"
+	OpenAIModel = "gpt-5-mini"
 	appSystemPromptName = "account_workflow"
 )
 
