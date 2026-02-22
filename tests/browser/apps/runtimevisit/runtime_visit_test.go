@@ -8,7 +8,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-const spriteTimeoutMS = 120000
+const spriteTimeoutMS = 5000
 
 func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	if testing.Short() {

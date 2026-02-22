@@ -31,4 +31,3 @@ func TestMountMCPRoute_RegistersStreamableMethods(t *testing.T) {
 		t.Fatalf("expected handler call count %d, got %d", len(methods), callCount)
 	}
 }
-

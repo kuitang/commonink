@@ -464,4 +464,3 @@ func TestBrowser_Auth_PasswordResetPage_NonexistentEmail(t *testing.T) {
 // =============================================================================
 // Register Page Link Tests
 // =============================================================================
-
