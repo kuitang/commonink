@@ -261,18 +261,16 @@ func resetStaticPageServerState(ts *staticPageServer) error {
 
 // findStaticDir locates the static/{subdir} directory.
 func findStaticDir(subdir string) string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		filepath.Join("../../static", subdir),
-		filepath.Join("../../../static", subdir),
-		filepath.Join("static", subdir),
-		filepath.Join("/home/kuitang/git/agent-notes/static", subdir),
+		filepath.Join(repoRoot, "static", subdir),
 	}
 	for _, dir := range candidates {
 		if _, err := os.Stat(dir); err == nil {
 			return dir
 		}
 	}
-	return filepath.Join("/home/kuitang/git/agent-notes/static", subdir)
+	panic("Cannot find static directory")
 }
 
 // =============================================================================

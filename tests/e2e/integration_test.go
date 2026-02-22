@@ -303,12 +303,9 @@ func resetFullAppServerState(ts *fullAppServer) error {
 
 // findIntegrationTemplatesDir locates templates for tests
 func findIntegrationTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"./web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 
 	for _, dir := range candidates {

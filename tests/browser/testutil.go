@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -465,33 +466,37 @@ func createMockS3(t *testing.T, bucketName string) (*s3client.Client, *httptest.
 // =============================================================================
 
 func findTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 	for _, dir := range candidates {
 		if _, err := os.Stat(dir); err == nil {
 			return dir
 		}
 	}
-	return "/home/kuitang/git/agent-notes/web/templates"
+	panic("Cannot find templates directory")
 }
 
 func findStaticSrcDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../static/src",
-		"../../../static/src",
-		"static/src",
-		"/home/kuitang/git/agent-notes/static/src",
+		filepath.Join(repoRoot, "static", "src"),
 	}
 	for _, dir := range candidates {
 		if _, err := os.Stat(dir); err == nil {
 			return dir
 		}
 	}
-	return "/home/kuitang/git/agent-notes/static/src"
+	panic("Cannot find static source directory")
+}
+
+func repositoryRoot() string {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("Failed to resolve repository root for test utilities")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 }
 
 // =============================================================================

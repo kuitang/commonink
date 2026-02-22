@@ -266,12 +266,9 @@ func resetShortURLWebServerState(ts *shortURLWebServer) error {
 }
 
 func findShortURLWebTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"./web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 
 	for _, dir := range candidates {

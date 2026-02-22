@@ -264,12 +264,9 @@ func resetOAuthTestServerState(ts *oauthTestServer) error {
 
 // findTemplatesDir locates the templates directory for tests
 func findTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"./web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 
 	for _, dir := range candidates {

@@ -340,12 +340,9 @@ func createMockS3ServerWithBucket(bucketName string) (*httptest.Server, *s3clien
 }
 
 func findWebFormTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"./web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 
 	for _, dir := range candidates {
