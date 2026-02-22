@@ -2,41 +2,13 @@
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Page Header -->
     <div class="mb-8">
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">API Keys</h1>
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">API and OAuth Credentials</h1>
         <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-            Create API keys for programmatic access to the API. Keys can be used with AI agents like Claude Code or ChatGPT.
+            Manage API keys and OAuth client credentials for integrations.
         </p>
     </div>
 
     <!-- Flash Messages -->
-    {{if .NewToken}}
-    <div class="mb-6 rounded-card bg-success-50 dark:bg-success-900/20 p-4 border border-success-200 dark:border-success-800" role="alert">
-        <div class="flex flex-col">
-            <div class="flex items-center mb-2">
-                <svg class="h-5 w-5 text-success-600 dark:text-success-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span class="font-medium text-success-800 dark:text-success-200">API Key Created Successfully</span>
-            </div>
-            <p class="text-sm text-success-700 dark:text-success-300 mb-2">
-                Copy this API key now. You won't be able to see it again!
-            </p>
-            <div class="flex items-center gap-2 bg-white dark:bg-gray-800 rounded-input p-3 border border-success-300 dark:border-success-700">
-                <code id="new-token" class="flex-1 text-sm font-mono text-gray-800 dark:text-gray-200 break-all select-all">{{.NewToken}}</code>
-                <button type="button" onclick="copyToken()" class="flex-shrink-0 inline-flex items-center px-3 py-1.5 border border-success-500 text-sm font-medium rounded-input text-success-700 dark:text-success-300 bg-success-50 dark:bg-success-900/30 hover:bg-success-100 dark:hover:bg-success-900/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-success-500">
-                    <svg id="copy-icon" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    <svg id="check-icon" class="hidden h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                    </svg>
-                    <span id="copy-text">Copy</span>
-                </button>
-            </div>
-        </div>
-    </div>
-    {{end}}
-
     {{if .Error}}
     <div class="mb-6 rounded-card bg-error-50 dark:bg-error-900/20 p-4 border border-error-200 dark:border-error-800" role="alert">
         <div class="flex">
@@ -48,66 +20,29 @@
     </div>
     {{end}}
 
-    <!-- Create New API Key Form -->
-    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card mb-8">
-        <div class="px-4 py-5 sm:p-6">
-            <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Create New API Key</h3>
-            <form action="/settings/api-keys" method="POST" class="space-y-4">
-                <div>
-                    <label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Key Name</label>
-                    <input type="text" name="name" id="name" required
-                           placeholder="e.g., Claude Code, ChatGPT, CI/CD"
-                           class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">A descriptive name to identify this API key</p>
-                </div>
-
-                <div>
-                    <label for="scope" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Permissions</label>
-                    <select name="scope" id="scope"
-                            class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
-                        <option value="read_write">Read and Write (recommended)</option>
-                        <option value="read">Read Only</option>
-                    </select>
-                </div>
-
-                <div>
-                    <label for="expires_in" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Expiration</label>
-                    <select name="expires_in" id="expires_in"
-                            class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
-                        <option value="2592000">30 days</option>
-                        <option value="7776000">90 days</option>
-                        <option value="15552000">180 days</option>
-                        <option value="31536000" selected>1 year (maximum)</option>
-                    </select>
-                </div>
-
-                <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Re-authenticate to create API key</p>
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                            <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
-                            <input type="email" name="email" id="email" required
-                                   class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
-                        </div>
-                        <div>
-                            <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300">Password</label>
-                            <input type="password" name="password" id="password" required
-                                   class="mt-1 block w-full rounded-input border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:border-primary-500 focus:ring-primary-500 sm:text-sm px-3 py-2">
-                        </div>
-                    </div>
-                </div>
-
-                <div class="flex justify-end">
-                    <button type="submit"
-                            class="themed-btn-primary px-4 py-2 text-sm">
-                        Create API Key
-                    </button>
-                </div>
-            </form>
+    <!-- Create Actions -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 mb-8">
+        <div class="bg-white dark:bg-gray-800 shadow-card rounded-card p-5 border border-gray-200 dark:border-gray-700">
+            <h2 class="text-lg font-medium text-gray-900 dark:text-white mb-2">Create API</h2>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Create a bearer API key for scripts and clients that do not use OAuth.
+            </p>
+            <a href="/settings/api-keys/new" class="themed-btn-primary inline-flex items-center px-4 py-2 text-sm">
+                Create API
+            </a>
+        </div>
+        <div class="bg-white dark:bg-gray-800 shadow-card rounded-card p-5 border border-gray-200 dark:border-gray-700">
+            <h2 class="text-lg font-medium text-gray-900 dark:text-white mb-2">Create OAuth</h2>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Generally not needed. Use only for clients or servers that do not support Dynamic Client Registration.
+            </p>
+            <a href="#oauth-create-form" class="themed-btn-secondary inline-flex items-center px-4 py-2 text-sm">
+                Create OAuth
+            </a>
         </div>
     </div>
 
-    <!-- Existing API Keys List -->
+    <!-- Active API Keys -->
     <div class="bg-white dark:bg-gray-800 shadow-card rounded-card">
         <div class="px-4 py-5 sm:p-6">
             <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Active API Keys</h3>
@@ -155,7 +90,7 @@
                                 {{.ExpiresAt.Format "Jan 2, 2006"}}
                             </td>
                             <td class="py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <form action="/settings/api-keys/{{.ID}}/revoke" method="POST" class="inline" onsubmit="return confirm('Are you sure you want to revoke this API key? This cannot be undone.');">
+                                <form action="/api-keys/{{.ID}}/revoke" method="POST" class="inline" onsubmit="return confirm('Are you sure you want to revoke this API key? This cannot be undone.');">
                                     <button type="submit" class="text-error-600 hover:text-error-900 dark:text-error-400 dark:hover:text-error-300">
                                         Revoke
                                     </button>
@@ -178,10 +113,10 @@
         </div>
     </div>
 
-    <!-- OAuth Credentials Section -->
+    <!-- Create OAuth -->
     <div class="bg-white dark:bg-gray-800 shadow-card rounded-card mb-8">
         <div class="px-4 py-5 sm:p-6">
-            <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-2">OAuth Credentials (MCP Connectors)</h3>
+            <h3 id="oauth-create-form" class="text-lg font-medium text-gray-900 dark:text-white mb-2">Create OAuth</h3>
             <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
                 Generate OAuth client credentials for ChatGPT or Claude custom connectors.
             </p>
@@ -219,6 +154,16 @@
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Active OAuth Credentials -->
+    <div class="bg-white dark:bg-gray-800 shadow-card rounded-card mb-8">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-2">Active OAuth Credentials</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400">
+                OAuth clients created via Dynamic Client Registration are active immediately. Credential listing and revocation UI are not available on this page yet.
+            </p>
         </div>
     </div>
 
@@ -339,31 +284,6 @@ function copyToClipboard(text, onSuccess, onFail) {
     } else {
         fallbackCopy(text, onSuccess, onFail);
     }
-}
-
-function copyToken() {
-    var tokenElement = document.getElementById('new-token');
-    var copyIcon = document.getElementById('copy-icon');
-    var checkIcon = document.getElementById('check-icon');
-    var copyText = document.getElementById('copy-text');
-    var text = tokenElement.textContent.trim();
-
-    copyToClipboard(text, function() {
-        copyIcon.classList.add('hidden');
-        checkIcon.classList.remove('hidden');
-        copyText.textContent = 'Copied!';
-
-        setTimeout(function() {
-            copyIcon.classList.remove('hidden');
-            checkIcon.classList.add('hidden');
-            copyText.textContent = 'Copy';
-        }, 2000);
-    }, function() {
-        copyText.textContent = 'Copy failed';
-        setTimeout(function() {
-            copyText.textContent = 'Copy';
-        }, 2000);
-    });
 }
 
 function copyOAuthField(elementId, button) {

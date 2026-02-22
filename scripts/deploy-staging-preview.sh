@@ -47,12 +47,25 @@ echo "  STRIPE_PUBLISHABLE_KEY"
 echo "  STRIPE_WEBHOOK_SECRET"
 echo "  STRIPE_PRICE_MONTHLY"
 echo "  STRIPE_PRICE_ANNUAL"
+echo "  SPRITE_TOKEN"
 echo ""
 
 if ! flyctl apps list --json --org "${FLY_ORG}" | jq -e --arg app "${APP_NAME}" '.[] | select(.Name == $app)' >/dev/null; then
   echo "Preview app '${APP_NAME}' does not exist in org '${FLY_ORG}'."
   echo "Run ./scripts/bootstrap-staging-preview.sh ${APP_NAME} first."
   exit 1
+fi
+
+if [ "${CI:-}" = "true" ] && [ -z "${SPRITE_TOKEN:-}" ]; then
+  echo "ERROR: SPRITE_TOKEN must be provided in CI for staging preview deploys."
+  exit 1
+fi
+
+if [ -n "${SPRITE_TOKEN:-}" ]; then
+  echo "Syncing SPRITE_TOKEN secret from environment..."
+  flyctl secrets set \
+    "SPRITE_TOKEN=${SPRITE_TOKEN}" \
+    --app "${APP_NAME}" >/dev/null
 fi
 
 secret_list="$(flyctl secrets list --app "${APP_NAME}")"
@@ -74,6 +87,7 @@ required_secrets=(
   STRIPE_WEBHOOK_SECRET
   STRIPE_PRICE_MONTHLY
   STRIPE_PRICE_ANNUAL
+  SPRITE_TOKEN
 )
 
 missing=()

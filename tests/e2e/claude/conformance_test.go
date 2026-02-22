@@ -11,8 +11,10 @@ package claude
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"os"
@@ -21,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
@@ -47,9 +50,14 @@ func getAuthenticatedMCPConfig(t testing.TB, accessToken string) string {
 	srv := testutil.GetServer(t)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, ".mcp.json")
+	testName := "unknown"
+	if named, ok := any(t).(interface{ Name() string }); ok {
+		testName = named.Name()
+	}
+	serverName := buildConformanceMCPServerName(srv.Label, testName+":"+configPath)
 	config := map[string]any{
 		"mcpServers": map[string]any{
-			"agent-notes": map[string]any{
+			serverName: map[string]any{
 				"type": "http",
 				"url":  srv.BaseURL + "/mcp",
 				"headers": map[string]string{
@@ -61,6 +69,9 @@ func getAuthenticatedMCPConfig(t testing.TB, accessToken string) string {
 	configBytes, _ := json.MarshalIndent(config, "", "  ")
 	if err := os.WriteFile(configPath, configBytes, 0644); err != nil {
 		t.Fatalf("Failed to write MCP config: %v", err)
+	}
+	if err := verifyClaudeMCPURLViaList(configPath, serverName, srv.BaseURL+"/mcp"); err != nil {
+		t.Fatalf("Hermetic MCP URL preflight failed: %v", err)
 	}
 	return configPath
 }
@@ -103,7 +114,65 @@ type ToolCall struct {
 	ServerID string
 }
 
-const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash."
+const conformanceMCPServerPrefix = "agent-notes-conformance"
+const requiredPriorHashInstruction = "For note_update and note_edit, first call note_view and pass revision_hash as prior_hash. For app requests with unspecified stack (for example 'make me a todo list app'), default to a minimal Flask app (app.py + requirements.txt), then register sprite-env service on port 8080."
+const appSystemPromptName = "account_workflow"
+
+func buildConformanceMCPServerName(serverLabel, entropy string) string {
+	label := sanitizeMCPIdentifier(serverLabel)
+	if label == "" {
+		label = "default"
+	}
+	sum := crc32.ChecksumIEEE([]byte(entropy))
+	return fmt.Sprintf("%s-%s-%08x", conformanceMCPServerPrefix, label, sum)
+}
+
+func sanitizeMCPIdentifier(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, ch := range raw {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			b.WriteRune(ch)
+		case ch >= '0' && ch <= '9':
+			b.WriteRune(ch)
+		case ch == '-', ch == '_':
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func verifyClaudeMCPURLViaList(mcpConfigPath, expectedServerName, expectedURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "claude", "mcp", "list")
+	cmd.Dir = filepath.Dir(mcpConfigPath)
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
+
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("claude mcp list timed out after 20s")
+	}
+	if err != nil {
+		return fmt.Errorf("claude mcp list failed: %w\noutput:\n%s", err, string(output))
+	}
+
+	expectedEntry := fmt.Sprintf("%s: %s", expectedServerName, expectedURL)
+	if !strings.Contains(string(output), expectedEntry) {
+		return fmt.Errorf(
+			"claude mcp list missing expected MCP URL entry %q\noutput:\n%s",
+			expectedEntry,
+			string(output),
+		)
+	}
+	return nil
+}
 
 // filterEnv returns a copy of env with the named variable removed.
 func filterEnv(env []string, name string) []string {
@@ -145,6 +214,7 @@ func NewConversation(t *testing.T, mcpConfig string) *Conversation {
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--mcp-config", mcpConfig,
+		"--strict-mcp-config",
 		"--dangerously-skip-permissions",
 	)
 
@@ -292,6 +362,7 @@ func runOneShotClaude(t *testing.T, mcpConfig, prompt string) (string, []ToolCal
 		"--verbose",
 		"--output-format", "stream-json",
 		"--mcp-config", mcpConfig,
+		"--strict-mcp-config",
 		"--dangerously-skip-permissions")
 
 	// Allow running inside a Claude Code session by removing the nesting guard
@@ -845,4 +916,193 @@ func TestClaude_OAuth_Integration(t *testing.T) {
 
 		t.Log("OAuth metadata endpoints verified")
 	})
+}
+
+func hasClaudeToolCall(calls []ToolCall, name string) bool {
+	for _, call := range calls {
+		if call.Name == name || strings.HasSuffix(call.Name, "__"+name) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertClaudePromptExists(t *testing.T, mcpClient *testutil.MCPClient) {
+	t.Helper()
+
+	resp, err := mcpClient.Call("prompts/list", nil)
+	if err != nil {
+		t.Fatalf("prompts/list failed: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("prompts/list returned MCP error: %s", resp.Error.Message)
+	}
+
+	var result struct {
+		Prompts []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"prompts"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("failed to parse prompts/list response: %v", err)
+	}
+	if len(result.Prompts) == 0 {
+		t.Fatal("expected at least one MCP prompt, got none")
+	}
+
+	for _, prompt := range result.Prompts {
+		if prompt.Name == appSystemPromptName {
+			return
+		}
+	}
+	t.Fatalf("expected MCP prompt %q, got prompts=%+v", appSystemPromptName, result.Prompts)
+}
+
+func assertClaudeAppURLLive(t *testing.T, mcpClient *testutil.MCPClient, appPrefix string) {
+	t.Helper()
+
+	listResp, err := mcpClient.CallTool("app_list", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("app_list failed: %v", err)
+	}
+	listText, err := testutil.ParseToolResult(listResp)
+	if err != nil {
+		t.Fatalf("failed to parse app_list result: %v", err)
+	}
+	if testutil.IsToolError(listResp) {
+		t.Fatalf("app_list returned tool error: %s", listText)
+	}
+
+	var listResult struct {
+		Apps []struct {
+			Name      string `json:"name"`
+			PublicURL string `json:"public_url"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal([]byte(listText), &listResult); err != nil {
+		t.Fatalf("failed to decode app_list JSON payload: %v\npayload=%s", err, listText)
+	}
+
+	appName := ""
+	publicURL := ""
+	for _, app := range listResult.Apps {
+		if strings.HasPrefix(app.Name, appPrefix) {
+			appName = app.Name
+			publicURL = strings.TrimSpace(app.PublicURL)
+			break
+		}
+	}
+	if appName == "" {
+		t.Fatalf("no app found with prefix %q in app_list payload: %s", appPrefix, listText)
+	}
+	if publicURL == "" {
+		t.Fatalf("app %q has empty public_url (frontend source of Open link)", appName)
+	}
+
+	curlCmd := fmt.Sprintf(
+		"for i in 1 2 3 4 5 6; do curl -fsS -o /dev/null -w 'HTTP %%{http_code}\\n' %q && exit 0; sleep 2; done; exit 1",
+		publicURL,
+	)
+	bashResp, err := mcpClient.CallTool("app_bash", map[string]interface{}{
+		"app":             appName,
+		"command":         curlCmd,
+		"timeout_seconds": 90,
+	})
+	if err != nil {
+		t.Fatalf("app_bash curl check failed: %v", err)
+	}
+	bashText, err := testutil.ParseToolResult(bashResp)
+	if err != nil {
+		t.Fatalf("failed to parse app_bash result: %v", err)
+	}
+	if testutil.IsToolError(bashResp) {
+		t.Fatalf("app_bash returned tool error: %s", bashText)
+	}
+
+	var bashResult struct {
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.Unmarshal([]byte(bashText), &bashResult); err != nil {
+		t.Fatalf("failed to decode app_bash JSON payload: %v\npayload=%s", err, bashText)
+	}
+	if bashResult.ExitCode != 0 {
+		t.Fatalf("sprite URL curl failed for app=%s url=%s exit=%d stdout=%q stderr=%q",
+			appName, publicURL, bashResult.ExitCode, bashResult.Stdout, bashResult.Stderr)
+	}
+	if !strings.Contains(bashResult.Stdout, "HTTP ") {
+		t.Fatalf("sprite URL curl output missing HTTP status for app=%s url=%s stdout=%q stderr=%q",
+			appName, publicURL, bashResult.Stdout, bashResult.Stderr)
+	}
+	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(bashResult.Stdout))
+}
+
+func TestClaude_AppTools_Targeted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping in short mode")
+	}
+	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
+		t.Skip("SPRITE_TOKEN not set")
+	}
+
+	srv := testutil.GetServer(t)
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "ClaudeAppTargeted")
+	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
+	assertClaudePromptExists(t, mcpClient)
+	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
+
+	base := fmt.Sprintf("cl-target-%d", time.Now().UnixNano()%1000000)
+	nameA := base + "-a"
+	nameB := base + "-b"
+	prompt := fmt.Sprintf(
+		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_bash with command 'echo tool-check'; 4) app_delete for the created app.",
+		nameA, nameB,
+	)
+
+	resp, toolCalls := runOneShotClaude(t, mcpConfig, prompt)
+	t.Logf("Response: %s", resp)
+	t.Logf("Tool calls: %d", len(toolCalls))
+
+	for _, expected := range []string{"app_create", "app_list", "app_bash", "app_delete"} {
+		if !hasClaudeToolCall(toolCalls, expected) {
+			t.Fatalf("Expected Claude to call %s, calls=%+v", expected, toolCalls)
+		}
+	}
+}
+
+func TestClaude_AppWorkflow_OneShot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping in short mode")
+	}
+	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
+		t.Skip("SPRITE_TOKEN not set")
+	}
+
+	srv := testutil.GetServer(t)
+	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "ClaudeAppWorkflow")
+	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
+	assertClaudePromptExists(t, mcpClient)
+	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
+
+	base := fmt.Sprintf("cl-workflow-%d", time.Now().UnixNano()%1000000)
+	nameA := base + "-a"
+	nameB := base + "-b"
+	prompt := fmt.Sprintf(
+		"make me a todo list app. Use app_create with candidate names ['%s','%s'] before writing code.",
+		nameA, nameB,
+	)
+
+	resp, toolCalls := runOneShotClaude(t, mcpConfig, prompt)
+	t.Logf("Response: %s", resp)
+	t.Logf("Tool calls: %d", len(toolCalls))
+
+	for _, expected := range []string{"app_create", "app_write", "app_bash"} {
+		if !hasClaudeToolCall(toolCalls, expected) {
+			t.Fatalf("Expected Claude to call %s, calls=%+v", expected, toolCalls)
+		}
+	}
+
+	assertClaudeAppURLLive(t, mcpClient, base)
 }

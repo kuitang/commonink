@@ -170,6 +170,7 @@ func createShortURLWebServer(tempDir string) *shortURLWebServer {
 		shortURLSvc,
 		billing.NewMockService(),
 		server.URL,
+		"", // spriteToken
 	)
 
 	// Register ALL web routes

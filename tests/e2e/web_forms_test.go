@@ -190,6 +190,7 @@ func createWebFormServer(tempDir string) *webFormServer {
 		shortURLSvc,
 		billing.NewMockService(),
 		server.URL,
+		"", // spriteToken
 	)
 
 	// Register ALL web routes.

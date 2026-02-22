@@ -1,67 +1,65 @@
 # Privacy Policy
 
-**Last Updated:** January 2026
+**Last Updated:** February 2026
 
-common.ink ("we", "us", or "our") operates the common.ink service. This page informs you of our policies regarding the collection, use, and disclosure of personal data when you use our Service.
+common.ink ("we", "us", or "our") operates the common.ink service. This page explains how we collect, use, and protect personal data when you use the service.
 
 ## Information We Collect
 
 ### Account Information
 When you create an account, we collect:
 - Email address
-- Password (hashed and salted)
+- Password hash and related auth metadata
 
-### Notes Data
-- All notes you create are stored encrypted at rest using AES-256-GCM
-- Each user has their own isolated SQLCipher database
-- We do not access or analyze the content of your notes
+### Product Data
+- Notes and related metadata needed to provide the service
+- Deployment metadata for apps you run through common.ink
+- Data is stored in account-isolated storage and encrypted at rest
 
 ### Usage Data
-We may collect information about how you access and use the Service:
+We collect operational telemetry needed to run and secure the platform:
 - Access timestamps
-- Feature usage statistics
-- Error logs (without note content)
+- Feature usage events
+- Error and audit logs (excluding private content where possible)
 
 ## How We Use Your Information
 
-We use the collected data to:
-- Provide and maintain the Service
-- Authenticate your identity
-- Send transactional emails (password resets, magic links)
-- Improve the Service
+We use collected data to:
+- Provide and maintain the service
+- Authenticate users and authorize connected clients
+- Send transactional emails (for example, login and recovery flows)
+- Detect abuse and secure accounts
+- Improve reliability and performance
 
 ## Data Security
 
-Your notes are:
-- Encrypted at rest using SQLCipher with AES-256-GCM
-- Isolated in per-user databases
-- Protected by envelope encryption with rotating keys
+Your account data is protected through:
+- Encryption at rest
+- Per-account data isolation
+- Access controls and authenticated API access
 
 ## Data Retention
 
 - Account data is retained while your account is active
-- Deleted notes are permanently removed within 30 days
-- You may request complete account deletion at any time
+- Deleted content is removed according to operational retention windows
+- You may request account deletion at any time
 
 ## Third-Party Services
 
-We use the following third-party services:
-- **Tigris** (S3-compatible storage) for public note hosting
-- **Resend** for transactional email delivery
-- **Fly.io** for infrastructure hosting
+We rely on infrastructure and service providers such as cloud hosting, email delivery, and payment processing vendors to operate common.ink.
 
 ## Your Rights
 
-You have the right to:
+Depending on jurisdiction, you may have rights to:
 - Access your personal data
 - Correct inaccurate data
-- Delete your account and data
-- Export your notes
+- Delete your account and associated data
+- Export your data
 
 ## Changes to This Policy
 
-We may update this Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page.
+We may update this Privacy Policy from time to time. Material changes will be posted on this page.
 
 ## Contact Us
 
-If you have questions about this Privacy Policy, please contact us at: privacy@common.ink
+If you have questions about this Privacy Policy, contact: privacy@common.ink

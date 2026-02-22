@@ -33,8 +33,32 @@ This repo is configured to be hostname-agnostic for redirects and absolute URLs.
 
 - Production domain: `https://common.ink`
 - PR preview domains: `staging-1-commonink.fly.dev` to `staging-3-commonink.fly.dev` (assigned by PR number in CI)
-- GitHub CI for previews should only require `FLY_API_TOKEN_STAGING`.
+- GitHub CI `test` and `deploy-preview` use `SPRITE_TOKEN_STAGING` (minted from Sprite org `commonink-staging`).
+- GitHub CI `deploy-preview` also requires `FLY_API_TOKEN_STAGING`.
+- GitHub CI `deploy-prod` requires `FLY_API_TOKEN_PROD` only for deployment.
 - Preview apps are expected in Fly org `commonink-staging` (hardcoded in bootstrap + CI).
+
+### Sprite token policy
+
+- Staging token source: Sprite org `commonink-staging`.
+- GitHub secret for non-prod CI paths: `SPRITE_TOKEN_STAGING`.
+- CI test job runs Sprite-backed browser/API tests with `SPRITE_TOKEN_STAGING`.
+- Preview deploy syncs Fly app secret `SPRITE_TOKEN` from `SPRITE_TOKEN_STAGING` on every deploy.
+- Production token source: Sprite org `commonink-prod`.
+- Production runtime token is Fly app secret `SPRITE_TOKEN` on app `commonink`.
+- Do not store production Sprite token in GitHub Actions secrets.
+
+Production token bootstrap (one-time, local):
+```bash
+SPRITE_TOKEN="$(SPRITE_ORG_SLUG=commonink-prod ./scripts/resolve-sprite-token.sh)" \
+  && flyctl secrets set "SPRITE_TOKEN=${SPRITE_TOKEN}" --app commonink
+```
+
+Staging token bootstrap for CI (repeat when rotated):
+```bash
+SPRITE_TOKEN="$(SPRITE_ORG_SLUG=commonink-staging ./scripts/resolve-sprite-token.sh)" \
+  && gh secret set SPRITE_TOKEN_STAGING --repo kuitang/commonink --body "${SPRITE_TOKEN}"
+```
 
 ### Preview app secret bootstrap (recommended)
 

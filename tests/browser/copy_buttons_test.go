@@ -48,8 +48,8 @@ func TestCopyButton_APIKeyCreated(t *testing.T) {
 	testEmail := GenerateUniqueEmail("copy-apikey")
 	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to /api-keys/new and submit the form.
-	Navigate(t, page, env.BaseURL, "/api-keys/new")
+	// Navigate to /settings/api-keys/new and submit the form.
+	Navigate(t, page, env.BaseURL, "/settings/api-keys/new")
 
 	// Wait for form to load and fill in the key name
 	nameInput := WaitForSelector(t, page, "input#name")

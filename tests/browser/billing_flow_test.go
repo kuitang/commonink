@@ -87,11 +87,11 @@ func TestBilling_PricingPage_Properties(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get pricing page content: %v", err)
 	}
-	if !strings.Contains(content, "$2") {
-		t.Error("Pro card should show $2 monthly price")
+	if !strings.Contains(content, "$5") {
+		t.Error("Pro card should show $5 monthly price")
 	}
-	if !strings.Contains(content, "$20") {
-		t.Error("Pro card should show $20 annual price")
+	if !strings.Contains(content, "$50") {
+		t.Error("Pro card should show $50 annual price")
 	}
 
 	// Verify mock mode message
@@ -322,67 +322,17 @@ func TestBilling_FullJourney_Properties(t *testing.T) {
 	page := newPageFromContext(t, ctx)
 	defer page.Close()
 
-	// Step 1: Register via browser UI
+	// Step 1: Logged-in free user starts upgrade flow from nav.
 	testEmail := GenerateUniqueEmail("billing-journey")
-	testPassword := "SecurePass123!"
+	userID := env.LoginUser(t, ctx, testEmail)
 
-	Navigate(t, page, env.BaseURL, "/register")
+	Navigate(t, page, env.BaseURL, "/notes")
 
-	page.Locator("input[name='email']").Fill(testEmail)
-	page.Locator("input[name='password']").Fill(testPassword)
-	page.Locator("input[name='confirm_password']").Fill(testPassword)
-	page.Locator("input[name='terms']").Check()
-	page.Locator("button[type='submit']:has-text('Create account')").Click()
-
+	getProLink := WaitForSelector(t, page, "a[href='/pricing']:has-text('Get Pro')")
+	if err := getProLink.Click(); err != nil {
+		t.Fatalf("Failed to click Get Pro link: %v", err)
+	}
 	err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
-	})
-	if err != nil {
-		t.Fatalf("Registration did not complete: %v", err)
-	}
-
-	if !strings.Contains(page.URL(), "/notes") {
-		t.Fatalf("Expected /notes after registration, got: %s", page.URL())
-	}
-
-	// Step 2: Open user dropdown and click "Billing"
-	userMenuBtn := page.Locator("#user-menu-button")
-	if err := userMenuBtn.Click(); err != nil {
-		t.Fatalf("Failed to click user menu button: %v", err)
-	}
-
-	dropdown := page.Locator("#user-dropdown")
-	err = dropdown.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(browserMaxTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("User dropdown did not appear: %v", err)
-	}
-
-	billingLink := dropdown.Locator("a[href='/settings/billing']")
-	if err := billingLink.Click(); err != nil {
-		t.Fatalf("Failed to click Billing link in dropdown: %v", err)
-	}
-	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateDomcontentloaded,
-	})
-	if err != nil {
-		t.Fatalf("Navigation to billing settings did not complete: %v", err)
-	}
-
-	// Verify on /settings/billing with "Free" badge
-	if !strings.Contains(page.URL(), "/settings/billing") {
-		t.Errorf("Expected /settings/billing, got: %s", page.URL())
-	}
-	WaitForSelector(t, page, "span:has-text('Free')")
-
-	// Step 3: Click "Upgrade to Pro" -> should land on /pricing
-	upgradeLink := WaitForSelector(t, page, "a[href='/pricing']:has-text('Upgrade to Pro')")
-	if err := upgradeLink.Click(); err != nil {
-		t.Fatalf("Failed to click Upgrade to Pro: %v", err)
-	}
-	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
@@ -392,7 +342,7 @@ func TestBilling_FullJourney_Properties(t *testing.T) {
 		t.Errorf("Expected /pricing, got: %s", page.URL())
 	}
 
-	// Step 4: POST /billing/checkout with plan=monthly -> verify mock response
+	// Step 2: POST /billing/checkout with plan=monthly -> verify mock response
 	checkoutResult, err := page.Evaluate(`async () => {
 		const response = await fetch('/billing/checkout', {
 			method: 'POST',
@@ -414,8 +364,58 @@ func TestBilling_FullJourney_Properties(t *testing.T) {
 		t.Errorf("Expected clientSecret='mock_cs_secret_monthly', got: %v", resultMap["clientSecret"])
 	}
 
-	// Step 5: Navigate to /billing/success?session_id=test -> verify "Welcome to Pro!"
+	// Step 3: Mock upgrade completion and verify success page.
+	env.SetUserSubscription(t, userID, "active", "cus_mock123")
+
 	Navigate(t, page, env.BaseURL, "/billing/success?session_id=test")
 
 	WaitForSelector(t, page, "h1:has-text('Welcome to Pro!')")
+
+	// Step 4: Paid user checks bills from account menu.
+	Navigate(t, page, env.BaseURL, "/notes")
+
+	userMenuBtn := page.Locator("#user-menu-button")
+	if err := userMenuBtn.Click(); err != nil {
+		t.Fatalf("Failed to click user menu button: %v", err)
+	}
+
+	dropdown := page.Locator("#user-dropdown")
+	if err := dropdown.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	}); err != nil {
+		t.Fatalf("User dropdown did not appear: %v", err)
+	}
+
+	billingLink := dropdown.Locator("a[href='/settings/billing']")
+	if err := billingLink.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	}); err != nil {
+		t.Fatalf("Billing link not visible for paid user: %v", err)
+	}
+	if err := billingLink.Click(); err != nil {
+		t.Fatalf("Failed to click Billing link in dropdown: %v", err)
+	}
+	if err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	}); err != nil {
+		t.Fatalf("Navigation to billing settings did not complete: %v", err)
+	}
+	if !strings.Contains(page.URL(), "/settings/billing") {
+		t.Fatalf("Expected /settings/billing, got: %s", page.URL())
+	}
+
+	manageBilling := WaitForSelector(t, page, "button:has-text('Manage Billing')")
+	if err := manageBilling.Click(); err != nil {
+		t.Fatalf("Failed to click Manage Billing: %v", err)
+	}
+	if err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	}); err != nil {
+		t.Fatalf("Navigation after Manage Billing did not complete: %v", err)
+	}
+	if !strings.Contains(page.URL(), "mock_portal=true") {
+		t.Fatalf("Expected redirect containing mock_portal=true, got: %s", page.URL())
+	}
 }

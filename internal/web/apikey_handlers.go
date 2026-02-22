@@ -39,7 +39,7 @@ type APIKeyCreatedData struct {
 	BaseURL   string
 }
 
-// HandleAPIKeySettings handles GET /settings/api-keys and GET /api-keys - shows API key management page.
+// HandleAPIKeySettings handles GET /settings/api-keys - shows API key management page.
 func (h *WebHandler) HandleAPIKeySettings(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -84,18 +84,12 @@ func (h *WebHandler) HandleAPIKeySettings(w http.ResponseWriter, r *http.Request
 		data.Error = errMsg
 	}
 
-	// Use the new api-keys/list.html template for /api-keys route, settings/api-keys.html for /settings/api-keys
-	templateName := "api-keys/list.html"
-	if r.URL.Path == "/settings/api-keys" {
-		templateName = "settings/api-keys.html"
-	}
-
-	if err := h.renderer.Render(w, templateName, data); err != nil {
+	if err := h.renderer.Render(w, "settings/api-keys.html", data); err != nil {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
 
-// HandleNewAPIKeyPage handles GET /api-keys/new - shows the new API key creation form.
+// HandleNewAPIKeyPage handles GET /settings/api-keys/new - shows the new API key creation form.
 func (h *WebHandler) HandleNewAPIKeyPage(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -121,7 +115,7 @@ func (h *WebHandler) HandleNewAPIKeyPage(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// HandleCreateAPIKey handles POST /settings/api-keys - creates a new API Key.
+// HandleCreateAPIKey handles POST /api-keys - creates a new API key.
 func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -136,50 +130,20 @@ func (h *WebHandler) HandleCreateAPIKey(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/api-keys/new?error=Invalid+form+data", http.StatusFound)
+		http.Redirect(w, r, "/settings/api-keys/new?error=Invalid+form+data", http.StatusFound)
 		return
 	}
 
 	name := r.FormValue("name")
 	scope := r.FormValue("scope")
 	expiresInStr := r.FormValue("expires_in")
-	email := r.FormValue("email")
-	password := r.FormValue("password")
 
-	// /settings/api-keys requires re-authentication; /api-keys does not.
-	settingsPath := r.URL.Path == "/settings/api-keys"
-	errRedirect := "/settings/api-keys?error="
-	if !settingsPath {
-		errRedirect = "/api-keys/new?error="
-	}
+	errRedirect := "/settings/api-keys/new?error="
 
 	// Validate required fields
 	if name == "" {
 		http.Redirect(w, r, errRedirect+"API+key+name+is+required", http.StatusFound)
 		return
-	}
-
-	// Validate credentials only on the settings route (re-authentication required)
-	if settingsPath {
-		if email == "" || password == "" {
-			http.Redirect(w, r, errRedirect+"Email+and+password+are+required", http.StatusFound)
-			return
-		}
-		account, err := userDB.Queries().GetAccount(r.Context(), userID)
-		if err != nil {
-			http.Redirect(w, r, errRedirect+"Invalid+credentials", http.StatusFound)
-			return
-		}
-		if account.Email != email {
-			http.Redirect(w, r, errRedirect+"Invalid+credentials", http.StatusFound)
-			return
-		}
-		if account.PasswordHash.Valid && account.PasswordHash.String != "" {
-			if !h.authService.VerifyPasswordHash(password, account.PasswordHash.String) {
-				http.Redirect(w, r, errRedirect+"Invalid+credentials", http.StatusFound)
-				return
-			}
-		}
 	}
 
 	// Parse expiration
@@ -253,7 +217,7 @@ func createAPIKeyForUser(ctx context.Context, userDB *db.UserDB, userID, name, s
 	return fullToken, keyID, nil
 }
 
-// HandleRevokeAPIKey handles POST /settings/api-keys/{id}/revoke and POST /api-keys/{id}/revoke - revokes an API Key.
+// HandleRevokeAPIKey handles POST /api-keys/{id}/revoke - revokes an API key.
 func (h *WebHandler) HandleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	userDB := auth.GetUserDB(r.Context())
 	if userDB == nil {
@@ -263,22 +227,22 @@ func (h *WebHandler) HandleRevokeAPIKey(w http.ResponseWriter, r *http.Request) 
 
 	keyID := r.PathValue("id")
 	if keyID == "" {
-		http.Redirect(w, r, "/api-keys?error=API+key+ID+required", http.StatusFound)
+		http.Redirect(w, r, "/settings/api-keys?error=API+key+ID+required", http.StatusFound)
 		return
 	}
 
 	// Verify the API Key exists
 	_, err := userDB.Queries().GetAPIKeyByID(r.Context(), keyID)
 	if err != nil {
-		http.Redirect(w, r, "/api-keys?error=API+key+not+found", http.StatusFound)
+		http.Redirect(w, r, "/settings/api-keys?error=API+key+not+found", http.StatusFound)
 		return
 	}
 
 	// Delete the API Key
 	if err := userDB.Queries().DeleteAPIKey(r.Context(), keyID); err != nil {
-		http.Redirect(w, r, "/api-keys?error=Failed+to+revoke+API+key", http.StatusFound)
+		http.Redirect(w, r, "/settings/api-keys?error=Failed+to+revoke+API+key", http.StatusFound)
 		return
 	}
 
-	http.Redirect(w, r, "/api-keys", http.StatusFound)
+	http.Redirect(w, r, "/settings/api-keys", http.StatusFound)
 }

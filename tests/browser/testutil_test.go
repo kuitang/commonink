@@ -5,12 +5,16 @@ package browser
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,15 +23,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gin-contrib/sse"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/playwright-community/playwright-go"
 
+	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
+	"github.com/kuitang/agent-notes/internal/mcp"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
@@ -78,6 +85,7 @@ type BrowserTestEnv struct {
 	PublicNotes    *notes.PublicNoteService
 	ShortURLSvc    *shorturl.Service
 	LocalMockOIDC  *auth.LocalMockOIDCProvider
+	SpriteToken    string
 	TempDir        string
 
 	pw        *playwright.Playwright
@@ -179,6 +187,9 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	userService := auth.NewUserService(sessionsDB, keyManager, emailService, server.URL, auth.FakeInsecureHasher{})
 	publicNotes = publicNotes.WithShortURLService(shortURLSvc, server.URL)
 
+	// Sprite token for MCP/apps
+	spriteToken := os.Getenv("SPRITE_TOKEN")
+
 	// Local mock OIDC
 	localMockOIDC := auth.NewLocalMockOIDCProvider(server.URL)
 
@@ -194,6 +205,7 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 		shortURLSvc,
 		billing.NewMockService(),
 		server.URL,
+		spriteToken,
 	)
 
 	// Health check
@@ -228,6 +240,27 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesPutHandler))))
 	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesDeleteHandler))))
 
+	// MCP handler (authenticated, all tools)
+	mcpHandler := &authenticatedMCPHandler{
+		Toolset:     mcp.ToolsetAll,
+		SpriteToken: spriteToken,
+	}
+	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
+
+	// Apps management API routes (authenticated)
+	appsHandler := &authenticatedAppsHandler{
+		SpriteToken: spriteToken,
+		Renderer:    renderer,
+	}
+	mux.Handle("GET /api/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListApps))))
+	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
+	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
+	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
+	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
+	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	mux.Handle("GET /api/apps/{name}/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamApp))))
+	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
+
 	env := &BrowserTestEnv{
 		Server:         server,
 		BaseURL:        server.URL,
@@ -244,6 +277,7 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 		PublicNotes:    publicNotes,
 		ShortURLSvc:    shortURLSvc,
 		LocalMockOIDC:  localMockOIDC,
+		SpriteToken:    spriteToken,
 		TempDir:        tempDir,
 		fakeS3Server:   fakeS3Server,
 	}
@@ -730,4 +764,429 @@ func PublishNoteViaUI(t *testing.T, page playwright.Page) string {
 		t.Fatal("share URL is empty after publishing")
 	}
 	return shareURL
+}
+
+// =============================================================================
+// Authenticated MCP handler (local copy for browser test env)
+// =============================================================================
+
+// authenticatedMCPHandler wraps MCP with auth context for the browser test env.
+type authenticatedMCPHandler struct {
+	Toolset     mcp.Toolset
+	SpriteToken string
+}
+
+func (h *authenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	userID := auth.GetUserID(r.Context())
+
+	var notesSvc *notes.Service
+	if h.Toolset != mcp.ToolsetApps {
+		storageLimit := notes.FreeStorageLimitBytes
+		account, err := userDB.Queries().GetAccount(r.Context(), userID)
+		if err == nil && account.SubscriptionStatus.Valid {
+			storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
+		}
+		notesSvc = notes.NewService(userDB, storageLimit)
+		_ = notesSvc.Purge(30 * 24 * time.Hour)
+	}
+
+	var appsSvc *apps.Service
+	if h.Toolset != mcp.ToolsetNotes {
+		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
+	}
+
+	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
+	mcpServer.ServeHTTP(w, r)
+}
+
+// =============================================================================
+// Authenticated apps handler (local copy for browser test env)
+// =============================================================================
+
+// authenticatedAppsHandler wraps apps management API operations with auth context.
+type authenticatedAppsHandler struct {
+	SpriteToken string
+	Renderer    *web.Renderer
+}
+
+func (h *authenticatedAppsHandler) getService(r *http.Request) (*apps.Service, error) {
+	userDB := auth.GetUserDB(r.Context())
+	if userDB == nil {
+		return nil, fmt.Errorf("no user database in context")
+	}
+	userID := auth.GetUserID(r.Context())
+	return apps.NewService(userDB, userID, h.SpriteToken), nil
+}
+
+func hashTestJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func writeTestSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, payload any) bool {
+	if err := sse.Encode(w, sse.Event{
+		Event: event,
+		Data:  payload,
+	}); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func testFirstServiceName(servicesOutput string) string {
+	output := strings.TrimSpace(servicesOutput)
+	if output == "" {
+		return ""
+	}
+
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &list); err == nil {
+		for _, item := range list {
+			name := strings.TrimSpace(item.Name)
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	var item struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &item); err == nil {
+		name := strings.TrimSpace(item.Name)
+		if name != "" {
+			return name
+		}
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.Contains(strings.ToLower(trimmed), "no services") {
+			continue
+		}
+		if idx := strings.Index(trimmed, "[name:"); idx >= 0 {
+			rest := trimmed[idx+len("[name:"):]
+			if end := strings.Index(rest, "]"); end > 0 {
+				name := strings.TrimSpace(rest[:end])
+				if name != "" {
+					return name
+				}
+			}
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 {
+			token := strings.TrimSpace(fields[0])
+			token = strings.TrimPrefix(token, "[name:")
+			token = strings.TrimSuffix(token, "]")
+			if token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func testLogStreamPayload(result *apps.AppLogsResult, err error) map[string]any {
+	if err != nil {
+		return map[string]any{
+			"error": err.Error(),
+		}
+	}
+	if result == nil {
+		return map[string]any{
+			"output":    "",
+			"stderr":    "",
+			"exit_code": 0,
+		}
+	}
+	return map[string]any{
+		"output":    result.Output,
+		"stderr":    result.Stderr,
+		"exit_code": result.ExitCode,
+	}
+}
+
+func (h *authenticatedAppsHandler) renderFilesHTML(files []apps.AppFileEntry, filesErr string) (string, error) {
+	if h.Renderer == nil {
+		return "", fmt.Errorf("renderer is not configured")
+	}
+	rec := httptest.NewRecorder()
+	if err := h.Renderer.RenderPartial(
+		rec,
+		"apps/detail.html",
+		"app-files-list",
+		map[string]any{
+			"Files":    files,
+			"FilesErr": filesErr,
+		},
+	); err != nil {
+		return "", err
+	}
+	return rec.Body.String(), nil
+}
+
+func (h *authenticatedAppsHandler) ListApps(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	items, err := svc.List(r.Context())
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, map[string]any{"apps": items})
+}
+
+func (h *authenticatedAppsHandler) GetApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	item, err := svc.Get(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, item)
+}
+
+func (h *authenticatedAppsHandler) DeleteApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	result, err := svc.Delete(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	result, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) GetFile(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	filePath := r.PathValue("path")
+	result, err := svc.ReadFile(r.Context(), name, filePath)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	result, err := svc.TailLogs(r.Context(), name, 100)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func (h *authenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "App name is required"})
+		return
+	}
+
+	lines := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lines parameter"})
+			return
+		}
+		lines = parsed
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Streaming not supported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	initialFiles, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	initialLogs, err := svc.TailLogs(r.Context(), name, lines)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	filesHTML, err := h.renderFilesHTML(initialFiles.Files, "")
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to render file list stream"})
+		return
+	}
+	fileHash := hashTestJSON(map[string]string{"html": filesHTML})
+
+	initialLogPayload := testLogStreamPayload(initialLogs, nil)
+	logHash := hashTestJSON(initialLogPayload)
+
+	if !writeTestSSEEvent(w, flusher, "file", map[string]any{"html": filesHTML}) {
+		return
+	}
+	if !writeTestSSEEvent(w, flusher, "log", initialLogPayload) {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			sentEvent := false
+
+			nextFiles, nextFilesErr := svc.ListFiles(r.Context(), name)
+			nextFilesList := []apps.AppFileEntry{}
+			nextFilesErrText := ""
+			if nextFilesErr != nil {
+				nextFilesErrText = nextFilesErr.Error()
+			} else {
+				nextFilesList = nextFiles.Files
+			}
+			nextFilesHTML, renderErr := h.renderFilesHTML(nextFilesList, nextFilesErrText)
+			if renderErr != nil {
+				return
+			}
+			nextFileHash := hashTestJSON(map[string]string{"html": nextFilesHTML})
+			if nextFileHash != fileHash {
+				fileHash = nextFileHash
+				if !writeTestSSEEvent(w, flusher, "file", map[string]any{"html": nextFilesHTML}) {
+					return
+				}
+				sentEvent = true
+			}
+
+			nextLogPayload := testLogStreamPayload(svc.TailLogs(r.Context(), name, lines))
+			nextLogHash := hashTestJSON(nextLogPayload)
+			if nextLogHash != logHash {
+				logHash = nextLogHash
+				if !writeTestSSEEvent(w, flusher, "log", nextLogPayload) {
+					return
+				}
+				sentEvent = true
+			}
+
+			if sentEvent {
+				continue
+			}
+			if !writeTestSSEEvent(w, flusher, "ping", map[string]any{
+				"ts": time.Now().UTC().Format(time.RFC3339Nano),
+			}) {
+				return
+			}
+		}
+	}
+}
+
+func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+	name := r.PathValue("name")
+	action := r.PathValue("action")
+
+	// Discover service name
+	listResult, err := svc.RunBash(r.Context(), name, "sprite-env services list", 30)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	svcName := testFirstServiceName(listResult.Stdout)
+	if svcName == "" {
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "No service registered"})
+		return
+	}
+
+	var cmd string
+	switch action {
+	case "start":
+		cmd = fmt.Sprintf("sprite-env services start %q", svcName)
+	case "stop":
+		cmd = fmt.Sprintf("sprite-env services stop %q", svcName)
+	case "restart":
+		cmd = fmt.Sprintf("sprite-env services stop %q && sprite-env services start %q", svcName, svcName)
+	default:
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid action"})
+		return
+	}
+
+	result, err := svc.RunBash(r.Context(), name, cmd, 30)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeTestJSON(w, http.StatusOK, result)
+}
+
+func writeTestJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
 }

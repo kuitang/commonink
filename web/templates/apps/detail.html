@@ -1,0 +1,278 @@
+{{define "app-files-list"}}
+{{if .FilesErr}}
+<p class="text-xs text-error-500">{{.FilesErr}}</p>
+{{else if .Files}}
+{{range .Files}}
+{{if eq .Kind "file"}}
+<button data-path="{{.Path}}" class="file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate">
+    <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+    {{.Path}}
+</button>
+{{else}}
+<div class="block w-full px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400 truncate">
+    <svg class="w-3.5 h-3.5 inline mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7l1.664-1.664A2 2 0 016.078 5H10l2 2h5.922a2 2 0 011.414.586L21 9M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9M3 7h18"/></svg>
+    {{.Path}}/
+</div>
+{{end}}
+{{end}}
+{{else}}
+<p class="text-xs text-gray-400">No files found</p>
+{{end}}
+{{end}}
+
+{{define "content"}}
+<div class="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1 flex flex-col w-full">
+        <div class="flex items-center gap-4 mb-6 flex-shrink-0">
+            <a href="/notes" class="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                </svg>
+            </a>
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+                <svg class="w-6 h-6 flex-shrink-0 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white truncate">{{.App.Name}}</h1>
+                <span id="status-badge" class="flex-shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{if eq .App.Status "running"}}bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200{{else if eq .App.Status "stopped"}}bg-error-100 text-error-800 dark:bg-error-900 dark:text-error-200{{else}}bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300{{end}}">{{.App.Status}}</span>
+            </div>
+            {{if .App.PublicURL}}<a href="{{.App.PublicURL}}" target="_blank" rel="noopener noreferrer" class="themed-btn-secondary px-3 py-1.5 text-sm inline-flex items-center gap-1">Open &#8599;</a>{{end}}
+        </div>
+        <div id="stream-inline-flash" class="hidden rounded-card p-3 border mb-4 text-sm" role="status"></div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 flex-1 min-h-0">
+            <div class="themed-card p-4 lg:col-span-1 overflow-y-auto" style="max-height: 70vh;">
+                <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Files</h3>
+                <div id="file-list" class="space-y-1">
+                    {{template "app-files-list" .}}
+                </div>
+            </div>
+
+            <div class="lg:col-span-3 flex flex-col gap-6 min-h-0">
+                <div class="themed-card p-4 flex-1 flex flex-col min-h-0">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 id="editor-filename" class="text-sm font-semibold text-gray-700 dark:text-gray-300">Select a file</h3>
+                    </div>
+                    <textarea id="editor-content" readonly class="flex-1 w-full font-mono text-sm bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-input p-3 resize-none focus:outline-none" style="min-height: 200px;" placeholder="Select a file from the sidebar to view its contents."></textarea>
+                </div>
+
+                <div class="themed-card p-4">
+                    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Actions</h3>
+                    <div class="flex gap-3 flex-wrap">
+                        <button id="btn-start" onclick="doAction('start')" class="themed-btn-primary px-4 py-2 text-sm">Start</button>
+                        <button id="btn-restart" onclick="doAction('restart')" class="themed-btn-secondary px-4 py-2 text-sm">Restart</button>
+                        <button id="btn-stop" onclick="doAction('stop')" class="px-4 py-2 text-sm rounded-input border border-error-300 dark:border-error-700 text-error-700 dark:text-error-300 hover:bg-error-50 dark:hover:bg-error-900/50 transition-colors">Stop</button>
+                    </div>
+                    <div id="action-result" class="mt-3 hidden"><pre class="text-xs bg-gray-50 dark:bg-gray-900 p-2 rounded-input overflow-x-auto max-h-32 overflow-y-auto"></pre></div>
+                </div>
+
+                <div class="themed-card p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">Logs</h3>
+                        <label class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+                            <input type="checkbox" id="auto-refresh" class="rounded border-gray-300 dark:border-gray-600" checked>
+                            Live tail
+                        </label>
+                    </div>
+                    <pre id="log-output" class="text-xs bg-gray-50 dark:bg-gray-900 p-3 rounded-input overflow-x-auto max-h-64 overflow-y-auto text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700">Waiting for live logs...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    var appName = "{{.App.Name}}";
+    var streamSource = null;
+    var streamQuery = "lines=100";
+    var streamRetryTimer = null;
+    var streamConnected = false;
+
+    function clearStreamFlash() {
+        var flash = document.getElementById('stream-inline-flash');
+        if (!flash) return;
+        flash.className = 'hidden rounded-card p-3 border mb-4 text-sm';
+        flash.textContent = '';
+    }
+
+    function showStreamFlash(message, tone) {
+        var flash = document.getElementById('stream-inline-flash');
+        if (!flash) return;
+        var cls = 'rounded-card p-3 border mb-4 text-sm';
+        if (tone === 'warning') {
+            cls += ' bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800 text-warning-800 dark:text-warning-200';
+        } else {
+            cls += ' bg-error-50 dark:bg-error-900/20 border-error-200 dark:border-error-800 text-error-800 dark:text-error-200';
+        }
+        if (flash.className === cls && flash.textContent === message) return;
+        flash.className = cls;
+        flash.textContent = message;
+    }
+
+    function probeStreamStartError() {
+        return fetch('/api/apps/' + encodeURIComponent(appName) + '/stream?' + streamQuery, {credentials: 'same-origin'})
+            .then(function(r) {
+                if (r.ok) return '';
+                return r.text().then(function(raw) {
+                    if (!raw) return 'HTTP ' + r.status;
+                    try {
+                        var payload = JSON.parse(raw);
+                        if (payload && payload.error) return payload.error;
+                    } catch (_err) {}
+                    return raw;
+                });
+            })
+            .catch(function(err) {
+                return (err && err.message) ? err.message : 'Network error while probing stream endpoint';
+            });
+    }
+
+    function bindFileButtons() {
+        document.querySelectorAll('.file-btn').forEach(function(btn) {
+            btn.onclick = function() { loadFile(this.getAttribute('data-path'), this); };
+        });
+    }
+
+    function setLogOutput(text) {
+        var el = document.getElementById('log-output');
+        el.textContent = text || 'No logs available';
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function setFileListHTML(html) {
+        var list = document.getElementById('file-list');
+        if (!list) return;
+        list.innerHTML = html || '<p class="text-xs text-gray-400">No files found</p>';
+        bindFileButtons();
+    }
+
+    function loadFile(path, btn) {
+        document.getElementById('editor-filename').textContent = path;
+        document.getElementById('editor-content').value = 'Loading...';
+        document.querySelectorAll('.file-btn').forEach(function(b) { b.classList.remove('bg-primary-50', 'dark:bg-primary-900/30'); });
+        if (btn) btn.classList.add('bg-primary-50', 'dark:bg-primary-900/30');
+        fetch('/api/apps/' + encodeURIComponent(appName) + '/files/' + encodeURIComponent(path), {credentials: 'same-origin'})
+            .then(function(r) {
+                return r.json().then(function(data) {
+                    if (!r.ok) throw new Error(data.error || 'Failed to load file');
+                    return data;
+                });
+            })
+            .then(function(data) { document.getElementById('editor-content').value = data.content || ''; })
+            .catch(function(e) { document.getElementById('editor-content').value = 'Error: ' + e.message; });
+    }
+
+    function stopStream() {
+        if (streamRetryTimer) {
+            clearTimeout(streamRetryTimer);
+            streamRetryTimer = null;
+        }
+        if (streamSource) {
+            streamSource.close();
+            streamSource = null;
+        }
+    }
+
+    function startStream() {
+        if (!window.EventSource) {
+            setLogOutput('Live logs unavailable in this browser');
+            showStreamFlash('Live updates are not supported in this browser.', 'error');
+            console.error('EventSource is unavailable in this browser');
+            return;
+        }
+        stopStream();
+        streamConnected = false;
+        setLogOutput('Connecting to live logs...');
+        streamSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/stream?' + streamQuery);
+
+        streamSource.addEventListener('file', function(event) {
+            var payload;
+            try { payload = JSON.parse(event.data); } catch (_err) { return; }
+            if (!payload || typeof payload.html !== 'string') return;
+            if (!streamConnected) {
+                streamConnected = true;
+                clearStreamFlash();
+            }
+            setFileListHTML(payload.html);
+        });
+
+        streamSource.addEventListener('log', function(event) {
+            var payload;
+            try { payload = JSON.parse(event.data); } catch (_err) { return; }
+            if (!payload) return;
+            if (payload.error) {
+                setLogOutput('Error: ' + payload.error);
+                return;
+            }
+            if (!streamConnected) {
+                streamConnected = true;
+                clearStreamFlash();
+            }
+            var output = '';
+            if (payload.output) output += payload.output;
+            if (payload.stderr) output += (output ? '\n' : '') + payload.stderr;
+            setLogOutput(output || 'No logs available');
+        });
+
+        streamSource.addEventListener('ping', function(_event) {});
+
+        streamSource.onerror = function() {
+            streamConnected = false;
+            stopStream();
+            setLogOutput('Live logs disconnected. Retrying...');
+            probeStreamStartError().then(function(errText) {
+                if (errText) {
+                    console.error('App stream startup failed:', errText);
+                    showStreamFlash('Live updates unavailable: ' + errText, 'error');
+                    setLogOutput('Live logs unavailable. Retrying in 3s. See browser console for exact error.');
+                    return;
+                }
+                console.warn('App stream disconnected without HTTP error payload');
+                showStreamFlash('Live updates disconnected. Retrying...', 'warning');
+            });
+            if (document.getElementById('auto-refresh').checked) {
+                streamRetryTimer = setTimeout(startStream, 3000);
+            }
+        };
+    }
+
+    window.doAction = function(action) {
+        var resultDiv = document.getElementById('action-result');
+        var pre = resultDiv.querySelector('pre');
+        resultDiv.classList.remove('hidden');
+        pre.textContent = 'Running ' + action + '...';
+        fetch('/api/apps/' + encodeURIComponent(appName) + '/' + action, {method: 'POST', credentials: 'same-origin'})
+            .then(function(r) {
+                return r.json().then(function(data) { return {ok: r.ok, data: data}; });
+            })
+            .then(function(result) {
+                var data = result.data || {};
+                var output = '';
+                if (data.stdout) output += data.stdout;
+                if (data.stderr) output += (output ? '\n' : '') + data.stderr;
+                if (data.error) output = 'Error: ' + data.error;
+                if (!result.ok && !output) output = 'Error: Action request failed';
+                pre.textContent = output || (action + ' completed');
+            })
+            .catch(function(e) { pre.textContent = 'Error: ' + e.message; });
+    };
+
+    bindFileButtons();
+    if (document.getElementById('auto-refresh').checked) {
+        startStream();
+    }
+    document.getElementById('auto-refresh').addEventListener('change', function() {
+        if (this.checked) {
+            startStream();
+        } else {
+            stopStream();
+            clearStreamFlash();
+            setLogOutput('Live logs paused');
+        }
+    });
+
+    window.addEventListener('beforeunload', stopStream);
+})();
+</script>
+{{end}}

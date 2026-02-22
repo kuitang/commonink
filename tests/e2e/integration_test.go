@@ -533,7 +533,7 @@ func (h *integrationMCPHandler) getOrCreateMCPServer(userID string) (*mcp.Server
 
 	// Create notes service and MCP server
 	notesSvc := notes.NewService(userDB, notes.FreeStorageLimitBytes)
-	mcpServer := mcp.NewServer(notesSvc)
+	mcpServer := mcp.NewServer(notesSvc, nil, mcp.ToolsetNotes)
 	h.mcpServers[userID] = mcpServer
 
 	return mcpServer, nil

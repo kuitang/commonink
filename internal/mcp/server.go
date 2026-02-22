@@ -1,10 +1,15 @@
 package mcp
 
 import (
+	"bytes"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -16,9 +21,80 @@ type Server struct {
 	httpHandler http.Handler
 }
 
-// NewServer creates a new MCP server for notes
-func NewServer(notesSvc *notes.Service) *Server {
-	handler := NewHandler(notesSvc)
+const (
+	mcpDebugBodyLogLimitBytes = 8 * 1024
+)
+
+type mcpResponseLogger struct {
+	http.ResponseWriter
+	statusCode int
+	body       []byte
+	truncated  bool
+}
+
+func newMCPResponseLogger(w http.ResponseWriter) *mcpResponseLogger {
+	return &mcpResponseLogger{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK,
+		body:           make([]byte, 0, mcpDebugBodyLogLimitBytes),
+	}
+}
+
+func (w *mcpResponseLogger) WriteHeader(code int) {
+	w.statusCode = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *mcpResponseLogger) Write(p []byte) (int, error) {
+	if len(w.body) < mcpDebugBodyLogLimitBytes {
+		remaining := mcpDebugBodyLogLimitBytes - len(w.body)
+		if len(p) <= remaining {
+			w.body = append(w.body, p...)
+		} else {
+			w.body = append(w.body, p[:remaining]...)
+			w.truncated = true
+		}
+	} else {
+		w.truncated = true
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *mcpResponseLogger) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func mcpDebugEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("DEBUG")))
+	switch v {
+	case "1", "true", "yes", "on", "debug":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatBodyForLog(b []byte, truncated bool) string {
+	if len(b) == 0 {
+		return ""
+	}
+	textBytes := b
+	if len(textBytes) > mcpDebugBodyLogLimitBytes {
+		textBytes = textBytes[:mcpDebugBodyLogLimitBytes]
+		truncated = true
+	}
+	text := string(textBytes)
+	if truncated {
+		return text + " [truncated]"
+	}
+	return text
+}
+
+// NewServer creates a new MCP server for the selected toolset.
+func NewServer(notesSvc *notes.Service, appsSvc *apps.Service, toolset Toolset) *Server {
+	handler := NewHandler(notesSvc, appsSvc)
 
 	// Create MCP server with metadata
 	mcpServer := mcp.NewServer(
@@ -29,12 +105,13 @@ func NewServer(notesSvc *notes.Service) *Server {
 		nil, // Use default options
 	)
 
-	// Register all tools
-	tools := ToolDefinitions()
+	// Register requested toolset
+	tools := ToolDefinitions(toolset)
 	for _, tool := range tools {
 		toolCopy := tool // avoid closure issues
 		mcp.AddTool(mcpServer, toolCopy, handler.createToolHandler(toolCopy.Name))
 	}
+	registerPrompts(mcpServer, toolset)
 
 	// Create Streamable HTTP handler (MCP Spec 2025-03-26)
 	// This creates a single endpoint that handles both POST and GET requests
@@ -88,7 +165,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("MCP: %s request from %s", r.Method, r.RemoteAddr)
+	debug := mcpDebugEnabled()
+
+	var reqBody []byte
+	var reqBodyReadErr error
+	if debug && r.Body != nil && r.Method == http.MethodPost {
+		reqBody, reqBodyReadErr = io.ReadAll(r.Body)
+		if reqBodyReadErr == nil {
+			r.Body = io.NopCloser(bytes.NewReader(reqBody))
+		}
+	}
+
+	reqLogPrefix := "MCP:"
+	if debug {
+		reqLogPrefix = "MCP[debug]:"
+	}
+	log.Printf("%s %s %s from %s (ua=%q content_type=%q accept=%q mcp_session_id=%q)", reqLogPrefix, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent(), r.Header.Get("Content-Type"), r.Header.Get("Accept"), r.Header.Get("Mcp-Session-Id"))
+	if reqBodyReadErr != nil {
+		log.Printf("[ERROR] MCP request body read failed: method=%s path=%s err=%v", r.Method, r.URL.Path, reqBodyReadErr)
+	}
+	if debug && len(reqBody) > 0 {
+		log.Printf("MCP[debug]: request body: %s", formatBodyForLog(reqBody, false))
+	}
 
 	// Delegate to the SDK's Streamable HTTP handler
 	// The handler manages:
@@ -96,7 +194,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// - GET: Server-initiated messages (SSE stream)
 	// - Session management (Mcp-Session-Id header)
 	// - Stream resumption (Last-Event-ID header)
-	s.httpHandler.ServeHTTP(w, r)
+	respLogger := newMCPResponseLogger(w)
+	s.httpHandler.ServeHTTP(respLogger, r)
+
+	if debug {
+		log.Printf("MCP[debug]: response status=%d method=%s path=%s content_type=%q", respLogger.statusCode, r.Method, r.URL.Path, respLogger.Header().Get("Content-Type"))
+		if len(respLogger.body) > 0 {
+			log.Printf("MCP[debug]: response body: %s", formatBodyForLog(respLogger.body, respLogger.truncated))
+		}
+	}
+
+	if respLogger.statusCode >= http.StatusBadRequest {
+		responseBody := formatBodyForLog(respLogger.body, respLogger.truncated)
+		if responseBody != "" {
+			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s response=%q", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr, responseBody)
+		} else {
+			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr)
+		}
+	}
 }
 
 // Start is a helper to run the MCP server standalone (for testing)

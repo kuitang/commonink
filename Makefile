@@ -30,11 +30,12 @@ export LISTEN_ADDR := :8080
 export MASTER_KEY := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export OAUTH_HMAC_SECRET := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export OAUTH_SIGNING_KEY := cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+export SPRITE_TOKEN ?= $(or $(shell ./scripts/resolve-sprite-token.sh 2>/dev/null),test-ci-no-flyctl)
 
 # Optional regex for go test -skip (CI-friendly filtering)
 TEST_SKIP_PATTERNS ?=
 BROWSER_TEST_SKIP_PATTERNS ?=
-CI_BROWSER_SKIP_PATTERNS ?= TestBrowser_NotesCRUD_Pagination|TestScreenshot_AllThemes
+CI_BROWSER_SKIP_PATTERNS ?= TestBrowser_NotesCRUD_Pagination|TestScreenshot_AllThemes|TestBrowser_AppDetail_FileSidebar|TestBrowser_AppDetail_VisitAndPost|TestBrowser_AppDetail_LogsShowPost
 CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
 GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
@@ -43,7 +44,7 @@ RAPID_CHECKS_FULL ?= 100
 RAPID_CHECKS_CONFORMANCE ?= 3
 GO_TEST_FULL_TIMEOUT ?= 30m
 
-.PHONY: all build run run-test run-email test test-browser test-all ci test-full test-fuzz test-db fmt vet gosec mod-tidy clean deploy help
+.PHONY: all build run run-test run-email test test-browser test-all ci test-conformance test-full test-fuzz test-db fmt vet gosec mod-tidy clean deploy help
 
 all: test build
 
@@ -88,19 +89,128 @@ ci:
 	$(MAKE) test
 	$(MAKE) test-browser BROWSER_TEST_SKIP_PATTERNS='$(CI_BROWSER_SKIP_PATTERNS)'
 
-## test-full: Full tests with coverage artifacts (strict prerequisites, no fallbacks)
-test-full:
-	@: "$${OPENAI_API_KEY:?ERROR: OPENAI_API_KEY required. Run: source secrets.sh}"
-	@: "$${NGROK_AUTHTOKEN:?ERROR: NGROK_AUTHTOKEN required}"
+## test-conformance: Run only conformance packages (OpenAI/Claude)
+test-conformance:
 	@command -v claude >/dev/null 2>&1 || { echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; }
 	@command -v ngrok >/dev/null 2>&1 || { echo "ERROR: ngrok CLI not found"; exit 1; }
 	@mkdir -p test-results
 	@set -euo pipefail; \
-	test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	if [ -f secrets.sh ]; then \
+		source secrets.sh; \
+	fi; \
+	: "$${OPENAI_API_KEY:?ERROR: OPENAI_API_KEY required. Run: source secrets.sh}"; \
+	flyctl_bin=""; \
+	if command -v flyctl >/dev/null 2>&1; then \
+		flyctl_bin="$$(command -v flyctl)"; \
+	elif [ -x "$$HOME/.fly/bin/flyctl" ]; then \
+		flyctl_bin="$$HOME/.fly/bin/flyctl"; \
+	else \
+		echo "ERROR: flyctl CLI required for conformance tests"; \
+		exit 1; \
+	fi; \
+	if [ -z "$${SPRITE_TOKEN:-}" ]; then \
+		SPRITE_TOKEN="$$(./scripts/resolve-sprite-token.sh)" || { echo "ERROR: resolve-sprite-token.sh failed"; exit 1; }; \
+		export SPRITE_TOKEN; \
+	fi; \
+	echo "Fly apps snapshot (pre-conformance):"; \
+	"$$flyctl_bin" apps list || true; \
+	if [ -n "$${NGROK_AUTHTOKEN:-}" ]; then \
+		ngrok config add-authtoken "$$NGROK_AUTHTOKEN"; \
+	elif [ ! -f "$$HOME/.config/ngrok/ngrok.yml" ] || ! rg -q '^\s*authtoken\s*:' "$$HOME/.config/ngrok/ngrok.yml"; then \
+		echo "ERROR: NGROK_AUTHTOKEN is not set and ngrok has no configured authtoken."; \
+		echo "Run: export NGROK_AUTHTOKEN=\"<your ngrok token>\" && ngrok config add-authtoken \"$$NGROK_AUTHTOKEN\""; \
+		exit 1; \
+	fi; \
+	openai_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	if [ "$$claude_test_port" = "$$openai_test_port" ]; then \
+		claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	fi; \
 	ngrok_log="$$(mktemp -t ngrok-log-XXXXXX)"; \
 	tunnels_json="$$(mktemp -t ngrok-tunnels-XXXXXX)"; \
-	ngrok config add-authtoken "$$NGROK_AUTHTOKEN"; \
-	ngrok http "$$test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
+	ngrok http "$$openai_test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
+	ngrok_pid="$$!"; \
+	cleanup() { \
+		kill "$$ngrok_pid" >/dev/null 2>&1 || true; \
+		rm -f "$$ngrok_log" "$$tunnels_json"; \
+	}; \
+	trap cleanup EXIT; \
+	public_url=""; \
+	for _ in $$(seq 1 40); do \
+		if curl -fsS http://127.0.0.1:4040/api/tunnels >"$$tunnels_json" 2>/dev/null; then \
+			public_url="$$(python3 -c "import json,sys; data=json.load(open(sys.argv[1])); print(next((t.get('public_url','') for t in data.get('tunnels',[]) if t.get('proto')=='https'), ''))" "$$tunnels_json")"; \
+			if [ -n "$$public_url" ]; then \
+				break; \
+			fi; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	if [ -z "$$public_url" ]; then \
+		echo "ERROR: failed to discover ngrok public URL"; \
+		exit 1; \
+	fi; \
+	echo "ngrok tunnel URL: $$public_url"; \
+	echo "Conformance server ports: claude=$$claude_test_port openai=$$openai_test_port"; \
+	echo "Running conformance packages in parallel with isolated env"; \
+	set +e; \
+	TEST_LISTEN_PORT="$$claude_test_port" TEST_SERVER_LABEL="claude" env -u TEST_PUBLIC_URL \
+		go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+		./tests/e2e/claude -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
+	claude_pid="$$!"; \
+	TEST_PUBLIC_URL="$$public_url" TEST_LISTEN_PORT="$$openai_test_port" TEST_SERVER_LABEL="openai" \
+		go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+		./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
+	openai_pid="$$!"; \
+	wait "$$claude_pid"; claude_rc="$$?"; \
+	wait "$$openai_pid"; openai_rc="$$?"; \
+	set -e; \
+	if [ "$$claude_rc" -ne 0 ] || [ "$$openai_rc" -ne 0 ]; then \
+		echo "ERROR: conformance failures (claude=$$claude_rc, openai=$$openai_rc)"; \
+		exit 1; \
+	fi; \
+	echo "Fly apps snapshot (post-conformance):"; \
+	"$$flyctl_bin" apps list || true
+
+## test-full: Full tests with coverage artifacts
+test-full:
+	@command -v claude >/dev/null 2>&1 || { echo "ERROR: claude CLI required for Claude conformance tests. Install from https://claude.ai/claude-code"; exit 1; }
+	@command -v ngrok >/dev/null 2>&1 || { echo "ERROR: ngrok CLI not found"; exit 1; }
+	@mkdir -p test-results
+	@set -euo pipefail; \
+	if [ -f secrets.sh ]; then \
+		source secrets.sh; \
+	fi; \
+	: "$${OPENAI_API_KEY:?ERROR: OPENAI_API_KEY required. Run: source secrets.sh}"; \
+	flyctl_bin=""; \
+	if command -v flyctl >/dev/null 2>&1; then \
+		flyctl_bin="$$(command -v flyctl)"; \
+	elif [ -x "$$HOME/.fly/bin/flyctl" ]; then \
+		flyctl_bin="$$HOME/.fly/bin/flyctl"; \
+	else \
+		echo "ERROR: flyctl CLI required for full tests"; \
+		exit 1; \
+	fi; \
+	if [ -z "$${SPRITE_TOKEN:-}" ]; then \
+		SPRITE_TOKEN="$$(./scripts/resolve-sprite-token.sh)" || { echo "ERROR: resolve-sprite-token.sh failed"; exit 1; }; \
+		export SPRITE_TOKEN; \
+	fi; \
+	echo "Fly apps snapshot (pre-full-test):"; \
+	"$$flyctl_bin" apps list || true; \
+	if [ -n "$${NGROK_AUTHTOKEN:-}" ]; then \
+		ngrok config add-authtoken "$$NGROK_AUTHTOKEN"; \
+	elif [ ! -f "$$HOME/.config/ngrok/ngrok.yml" ] || ! rg -q '^\s*authtoken\s*:' "$$HOME/.config/ngrok/ngrok.yml"; then \
+		echo "ERROR: NGROK_AUTHTOKEN is not set and ngrok has no configured authtoken."; \
+		echo "Run: export NGROK_AUTHTOKEN=\"<your ngrok token>\" && ngrok config add-authtoken \"$$NGROK_AUTHTOKEN\""; \
+		exit 1; \
+	fi; \
+	openai_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	if [ "$$claude_test_port" = "$$openai_test_port" ]; then \
+		claude_test_port="$$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"; \
+	fi; \
+	ngrok_log="$$(mktemp -t ngrok-log-XXXXXX)"; \
+	tunnels_json="$$(mktemp -t ngrok-tunnels-XXXXXX)"; \
+	ngrok http "$$openai_test_port" --log stdout --log-format=json >"$$ngrok_log" 2>&1 & \
 	ngrok_pid="$$!"; \
 	cleanup() { \
 		kill "$$ngrok_pid" >/dev/null 2>&1 || true; \
@@ -123,8 +233,8 @@ test-full:
 		exit 1; \
 	fi; \
 	echo "ngrok tunnel URL: $$public_url"; \
+	echo "Conformance server ports: claude=$$claude_test_port openai=$$openai_test_port"; \
 	export TEST_PUBLIC_URL="$$public_url"; \
-	export TEST_LISTEN_PORT="$$test_port"; \
 	run_id="$$(date -u +%Y%m%dT%H%M%S)-$$-$$RANDOM"; \
 	log_path="test-results/full-test-$${run_id}.log"; \
 	coverage_out="test-results/coverage-$${run_id}.out"; \
@@ -139,9 +249,23 @@ test-full:
 			echo "Running browser packages"; \
 			go test -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
 				$$browser_packages; \
-			echo "Running conformance packages with -rapid.checks=$(RAPID_CHECKS_CONFORMANCE)"; \
-			go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
-				./tests/e2e/claude ./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE); \
+				echo "Running conformance packages with -rapid.checks=$(RAPID_CHECKS_CONFORMANCE)"; \
+				set +e; \
+				TEST_LISTEN_PORT="$$claude_test_port" TEST_SERVER_LABEL="claude" env -u TEST_PUBLIC_URL \
+					go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+					./tests/e2e/claude -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
+				claude_pid="$$!"; \
+				TEST_PUBLIC_URL="$$public_url" TEST_LISTEN_PORT="$$openai_test_port" TEST_SERVER_LABEL="openai" \
+					go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+					./tests/e2e/openai -rapid.checks=$(RAPID_CHECKS_CONFORMANCE) & \
+			openai_pid="$$!"; \
+			wait "$$claude_pid"; claude_rc="$$?"; \
+			wait "$$openai_pid"; openai_rc="$$?"; \
+			set -e; \
+			if [ "$$claude_rc" -ne 0 ] || [ "$$openai_rc" -ne 0 ]; then \
+				echo "ERROR: conformance failures (claude=$$claude_rc, openai=$$openai_rc)"; \
+				exit 1; \
+			fi; \
 	} 2>&1 | tee "$$log_path"; \
 	go tool cover -html="$$coverage_out" -o "$$coverage_html"; \
 	go tool cover -func="$$coverage_out"; \
@@ -150,7 +274,9 @@ test-full:
 	cp "$$coverage_html" test-results/coverage.html; \
 	ln -sfn "$$(basename "$$log_path")" test-results/full-test.latest.log; \
 	ln -sfn "$$(basename "$$coverage_out")" test-results/coverage.latest.out; \
-	ln -sfn "$$(basename "$$coverage_html")" test-results/coverage.latest.html
+	ln -sfn "$$(basename "$$coverage_html")" test-results/coverage.latest.html; \
+	echo "Fly apps snapshot (post-full-test):"; \
+	"$$flyctl_bin" apps list || true
 
 ## test-fuzz: Fuzz testing (30+ min, coverage-guided)
 test-fuzz:

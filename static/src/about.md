@@ -1,55 +1,39 @@
 # About common.ink
 
-**Secure notes for AI agents and humans.**
+**Ink makes your AI real.**
 
 ## What is common.ink?
-
-common.ink is a note-taking service designed from the ground up to work seamlessly with AI agents while maintaining strong security and privacy guarantees for human users.
+common.ink is the persistent layer for AI tools. It gives assistants memory that lasts and infrastructure that runs, while keeping user data isolated and encrypted.
 
 ## Key Features
 
-### End-to-End Encryption
-Every user gets their own isolated SQLCipher database with AES-256-GCM encryption. Your notes are encrypted at rest and protected by envelope encryption with rotating keys.
+### Persistent Memory
+Store notes once and retrieve them from any connected client. Save meeting summaries, research, specs, and checklists so your assistants can reuse context instead of starting over.
 
-### MCP Integration
-Native support for the [Model Context Protocol](https://modelcontextprotocol.io) allows AI assistants like Claude to securely read, write, and manage your notes with your explicit permission.
+### Live App Deployment
+Move from prompt to running URL. common.ink provides managed runtime infrastructure so AI-generated apps can be deployed and served.
 
-### OAuth 2.1 Provider
-Full OAuth 2.1 compliance with Dynamic Client Registration (DCR) means any compatible AI agent or application can integrate with common.ink securely.
+### MCP + HTTP Connectivity
+Works with ChatGPT, Claude, Claude Code, Cursor, VS Code, and custom clients through MCP and HTTP interfaces.
 
-### Public Note Sharing
-Share individual notes publicly via unique URLs while keeping the rest of your notes private.
-
-### Full-Text Search
-Powered by SQLite FTS5, search across all your notes instantly.
+### Security by Default
+Each user gets isolated encrypted storage with strict account boundaries.
 
 ## For Developers
 
 common.ink provides:
-- **REST API** for programmatic note management
-- **MCP Endpoint** for AI agent integration
-- **Personal Access Tokens** for CLI and automation
-- **OAuth 2.1** for third-party app integration
+- REST API for note and account operations
+- MCP endpoint for agent integrations
+- API keys and OAuth 2.1 for authenticated access
 
-See our [API Documentation](/docs/api) for details.
+See [API Documentation](/docs/api) for details.
 
-## Architecture
+## Positioning
 
-- **Go 1.25** backend with standard library HTTP server
-- **SQLCipher** for encrypted per-user databases
-- **Tailwind CSS** for responsive UI
-- **Tigris** S3-compatible storage for public notes
-- **Fly.io** for global edge deployment
-
-## Open Source
-
-common.ink is built with open-source technologies and follows security best practices:
-- No tracking pixels or third-party analytics
-- Minimal JavaScript (no frameworks)
-- WCAG 2.1 accessible design
+common.ink is not a replacement chat app or code host UI. It is the durability and execution layer behind the tools you already use.
 
 ## Contact
 
-- **Support:** support@common.ink
-- **Security:** security@common.ink
-- **General:** hello@common.ink
+- Support: support@common.ink
+- Security: security@common.ink
+- General: hello@common.ink

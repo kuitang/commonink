@@ -184,6 +184,17 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_token_hash ON api_keys(token_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);
+
+-- Apps table: user app metadata mapped to Fly Sprites
+CREATE TABLE IF NOT EXISTS apps (
+    name TEXT PRIMARY KEY,
+    sprite_name TEXT NOT NULL,
+    public_url TEXT,
+    status TEXT NOT NULL DEFAULT 'created',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_apps_updated_at ON apps(updated_at DESC);
 `
 
 // UserDBMigrations contains idempotent ALTER TABLE statements for schema evolution.
@@ -196,4 +207,13 @@ ALTER TABLE account ADD COLUMN subscription_id TEXT;
 ALTER TABLE account ADD COLUMN stripe_customer_id TEXT;
 ALTER TABLE account ADD COLUMN db_size_bytes INTEGER DEFAULT 0;
 ALTER TABLE account ADD COLUMN last_login INTEGER;
+CREATE TABLE IF NOT EXISTS apps (
+    name TEXT PRIMARY KEY,
+    sprite_name TEXT NOT NULL,
+    public_url TEXT,
+    status TEXT NOT NULL DEFAULT 'created',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_apps_updated_at ON apps(updated_at DESC);
 `

@@ -34,6 +34,7 @@ var markdownPages = []markdownPage{
 	{"/privacy", "privacy.md", "Privacy Policy"},
 	{"/terms", "tos.md", "Terms of Service"},
 	{"/about", "about.md", "About"},
+	{"/faq", "faq.md", "FAQ"},
 	{"/docs/api", "api-docs.md", "API Documentation"},
 	{"/docs", "api-docs.md", "API Documentation"},
 }
@@ -95,7 +96,7 @@ func (h *StaticHandler) RegisterRoutes(mux *http.ServeMux) {
 // HandleInstallPage serves GET /docs/install — the installation/setup page.
 func (h *StaticHandler) HandleInstallPage(w http.ResponseWriter, r *http.Request) {
 	data := PageData{
-		Title: "Connect Your AI Assistant",
+		Title: "Connect common.ink",
 	}
 	if auth.IsAuthenticated(r.Context()) {
 		data.User = getUserWithEmail(r)

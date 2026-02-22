@@ -136,7 +136,8 @@ Real client integration coverage:
 
 Operational note:
 - `make test` excludes OpenAI/Claude conformance packages by design.
-- `make test-full` includes the OAuth e2e suite in `tests/e2e/oauth_auth_test.go` and excludes only OpenAI-specific package tests.
+- `make test-full` includes OpenAI and Claude conformance suites and hard-requires `SPRITE_TOKEN` for app deployment conformance.
+- Recommended token setup: `export SPRITE_TOKEN="$(flyctl auth token)"`.
 
 ### OAuth Smoke Script
 - `scripts/oauth-conformance-test.sh` performs endpoint-level OAuth sanity checks and writes a local report under `test-results/oauth-conformance`.
@@ -170,7 +171,11 @@ Operational note:
 
 ### Transport
 - Internal MCP server is configured with Streamable HTTP handler (`Stateless: true`, `JSONResponse: true`).
-- Top-level router currently exposes only `POST /mcp`; `GET /mcp` and `DELETE /mcp` return `405` in this deployment mode.
+- Top-level router exposes:
+- `POST /mcp` (all tools)
+- `POST /mcp/notes` (notes toolset)
+- `POST /mcp/apps` (apps toolset)
+- `GET`/`DELETE` on those routes return `405` in this stateless deployment mode.
 
 Code: `internal/mcp/server.go`, `cmd/server/main.go`.
 
@@ -184,11 +189,31 @@ Code: `internal/auth/middleware.go`.
 
 This is required for automatic connector re-auth UX in MCP clients.[1][2][3]
 
+## App Management REST Auth Behavior
+
+The app management REST endpoints use the same auth middleware as notes APIs and therefore support:
+- Session cookie (`session_id`)
+- API key bearer token (`Authorization: Bearer agentnotes_key_...`)
+- OAuth access token bearer (`Authorization: Bearer <JWT>`)
+
+Protected app management routes:
+- `GET /api/apps`
+- `GET /api/apps/{name}`
+- `DELETE /api/apps/{name}`
+- `GET /api/apps/{name}/files`
+- `GET /api/apps/{name}/files/{path...}`
+- `GET /api/apps/{name}/logs`
+
+Operational split:
+- REST is read/manage (`/api/apps*`)
+- Deployment/execution is MCP-only (`app_create`, `app_write`, `app_bash` on `/mcp/apps` or `/mcp`)
+
 ## Known Interop Gaps (Current Runtime)
 - Consent persistence used by runtime OAuth handler is placeholder-backed, so prior consents are not durably reused.
   - `internal/auth/consent.go`
   - Wiring site: `cmd/server/main.go`
 - `/mcp` GET/DELETE are intentionally disabled at the top-level mux, despite internal Streamable HTTP support.
+- `/mcp`, `/mcp/notes`, and `/mcp/apps` GET/DELETE are intentionally disabled at the top-level mux, despite internal Streamable HTTP support.
 - Redirect allowlist is static; platform callback changes require code update and redeploy.
 - Runtime MCP bearer-token path does not enforce explicit `aud`/resource matching, even though strict audience verification code exists in `internal/auth/oauth_middleware.go`.
 

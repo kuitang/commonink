@@ -9,69 +9,34 @@
 package browser
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/playwright-community/playwright-go"
-
-	"github.com/kuitang/agent-notes/internal/auth"
-	"github.com/kuitang/agent-notes/internal/db"
-	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
-// loginAPIKeyUser creates/fetches a provider account, then sets a password hash
-// so API key re-authentication works for provider-first accounts.
-func loginAPIKeyUser(t *testing.T, env *BrowserTestEnv, ctx playwright.BrowserContext, emailAddr, password string) string {
+func navigateAPIKeyHub(t *testing.T, page playwright.Page, baseURL string) {
 	t.Helper()
+	Navigate(t, page, baseURL, "/settings/api-keys")
+	WaitForSelector(t, page, "h1:has-text('API and OAuth Credentials')")
+}
 
-	goCtx := context.Background()
+func navigateAPIKeyCreatePage(t *testing.T, page playwright.Page, baseURL string) {
+	t.Helper()
+	Navigate(t, page, baseURL, "/settings/api-keys/new")
+	WaitForSelector(t, page, "h1:has-text('Create New API Key')")
+}
 
-	// Create/find user
-	user, err := env.UserService.FindOrCreateByProvider(goCtx, emailAddr)
-	if err != nil {
-		t.Fatalf("Failed to create test user: %v", err)
-	}
-
-	// Set password for the user (required for API Key creation re-auth)
-	passwordHash, err := auth.FakeInsecureHasher{}.HashPassword(password)
-	if err != nil {
-		t.Fatalf("Failed to hash password: %v", err)
-	}
-
-	// Open user's database using the same keyManager as auth middleware
-	// This is critical - we must use the same DEK that the auth middleware will use
-	dek, err := env.KeyManager.GetOrCreateUserDEK(user.ID)
-	if err != nil {
-		t.Fatalf("Failed to get user DEK: %v", err)
-	}
-	userDB, err := db.OpenUserDBWithDEK(user.ID, dek)
-	if err != nil {
-		t.Fatalf("Failed to open user DB: %v", err)
-	}
-
-	// FindOrCreateByProvider already creates an account row when absent.
-	// Re-auth requires password_hash, so update that row instead of creating a duplicate.
-	err = userDB.Queries().UpdateAccountPasswordHash(goCtx, userdb.UpdateAccountPasswordHashParams{
-		PasswordHash: sql.NullString{String: passwordHash, Valid: true},
-		UserID:       user.ID,
+func submitCreateAPIKeyForm(t *testing.T, page playwright.Page, name, scope string) {
+	t.Helper()
+	page.Locator("input#name").Fill(name)
+	page.Locator(fmt.Sprintf("input[name='scope'][value='%s']", scope)).Check()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
 	})
-	if err != nil {
-		t.Fatalf("Failed to set account password hash: %v", err)
-	}
-
-	// Create session and set cookie
-	sessionID, err := env.SessionService.Create(goCtx, user.ID)
-	if err != nil {
-		t.Fatalf("Failed to create session: %v", err)
-	}
-
-	SetSessionCookie(t, ctx, sessionID)
-
-	return user.ID
 }
 
 // =============================================================================
@@ -95,11 +60,10 @@ func TestBrowser_APIKeySettings_PageLoad(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-pageload")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
 	// Navigate to /settings/api-keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Wait for page to load
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -116,37 +80,28 @@ func TestBrowser_APIKeySettings_PageLoad(t *testing.T) {
 		t.Fatalf("Failed to get heading text: %v", err)
 	}
 
-	if !strings.Contains(headingText, "API Keys") {
-		t.Errorf("Expected heading to contain 'API Keys', got: %s", headingText)
+	if !strings.Contains(headingText, "API and OAuth Credentials") {
+		t.Errorf("Expected heading to contain 'API and OAuth Credentials', got: %s", headingText)
 	}
 
-	// Verify "Create API Key" button is visible
-	createButton := page.Locator("button[type='submit']:has-text('Create API Key')")
+	// Verify "Create API" action is visible
+	createButton := page.Locator("a:has-text('Create API')")
 	isVisible, err := createButton.IsVisible()
 	if err != nil {
-		t.Fatalf("Failed to check create button visibility: %v", err)
+		t.Fatalf("Failed to check create API link visibility: %v", err)
 	}
 	if !isVisible {
-		t.Error("Create API Key button should be visible")
+		t.Error("Create API link should be visible")
 	}
 
-	// Verify form fields are present
-	nameInput := page.Locator("input#name")
-	nameVisible, err := nameInput.IsVisible()
+	// Verify "Create OAuth" action is visible
+	createOAuth := page.Locator("a:has-text('Create OAuth')")
+	oauthVisible, err := createOAuth.IsVisible()
 	if err != nil {
-		t.Fatalf("Failed to check name input visibility: %v", err)
+		t.Fatalf("Failed to check create OAuth link visibility: %v", err)
 	}
-	if !nameVisible {
-		t.Error("API key name input should be visible")
-	}
-
-	scopeSelect := page.Locator("select#scope")
-	scopeVisible, err := scopeSelect.IsVisible()
-	if err != nil {
-		t.Fatalf("Failed to check scope select visibility: %v", err)
-	}
-	if !scopeVisible {
-		t.Error("Scope select should be visible")
+	if !oauthVisible {
+		t.Error("Create OAuth link should be visible")
 	}
 }
 
@@ -171,14 +126,10 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-create")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to /settings/api-keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-
-	// Wait for page to load
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to /settings/api-keys/new
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	// Fill in API key name
 	nameInput := WaitForSelector(t, page, "input#name")
@@ -188,30 +139,14 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 	}
 
 	// Select scope: "Read and Write"
-	scopeSelect := WaitForSelector(t, page, "select#scope")
-	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	scopeSelect := WaitForSelector(t, page, "input[name='scope'][value='read_write']")
+	err = scopeSelect.Check()
 	if err != nil {
 		t.Fatalf("Failed to select scope: %v", err)
 	}
 
-	// Fill in email for re-authentication
-	emailInput := WaitForSelector(t, page, "input#email")
-	err = emailInput.Fill(testEmail)
-	if err != nil {
-		t.Fatalf("Failed to fill email: %v", err)
-	}
-
-	// Fill in password for re-authentication
-	passwordInput := WaitForSelector(t, page, "input#password")
-	err = passwordInput.Fill(testPassword)
-	if err != nil {
-		t.Fatalf("Failed to fill password: %v", err)
-	}
-
 	// Submit form
-	submitButton := page.Locator("button[type='submit']:has-text('Create API Key')")
+	submitButton := page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
@@ -219,14 +154,14 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 
 	// Wait for page to reload with new API key
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Page did not reload: %v", err)
 	}
 
 	// Verify API key value is displayed (only shown once)
-	tokenElement := page.Locator("code#new-token, code#token-value")
+	tokenElement := page.Locator("code#token-value")
 	err = tokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
@@ -287,36 +222,29 @@ func TestBrowser_APIKeySettings_ListKeys(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-list")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
 	// Create multiple API keys via the UI
 	tokenNames := []string{"Key One", "Key Two", "Key Three"}
 
 	for _, tokenName := range tokenNames {
-		Navigate(t, page, env.BaseURL, "/settings/api-keys")
-		WaitForSelector(t, page, "h1:has-text('API Keys')")
+		navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 		// Fill form
 		page.Locator("input#name").Fill(tokenName)
-		page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-			Values: playwright.StringSlice("read_write"),
-		})
-		page.Locator("input#email").Fill(testEmail)
-		page.Locator("input#password").Fill(testPassword)
+		page.Locator("input[name='scope'][value='read_write']").Check()
 
 		// Submit
-		page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+		page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 		// Wait for redirect
 		page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State: playwright.LoadStateNetworkidle,
+			State: playwright.LoadStateDomcontentloaded,
 		})
 	}
 
 	// Navigate to settings page to view list
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Verify all created API keys appear in list
 	for _, tokenName := range tokenNames {
@@ -375,30 +303,23 @@ func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-revoke")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
 	tokenName := "Key to Revoke"
 
 	// Create an API key first
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	page.Locator("input#name").Fill(tokenName)
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
-	page.Locator("input#email").Fill(testEmail)
-	page.Locator("input#password").Fill(testPassword)
-	page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+	page.Locator("input[name='scope'][value='read_write']").Check()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Navigate back to API keys page (in case we're showing the new key display)
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Verify the API key exists in the list
 	tokenRow := page.Locator(fmt.Sprintf("text=%s", tokenName))
@@ -422,7 +343,7 @@ func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 
 	// Wait for page to reload
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Page did not reload after revoke: %v", err)
@@ -460,27 +381,21 @@ func TestBrowser_APIKeySettings_CopyKey(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-copy")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
 	// Create an API key
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	page.Locator("input#name").Fill("Key for Copy Test")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
-	page.Locator("input#email").Fill(testEmail)
-	page.Locator("input#password").Fill(testPassword)
-	page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+	page.Locator("input[name='scope'][value='read_write']").Check()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Get the API key value before clicking copy
-	tokenElement := WaitForSelector(t, page, "code#new-token, code#token-value")
+	tokenElement := WaitForSelector(t, page, "code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get API key value: %v", err)
@@ -535,12 +450,10 @@ func TestBrowser_APIKeySettings_EmptyState(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-empty")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
 	// Navigate to API keys page without creating any keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Verify "No API keys" message is displayed
 	noKeysMessage := page.Locator("h3:has-text('No API keys')")
@@ -564,10 +477,10 @@ func TestBrowser_APIKeySettings_EmptyState(t *testing.T) {
 }
 
 // =============================================================================
-// Test: Invalid Credentials (Re-authentication Fails)
+// Test: Create Without Re-authentication
 // =============================================================================
 
-func TestBrowser_APIKeySettings_InvalidCredentials(t *testing.T) {
+func TestBrowser_APIKeySettings_CreateWithoutReauthentication(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping browser test in short mode")
 	}
@@ -583,45 +496,32 @@ func TestBrowser_APIKeySettings_InvalidCredentials(t *testing.T) {
 	defer page.Close()
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
-	testEmail := GenerateUniqueEmail("apikey-invalid-creds")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	testEmail := GenerateUniqueEmail("apikey-no-reauth")
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to API keys page
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to API key create page
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
-	// Fill form with wrong password
+	// Fill form without any re-authentication fields
 	page.Locator("input#name").Fill("Test API Key")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
-	page.Locator("input#email").Fill(testEmail)
-	page.Locator("input#password").Fill("WrongPassword123!")
+	page.Locator("input[name='scope'][value='read_write']").Check()
 
 	// Submit form
-	page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	// Wait for page to reload
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
-	// Verify error message is displayed
-	errorMessage := page.Locator("text=Invalid credentials")
-	errorVisible, err := errorMessage.IsVisible()
+	// Verify API key value is displayed
+	tokenElement := page.Locator("code#token-value")
+	err = tokenElement.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(browserMaxTimeoutMS),
+	})
 	if err != nil {
-		// Check URL for error param instead
-		currentURL := page.URL()
-		if !strings.Contains(currentURL, "error=") {
-			t.Error("Expected error message or error in URL for invalid credentials")
-		}
-	} else if !errorVisible {
-		// The error might be in the URL
-		currentURL := page.URL()
-		if !strings.Contains(currentURL, "error=") {
-			t.Error("Expected error message for invalid credentials")
-		}
+		t.Fatalf("Expected API key value to be visible after create: %v", err)
 	}
 }
 
@@ -646,12 +546,10 @@ func TestBrowser_APIKeySettings_ExpirationOptions(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-expiry")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to API keys page
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to API key create page
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	// Check expiration select options
 	expiresSelect := WaitForSelector(t, page, "select#expires_in")
@@ -700,29 +598,22 @@ func TestBrowser_APIKeySettings_ReadOnlyScope(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-readonly")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to API keys page
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to API key create page
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	// Create a read-only API key
 	page.Locator("input#name").Fill("Read Only Key")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read"),
-	})
-	page.Locator("input#email").Fill(testEmail)
-	page.Locator("input#password").Fill(testPassword)
-	page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+	page.Locator("input[name='scope'][value='read']").Check()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Navigate back to see the API key in the list
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Verify the API key shows "read" scope
 	readScope := page.Locator("span:has-text('read')")
@@ -760,7 +651,7 @@ func TestBrowser_APIKeySettings_RequiresAuth(t *testing.T) {
 
 	// Wait for page to load
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// The auth middleware redirects to /login for web pages (RequireAuthWithRedirect)
@@ -801,12 +692,10 @@ func TestBrowser_APIKeySettings_UsageInstructions(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-usage")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
 	// Navigate to API keys page
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Verify usage instructions section exists
 	usageHeading := page.Locator("h3:has-text('How to use your API key')")
@@ -850,28 +739,22 @@ func TestBrowser_APIKeySettings_UseKeyForAPICall(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-api-call")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to /settings/api-keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to /settings/api-keys/new
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	// Create an API key
 	page.Locator("input#name").Fill("Key for API Test")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
-	page.Locator("input#email").Fill(testEmail)
-	page.Locator("input#password").Fill(testPassword)
-	page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+	page.Locator("input[name='scope'][value='read_write']").Check()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Get the API key value
-	tokenElement := WaitForSelector(t, page, "code#new-token, code#token-value")
+	tokenElement := WaitForSelector(t, page, "code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get API key value: %v", err)
@@ -928,12 +811,10 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-revoke-api")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to /settings/api-keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to /settings/api-keys/new
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	// Create an API key
 	tokenName := "Key to Revoke for API"
@@ -943,27 +824,13 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 		t.Fatalf("Failed to fill API key name: %v", err)
 	}
 
-	scopeSelect := WaitForSelector(t, page, "select#scope")
-	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	scopeSelect := WaitForSelector(t, page, "input[name='scope'][value='read_write']")
+	err = scopeSelect.Check()
 	if err != nil {
 		t.Fatalf("Failed to select scope: %v", err)
 	}
 
-	emailInput := WaitForSelector(t, page, "input#email")
-	err = emailInput.Fill(testEmail)
-	if err != nil {
-		t.Fatalf("Failed to fill email: %v", err)
-	}
-
-	passwordInput := WaitForSelector(t, page, "input#password")
-	err = passwordInput.Fill(testPassword)
-	if err != nil {
-		t.Fatalf("Failed to fill password: %v", err)
-	}
-
-	submitButton := page.Locator("button[type='submit']:has-text('Create API Key')")
+	submitButton := page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit: %v", err)
@@ -971,15 +838,15 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 
 	// Wait for page to reload with new API key
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Page did not reload: %v", err)
 	}
 
 	// Wait for API key element to appear with extended timeout
-	// The key might be in code#new-token (settings/api-keys.html) or code#token-value (api-keys/created.html)
-	tokenElement := page.Locator("code#new-token, code#token-value")
+	// The key is displayed in code#token-value on the created key page.
+	tokenElement := page.Locator("code#token-value")
 	err = tokenElement.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
@@ -1016,8 +883,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 	t.Logf("Before revocation, API returned status: %d", resp1.StatusCode)
 
 	// Navigate to API keys page to revoke
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
 	// Set up dialog handler for confirmation
 	page.OnDialog(func(dialog playwright.Dialog) {
@@ -1033,7 +899,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 
 	// Wait for page to reload
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Verify API key no longer works via API
@@ -1078,29 +944,23 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	page.SetDefaultTimeout(browserMaxTimeoutMS)
 
 	testEmail := GenerateUniqueEmail("apikey-navigate-mask")
-	testPassword := "SecurePass123!"
-	loginAPIKeyUser(t, env, ctx, testEmail, testPassword)
+	env.LoginUser(t, ctx, testEmail)
 
-	// Navigate to /settings/api-keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	// Navigate to /settings/api-keys/new
+	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	// Create an API key
 	tokenName := "Key for Navigate Test"
 	page.Locator("input#name").Fill(tokenName)
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
-	page.Locator("input#email").Fill(testEmail)
-	page.Locator("input#password").Fill(testPassword)
-	page.Locator("button[type='submit']:has-text('Create API Key')").Click()
+	page.Locator("input[name='scope'][value='read_write']").Check()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Verify API key is displayed
-	tokenElement := WaitForSelector(t, page, "code#new-token, code#token-value")
+	tokenElement := WaitForSelector(t, page, "code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get API key value: %v", err)
@@ -1113,15 +973,14 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	// Navigate away to /notes
 	Navigate(t, page, env.BaseURL, "/notes")
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Navigate back to /settings/api-keys
-	Navigate(t, page, env.BaseURL, "/settings/api-keys")
-	WaitForSelector(t, page, "h1:has-text('API Keys')")
+	navigateAPIKeyHub(t, page, env.BaseURL)
 
-	// The new-token element should not be visible
-	newTokenElement := page.Locator("code#new-token, code#token-value")
+	// The API key element should not be visible on the settings page after navigation.
+	newTokenElement := page.Locator("code#token-value")
 	err = newTokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
