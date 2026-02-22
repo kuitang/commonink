@@ -3,17 +3,17 @@
 package browser
 
 import (
-	"bytes"
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gin-contrib/sse"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 	"github.com/playwright-community/playwright-go"
@@ -247,13 +248,17 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
 
 	// Apps management API routes (authenticated)
-	appsHandler := &authenticatedAppsHandler{SpriteToken: spriteToken}
+	appsHandler := &authenticatedAppsHandler{
+		SpriteToken: spriteToken,
+		Renderer:    renderer,
+	}
 	mux.Handle("GET /api/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListApps))))
 	mux.Handle("GET /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetApp))))
 	mux.Handle("DELETE /api/apps/{name}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.DeleteApp))))
 	mux.Handle("GET /api/apps/{name}/files", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.ListFiles))))
 	mux.Handle("GET /api/apps/{name}/files/{path...}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetFile))))
 	mux.Handle("GET /api/apps/{name}/logs", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.GetLogs))))
+	mux.Handle("GET /api/apps/{name}/stream", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.StreamApp))))
 	mux.Handle("POST /api/apps/{name}/{action}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(appsHandler.HandleAction))))
 
 	env := &BrowserTestEnv{
@@ -807,6 +812,7 @@ func (h *authenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 // authenticatedAppsHandler wraps apps management API operations with auth context.
 type authenticatedAppsHandler struct {
 	SpriteToken string
+	Renderer    *web.Renderer
 }
 
 func (h *authenticatedAppsHandler) getService(r *http.Request) (*apps.Service, error) {
@@ -816,6 +822,115 @@ func (h *authenticatedAppsHandler) getService(r *http.Request) (*apps.Service, e
 	}
 	userID := auth.GetUserID(r.Context())
 	return apps.NewService(userDB, userID, h.SpriteToken), nil
+}
+
+func hashTestJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func writeTestSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, payload any) bool {
+	if err := sse.Encode(w, sse.Event{
+		Event: event,
+		Data:  payload,
+	}); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func testFirstServiceName(servicesOutput string) string {
+	output := strings.TrimSpace(servicesOutput)
+	if output == "" {
+		return ""
+	}
+
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &list); err == nil {
+		for _, item := range list {
+			name := strings.TrimSpace(item.Name)
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	var item struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(output), &item); err == nil {
+		name := strings.TrimSpace(item.Name)
+		if name != "" {
+			return name
+		}
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.Contains(strings.ToLower(trimmed), "no services") {
+			continue
+		}
+		if idx := strings.Index(trimmed, "[name:"); idx >= 0 {
+			rest := trimmed[idx+len("[name:"):]
+			if end := strings.Index(rest, "]"); end > 0 {
+				name := strings.TrimSpace(rest[:end])
+				if name != "" {
+					return name
+				}
+			}
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 {
+			token := strings.TrimSpace(fields[0])
+			token = strings.TrimPrefix(token, "[name:")
+			token = strings.TrimSuffix(token, "]")
+			if token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func testLogStreamPayload(result *apps.AppLogsResult, err error) map[string]any {
+	if err != nil {
+		return map[string]any{
+			"error": err.Error(),
+		}
+	}
+	if result == nil {
+		return map[string]any{
+			"output":    "",
+			"stderr":    "",
+			"exit_code": 0,
+		}
+	}
+	return map[string]any{
+		"output":    result.Output,
+		"stderr":    result.Stderr,
+		"exit_code": result.ExitCode,
+	}
+}
+
+func (h *authenticatedAppsHandler) renderFilesHTML(files []apps.AppFileEntry, filesErr string) (string, error) {
+	if h.Renderer == nil {
+		return "", fmt.Errorf("renderer is not configured")
+	}
+	return h.Renderer.RenderPartialToString(
+		"apps/detail.html",
+		"app-files-list",
+		map[string]any{
+			"Files":    files,
+			"FilesErr": filesErr,
+		},
+	)
 }
 
 func (h *authenticatedAppsHandler) ListApps(w http.ResponseWriter, r *http.Request) {
@@ -908,6 +1023,120 @@ func (h *authenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Reques
 	writeTestJSON(w, http.StatusOK, result)
 }
 
+func (h *authenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Request) {
+	svc, err := h.getService(r)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "App name is required"})
+		return
+	}
+
+	lines := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lines parameter"})
+			return
+		}
+		lines = parsed
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Streaming not supported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	initialFiles, err := svc.ListFiles(r.Context(), name)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	initialLogs, err := svc.TailLogs(r.Context(), name, lines)
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	filesHTML, err := h.renderFilesHTML(initialFiles.Files, "")
+	if err != nil {
+		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to render file list stream"})
+		return
+	}
+	fileHash := hashTestJSON(map[string]string{"html": filesHTML})
+
+	initialLogPayload := testLogStreamPayload(initialLogs, nil)
+	logHash := hashTestJSON(initialLogPayload)
+
+	if !writeTestSSEEvent(w, flusher, "file", map[string]any{"html": filesHTML}) {
+		return
+	}
+	if !writeTestSSEEvent(w, flusher, "log", initialLogPayload) {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			sentEvent := false
+
+			nextFiles, nextFilesErr := svc.ListFiles(r.Context(), name)
+			nextFilesList := []apps.AppFileEntry{}
+			nextFilesErrText := ""
+			if nextFilesErr != nil {
+				nextFilesErrText = nextFilesErr.Error()
+			} else {
+				nextFilesList = nextFiles.Files
+			}
+			nextFilesHTML, renderErr := h.renderFilesHTML(nextFilesList, nextFilesErrText)
+			if renderErr != nil {
+				return
+			}
+			nextFileHash := hashTestJSON(map[string]string{"html": nextFilesHTML})
+			if nextFileHash != fileHash {
+				fileHash = nextFileHash
+				if !writeTestSSEEvent(w, flusher, "file", map[string]any{"html": nextFilesHTML}) {
+					return
+				}
+				sentEvent = true
+			}
+
+			nextLogPayload := testLogStreamPayload(svc.TailLogs(r.Context(), name, lines))
+			nextLogHash := hashTestJSON(nextLogPayload)
+			if nextLogHash != logHash {
+				logHash = nextLogHash
+				if !writeTestSSEEvent(w, flusher, "log", nextLogPayload) {
+					return
+				}
+				sentEvent = true
+			}
+
+			if sentEvent {
+				continue
+			}
+			if !writeTestSSEEvent(w, flusher, "ping", map[string]any{
+				"ts": time.Now().UTC().Format(time.RFC3339Nano),
+			}) {
+				return
+			}
+		}
+	}
+}
+
 func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
@@ -924,14 +1153,7 @@ func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	svcName := ""
-	for _, line := range splitLines(listResult.Stdout) {
-		trimmed := trimSpace(line)
-		if trimmed != "" && !containsCI(trimmed, "no services") {
-			svcName = trimmed
-			break
-		}
-	}
+	svcName := testFirstServiceName(listResult.Stdout)
 	if svcName == "" {
 		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "No service registered"})
 		return
@@ -940,11 +1162,11 @@ func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 	var cmd string
 	switch action {
 	case "start":
-		cmd = fmt.Sprintf("sprite-env services start %s", svcName)
+		cmd = fmt.Sprintf("sprite-env services start %q", svcName)
 	case "stop":
-		cmd = fmt.Sprintf("sprite-env services stop %s", svcName)
+		cmd = fmt.Sprintf("sprite-env services stop %q", svcName)
 	case "restart":
-		cmd = fmt.Sprintf("sprite-env services stop %s && sprite-env services start %s", svcName, svcName)
+		cmd = fmt.Sprintf("sprite-env services stop %q && sprite-env services start %q", svcName, svcName)
 	default:
 		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid action"})
 		return
@@ -962,192 +1184,4 @@ func writeTestJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	for _, line := range bytes.Split([]byte(s), []byte("\n")) {
-		lines = append(lines, string(line))
-	}
-	return lines
-}
-
-func trimSpace(s string) string {
-	return string(bytes.TrimSpace([]byte(s)))
-}
-
-func containsCI(s, substr string) bool {
-	return bytes.Contains(bytes.ToLower([]byte(s)), bytes.ToLower([]byte(substr)))
-}
-
-// =============================================================================
-// MCP call helper (cookie-based)
-// =============================================================================
-
-// MCPCallTool sends a JSON-RPC tools/call request via cookie auth to /mcp
-// and returns the result content.
-func (env *BrowserTestEnv) MCPCallTool(t testing.TB, sessionID, tool string, args map[string]any) json.RawMessage {
-	t.Helper()
-
-	reqBody := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "tools/call",
-		"id":      1,
-		"params": map[string]any{
-			"name":      tool,
-			"arguments": args,
-		},
-	}
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		t.Fatalf("MCPCallTool: failed to marshal request: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", env.BaseURL+"/mcp", bytes.NewReader(bodyBytes))
-	if err != nil {
-		t.Fatalf("MCPCallTool: failed to create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.AddCookie(&http.Cookie{
-		Name:  auth.SessionCookieName,
-		Value: sessionID,
-	})
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("MCPCallTool %s: request failed: %v", tool, err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("MCPCallTool %s: failed to read response: %v", tool, err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("MCPCallTool %s: unexpected status %d: %s", tool, resp.StatusCode, string(respBody))
-	}
-
-	// Parse JSON-RPC response
-	var rpcResp struct {
-		Result struct {
-			Content []struct {
-				Type string          `json:"type"`
-				Text json.RawMessage `json:"text"`
-			} `json:"content"`
-		} `json:"result"`
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		t.Fatalf("MCPCallTool %s: failed to parse response: %v\nBody: %s", tool, err, string(respBody))
-	}
-	if rpcResp.Error != nil {
-		t.Fatalf("MCPCallTool %s: RPC error %d: %s", tool, rpcResp.Error.Code, rpcResp.Error.Message)
-	}
-
-	if len(rpcResp.Result.Content) == 0 {
-		return json.RawMessage("{}")
-	}
-
-	// The text field contains the tool result as a JSON string
-	var textStr string
-	if err := json.Unmarshal(rpcResp.Result.Content[0].Text, &textStr); err != nil {
-		// If it's not a string, return it directly
-		return rpcResp.Result.Content[0].Text
-	}
-	return json.RawMessage(textStr)
-}
-
-// =============================================================================
-// App seeding helper
-// =============================================================================
-
-const seedAppPythonServer = `from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs
-class H(BaseHTTPRequestHandler):
-    def do_GET(self):
-        print(f"GET {self.path}", flush=True)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(b'<form method="POST" action="/"><input name="msg" id="msg"><button type="submit" id="send">Send</button></form>')
-    def do_POST(self):
-        n = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(n).decode()
-        params = parse_qs(raw)
-        msg = params.get("msg", [""])[0]
-        print(f"POST {self.path} msg={msg}", flush=True)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(f'<p id="echo">You said: {msg}</p>'.encode())
-HTTPServer(("0.0.0.0", 8080), H).serve_forever()
-`
-
-// SeedApp creates a sprite-based app via MCP tools and waits for it to become reachable.
-// It returns the public URL and registers t.Cleanup to delete the app.
-// The caller must have already created a user and session.
-func (env *BrowserTestEnv) SeedApp(t testing.TB, sessionID, appName string) string {
-	t.Helper()
-
-	// 1. Create the app and extract public URL
-	createResult := env.MCPCallTool(t, sessionID, "app_create", map[string]any{
-		"names": []string{appName},
-	})
-	var createResp struct {
-		PublicURL string `json:"public_url"`
-	}
-	if err := json.Unmarshal(createResult, &createResp); err != nil {
-		t.Fatalf("SeedApp: failed to parse app_create result: %v", err)
-	}
-
-	// Register cleanup to delete the app
-	t.Cleanup(func() {
-		env.MCPCallTool(t, sessionID, "app_delete", map[string]any{
-			"app": appName,
-		})
-	})
-
-	// 2. Write the Python test server
-	env.MCPCallTool(t, sessionID, "app_write", map[string]any{
-		"app":     appName,
-		"path":    "server.py",
-		"content": seedAppPythonServer,
-	})
-
-	// 3. Create the web service
-	env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
-		"app":     appName,
-		"command": "sprite-env services create web --cmd 'python3 server.py' --http-port 8080",
-	})
-
-	// 4. Poll until the server is reachable (max 30s)
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		result := env.MCPCallTool(t, sessionID, "app_bash", map[string]any{
-			"app":     appName,
-			"command": "curl -sf http://localhost:8080",
-		})
-
-		// Check if the command succeeded (non-empty result without error)
-		var bashResult struct {
-			ExitCode int    `json:"exit_code"`
-			Stdout   string `json:"stdout"`
-		}
-		if err := json.Unmarshal(result, &bashResult); err == nil && bashResult.ExitCode == 0 && bashResult.Stdout != "" {
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
-
-	// 5. Return the public URL from app_create result
-	publicURL := strings.TrimSpace(createResp.PublicURL)
-	if publicURL == "" {
-		t.Fatalf("SeedApp: public URL is empty for app %s", appName)
-	}
-	return publicURL
 }

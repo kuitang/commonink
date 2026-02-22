@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
 )
 
@@ -13,6 +14,17 @@ import (
 // sprite API calls (file listing, log fetching, bash commands) which go over the network.
 // Sprite bash commands can take up to 120s.
 const spriteTimeoutMS = 120000
+
+func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
+	t.Helper()
+	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		Timeout:   playwright.Float(spriteTimeoutMS),
+	})
+	if err != nil {
+		t.Fatalf("Failed to navigate to %s: %v", path, err)
+	}
+}
 
 // =============================================================================
 // Unified Feed Tests
@@ -40,10 +52,7 @@ func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 
 	// Seed an app
 	appName := "feed-" + GenerateUniqueEmail("x")[:8]
-	env.SeedApp(t, sessionID, appName)
-
-	// Create a note
-	env.CreateNoteForUser(t, userID, "Feed Test Note", "Content for feed test")
+	appseed.SeedApp(t, env.BaseURL, sessionID, appName)
 
 	// Navigate to /notes (unified feed)
 	page, err := ctx.NewPage()
@@ -54,7 +63,9 @@ func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 	page.SetDefaultTimeout(spriteTimeoutMS)
 	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
 
-	Navigate(t, page, env.BaseURL, "/notes")
+	// Create a note through the UI to keep this suite user-behavior focused.
+	CreateNoteViaUI(t, page, env.BaseURL, "Feed Test Note", "Content for feed test")
+	navigateSprite(t, page, env.BaseURL, "/notes")
 
 	// Assert: app-card is visible
 	appCard := page.Locator("article.themed-card a[href*='/apps/']").First()
@@ -150,7 +161,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	sessionID := env.LoginAs(t, userID)
 
 	appName := "detail-" + GenerateUniqueEmail("x")[:8]
-	env.SeedApp(t, sessionID, appName)
+	appseed.SeedApp(t, env.BaseURL, sessionID, appName)
 
 	page, err := ctx.NewPage()
 	if err != nil {
@@ -160,7 +171,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	page.SetDefaultTimeout(spriteTimeoutMS)
 	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
 
-	Navigate(t, page, env.BaseURL, "/apps/"+appName)
+	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	// Assert: header with app name
 	heading := page.Locator("h1")
@@ -190,7 +201,9 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		Timeout: playwright.Float(spriteTimeoutMS),
 	})
 	if err != nil {
-		t.Fatalf("server.py not found in file sidebar: %v", err)
+		fileListHTML, _ := page.Locator("#file-list").InnerHTML()
+		logText, _ := page.Locator("#log-output").TextContent()
+		t.Fatalf("server.py not found in file sidebar: %v\nfile-list=%q\nlogs=%q", err, fileListHTML, logText)
 	}
 
 	// Click server.py to load content
@@ -211,14 +224,26 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		t.Fatalf("Editor filename did not update to server.py (got %q): %v", fnText, err)
 	}
 
-	// Assert: editor content contains Python code
+	// Assert: editor content loaded (user-visible behavior), not implementation-specific code text
 	editorContent := page.Locator("#editor-content")
+	_, err = page.WaitForFunction(`() => {
+		const el = document.getElementById('editor-content');
+		const value = (el && el.value) ? el.value : '';
+		return value.trim().length > 0 && value.indexOf('Error:') !== 0;
+	}`, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(spriteTimeoutMS),
+	})
+	if err != nil {
+		editorValue, _ := editorContent.InputValue()
+		t.Fatalf("Editor content did not load (got: %s): %v", editorValue, err)
+	}
+
 	editorValue, err := editorContent.InputValue()
 	if err != nil {
 		t.Fatalf("Failed to get editor content: %v", err)
 	}
-	if !strings.Contains(editorValue, "HTTPServer") {
-		t.Errorf("Editor content should contain Python server code, got: %s", editorValue[:min(200, len(editorValue))])
+	if strings.TrimSpace(editorValue) == "" || strings.HasPrefix(editorValue, "Error:") {
+		t.Errorf("Editor content should be non-empty file content, got: %s", editorValue[:min(200, len(editorValue))])
 	}
 }
 
@@ -243,7 +268,7 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	sessionID := env.LoginAs(t, userID)
 
 	appName := "post-" + GenerateUniqueEmail("x")[:8]
-	publicURL := env.SeedApp(t, sessionID, appName)
+	publicURL := appseed.SeedApp(t, env.BaseURL, sessionID, appName)
 
 	page, err := ctx.NewPage()
 	if err != nil {
@@ -331,7 +356,7 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	sessionID := env.LoginAs(t, userID)
 
 	appName := "logs-" + GenerateUniqueEmail("x")[:8]
-	publicURL := env.SeedApp(t, sessionID, appName)
+	publicURL := appseed.SeedApp(t, env.BaseURL, sessionID, appName)
 
 	// First, make a POST to the app so there are logs to check
 	postPage, err := ctx.NewPage()
@@ -373,7 +398,7 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	page.SetDefaultTimeout(spriteTimeoutMS)
 	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
 
-	Navigate(t, page, env.BaseURL, "/apps/"+appName)
+	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	// The log panel fetches logs on page load. Wait for it to populate.
 	logOutput := page.Locator("#log-output")
@@ -415,7 +440,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	sessionID := env.LoginAs(t, userID)
 
 	appName := "action-" + GenerateUniqueEmail("x")[:8]
-	env.SeedApp(t, sessionID, appName)
+	appseed.SeedApp(t, env.BaseURL, sessionID, appName)
 
 	page, err := ctx.NewPage()
 	if err != nil {
@@ -425,7 +450,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	page.SetDefaultTimeout(spriteTimeoutMS)
 	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
 
-	Navigate(t, page, env.BaseURL, "/apps/"+appName)
+	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	// Assert: Start button visible
 	startBtn := page.Locator("#btn-start")

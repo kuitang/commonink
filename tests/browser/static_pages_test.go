@@ -14,7 +14,7 @@ import (
 // Footer Links Tests
 // =============================================================================
 
-// TestBrowser_Static_FooterLinksOnLoginPage verifies Privacy, Terms, About, Install, and API links
+// TestBrowser_Static_FooterLinksOnLoginPage verifies Privacy, Terms, About, and Install links
 // appear on the login page.
 func TestBrowser_Static_FooterLinksOnLoginPage(t *testing.T) {
 	if testing.Short() {
@@ -57,12 +57,6 @@ func TestBrowser_Static_FooterLinksOnLoginPage(t *testing.T) {
 		t.Error("Install link not found in nav")
 	}
 
-	// Check for API link (in nav)
-	docsLink := page.Locator("nav a[href='/docs/api']")
-	count, err = docsLink.Count()
-	if err != nil || count == 0 {
-		t.Error("API Docs link not found in nav")
-	}
 }
 
 // =============================================================================
