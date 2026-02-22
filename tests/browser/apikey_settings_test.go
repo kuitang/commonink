@@ -32,9 +32,7 @@ func navigateAPIKeyCreatePage(t *testing.T, page playwright.Page, baseURL string
 func submitCreateAPIKeyForm(t *testing.T, page playwright.Page, name, scope string) {
 	t.Helper()
 	page.Locator("input#name").Fill(name)
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice(scope),
-	})
+	page.Locator(fmt.Sprintf("input[name='scope'][value='%s']", scope)).Check()
 	page.Locator("button[type='submit']").Click()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateNetworkidle,
@@ -141,10 +139,8 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 	}
 
 	// Select scope: "Read and Write"
-	scopeSelect := WaitForSelector(t, page, "select#scope")
-	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	scopeSelect := WaitForSelector(t, page, "input[name='scope'][value='read_write']")
+	err = scopeSelect.Check()
 	if err != nil {
 		t.Fatalf("Failed to select scope: %v", err)
 	}
@@ -236,9 +232,7 @@ func TestBrowser_APIKeySettings_ListKeys(t *testing.T) {
 
 		// Fill form
 		page.Locator("input#name").Fill(tokenName)
-		page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-			Values: playwright.StringSlice("read_write"),
-		})
+		page.Locator("input[name='scope'][value='read_write']").Check()
 
 		// Submit
 		page.Locator("button[type='submit']").Click()
@@ -317,9 +311,7 @@ func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	page.Locator("input#name").Fill(tokenName)
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	page.Locator("input[name='scope'][value='read_write']").Check()
 	page.Locator("button[type='submit']").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -395,9 +387,7 @@ func TestBrowser_APIKeySettings_CopyKey(t *testing.T) {
 	navigateAPIKeyCreatePage(t, page, env.BaseURL)
 
 	page.Locator("input#name").Fill("Key for Copy Test")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	page.Locator("input[name='scope'][value='read_write']").Check()
 	page.Locator("button[type='submit']").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -514,9 +504,7 @@ func TestBrowser_APIKeySettings_CreateWithoutReauthentication(t *testing.T) {
 
 	// Fill form without any re-authentication fields
 	page.Locator("input#name").Fill("Test API Key")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	page.Locator("input[name='scope'][value='read_write']").Check()
 
 	// Submit form
 	page.Locator("button[type='submit']").Click()
@@ -617,9 +605,7 @@ func TestBrowser_APIKeySettings_ReadOnlyScope(t *testing.T) {
 
 	// Create a read-only API key
 	page.Locator("input#name").Fill("Read Only Key")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read"),
-	})
+	page.Locator("input[name='scope'][value='read']").Check()
 	page.Locator("button[type='submit']").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -760,9 +746,7 @@ func TestBrowser_APIKeySettings_UseKeyForAPICall(t *testing.T) {
 
 	// Create an API key
 	page.Locator("input#name").Fill("Key for API Test")
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	page.Locator("input[name='scope'][value='read_write']").Check()
 	page.Locator("button[type='submit']").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
@@ -840,10 +824,8 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 		t.Fatalf("Failed to fill API key name: %v", err)
 	}
 
-	scopeSelect := WaitForSelector(t, page, "select#scope")
-	_, err = scopeSelect.SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	scopeSelect := WaitForSelector(t, page, "input[name='scope'][value='read_write']")
+	err = scopeSelect.Check()
 	if err != nil {
 		t.Fatalf("Failed to select scope: %v", err)
 	}
@@ -970,9 +952,7 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	// Create an API key
 	tokenName := "Key for Navigate Test"
 	page.Locator("input#name").Fill(tokenName)
-	page.Locator("select#scope").SelectOption(playwright.SelectOptionValues{
-		Values: playwright.StringSlice("read_write"),
-	})
+	page.Locator("input[name='scope'][value='read_write']").Check()
 	page.Locator("button[type='submit']").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
