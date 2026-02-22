@@ -2,10 +2,13 @@ package mcp
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +26,7 @@ type Server struct {
 
 const (
 	mcpDebugBodyLogLimitBytes = 8 * 1024
+	mcpGetNotSupportedMessage = "GET not supported for SSE on this stateless MCP endpoint"
 )
 
 type mcpResponseLogger struct {
@@ -76,7 +80,104 @@ func mcpDebugEnabled() bool {
 	}
 }
 
-func formatBodyForLog(b []byte, truncated bool) string {
+func isSensitiveLogField(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "-", "")
+	key = strings.ReplaceAll(key, "_", "")
+
+	switch {
+	case key == "authorization":
+		return true
+	case strings.Contains(key, "token"):
+		return true
+	case strings.Contains(key, "secret"):
+		return true
+	case strings.Contains(key, "password"):
+		return true
+	case strings.Contains(key, "apikey"):
+		return true
+	case strings.Contains(key, "cookie"):
+		return true
+	case strings.Contains(key, "auth"):
+		return true
+	default:
+		return false
+	}
+}
+
+func redactHeaderValue(key, value string) string {
+	if isSensitiveLogField(key) {
+		return "[REDACTED]"
+	}
+	return value
+}
+
+func formatHeadersForLog(headers http.Header) string {
+	if len(headers) == 0 {
+		return "{}"
+	}
+
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var parts []string
+	for _, k := range keys {
+		values := headers.Values(k)
+		if len(values) == 0 {
+			parts = append(parts, fmt.Sprintf("%s=<empty>", strings.ToLower(k)))
+			continue
+		}
+
+		redacted := make([]string, len(values))
+		for i, v := range values {
+			redacted[i] = redactHeaderValue(k, v)
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", strings.ToLower(k), strings.Join(redacted, ", ")))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func redactBodyForLog(contentType string, body []byte) string {
+	text := string(body)
+	if !strings.Contains(strings.ToLower(contentType), "json") {
+		return text
+	}
+
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return text
+	}
+
+	var redact func(v any)
+	redact = func(v any) {
+		switch typed := v.(type) {
+		case map[string]any:
+			for k, child := range typed {
+				if isSensitiveLogField(k) {
+					typed[k] = "[REDACTED]"
+					continue
+				}
+				redact(child)
+			}
+		case []any:
+			for _, child := range typed {
+				redact(child)
+			}
+		}
+	}
+
+	redact(payload)
+	safeJSON, err := json.Marshal(payload)
+	if err != nil {
+		return text
+	}
+	return string(safeJSON)
+}
+
+func formatBodyForLog(contentType string, b []byte, truncated bool) string {
 	if len(b) == 0 {
 		return ""
 	}
@@ -85,11 +186,37 @@ func formatBodyForLog(b []byte, truncated bool) string {
 		textBytes = textBytes[:mcpDebugBodyLogLimitBytes]
 		truncated = true
 	}
-	text := string(textBytes)
+	text := redactBodyForLog(contentType, textBytes)
 	if truncated {
 		return text + " [truncated]"
 	}
 	return text
+}
+
+func logMCPResponse(r *http.Request, respLogger *mcpResponseLogger, debug bool) {
+	contentType := respLogger.Header().Get("Content-Type")
+	if debug {
+		log.Printf("MCP[debug]: response status=%d method=%s path=%s content_type=%q", respLogger.statusCode, r.Method, r.URL.Path, contentType)
+		log.Printf("MCP[debug]: response headers: %s", formatHeadersForLog(respLogger.Header()))
+		if len(respLogger.body) > 0 {
+			log.Printf("MCP[debug]: response body: %s", formatBodyForLog(contentType, respLogger.body, respLogger.truncated))
+		}
+	}
+
+	isExpectedGet405 := r.Method == http.MethodGet && respLogger.statusCode == http.StatusMethodNotAllowed
+	if isExpectedGet405 {
+		log.Printf("MCP: GET stream probe rejected with 405 (stateless mode)")
+		return
+	}
+
+	if respLogger.statusCode >= http.StatusBadRequest {
+		responseBody := formatBodyForLog(contentType, respLogger.body, respLogger.truncated)
+		if responseBody != "" {
+			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s response=%q", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr, responseBody)
+		} else {
+			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr)
+		}
+	}
 }
 
 // NewServer creates a new MCP server for the selected toolset.
@@ -169,7 +296,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var reqBody []byte
 	var reqBodyReadErr error
-	if debug && r.Body != nil && r.Method == http.MethodPost {
+	if debug && r.Body != nil && (r.Method == http.MethodPost || r.Method == http.MethodDelete) {
 		reqBody, reqBodyReadErr = io.ReadAll(r.Body)
 		if reqBodyReadErr == nil {
 			r.Body = io.NopCloser(bytes.NewReader(reqBody))
@@ -181,11 +308,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqLogPrefix = "MCP[debug]:"
 	}
 	log.Printf("%s %s %s from %s (ua=%q content_type=%q accept=%q mcp_session_id=%q)", reqLogPrefix, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent(), r.Header.Get("Content-Type"), r.Header.Get("Accept"), r.Header.Get("Mcp-Session-Id"))
+	if debug {
+		log.Printf("MCP[debug]: request headers: %s", formatHeadersForLog(r.Header))
+	}
 	if reqBodyReadErr != nil {
 		log.Printf("[ERROR] MCP request body read failed: method=%s path=%s err=%v", r.Method, r.URL.Path, reqBodyReadErr)
 	}
 	if debug && len(reqBody) > 0 {
-		log.Printf("MCP[debug]: request body: %s", formatBodyForLog(reqBody, false))
+		log.Printf("MCP[debug]: request body: %s", formatBodyForLog(r.Header.Get("Content-Type"), reqBody, false))
+	}
+
+	respLogger := newMCPResponseLogger(w)
+
+	// In stateless mode we intentionally do not offer GET/SSE streams.
+	// Return a clean 405 rather than surfacing SDK session-specific wording.
+	if r.Method == http.MethodGet {
+		respLogger.Header().Set("Allow", "POST, DELETE, OPTIONS")
+		http.Error(respLogger, mcpGetNotSupportedMessage, http.StatusMethodNotAllowed)
+		logMCPResponse(r, respLogger, debug)
+		return
 	}
 
 	// Delegate to the SDK's Streamable HTTP handler
@@ -194,24 +335,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// - GET: Server-initiated messages (SSE stream)
 	// - Session management (Mcp-Session-Id header)
 	// - Stream resumption (Last-Event-ID header)
-	respLogger := newMCPResponseLogger(w)
 	s.httpHandler.ServeHTTP(respLogger, r)
-
-	if debug {
-		log.Printf("MCP[debug]: response status=%d method=%s path=%s content_type=%q", respLogger.statusCode, r.Method, r.URL.Path, respLogger.Header().Get("Content-Type"))
-		if len(respLogger.body) > 0 {
-			log.Printf("MCP[debug]: response body: %s", formatBodyForLog(respLogger.body, respLogger.truncated))
-		}
-	}
-
-	if respLogger.statusCode >= http.StatusBadRequest {
-		responseBody := formatBodyForLog(respLogger.body, respLogger.truncated)
-		if responseBody != "" {
-			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s response=%q", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr, responseBody)
-		} else {
-			log.Printf("[ERROR] MCP request failed: method=%s path=%s status=%d remote=%s", r.Method, r.URL.Path, respLogger.statusCode, r.RemoteAddr)
-		}
-	}
+	logMCPResponse(r, respLogger, debug)
 }
 
 // Start is a helper to run the MCP server standalone (for testing)

@@ -17,10 +17,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
-	"sync"
-	"sync/atomic"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -124,6 +124,13 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 			switch state {
 			case http.StateNew:
 				log.Printf("[CONN OPEN] conn=%s remote=%s", connID, c.RemoteAddr())
+			case http.StateActive:
+				log.Printf("[CONN ACTIVE] conn=%s remote=%s", connID, c.RemoteAddr())
+			case http.StateIdle:
+				log.Printf("[CONN IDLE] conn=%s remote=%s", connID, c.RemoteAddr())
+			case http.StateHijacked:
+				log.Printf("[CONN HIJACKED] conn=%s remote=%s", connID, c.RemoteAddr())
+				connectionIDs.Delete(c)
 			case http.StateClosed:
 				log.Printf("[CONN CLOSE] conn=%s remote=%s", connID, c.RemoteAddr())
 				connectionIDs.Delete(c)
