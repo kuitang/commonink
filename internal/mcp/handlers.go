@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/notes"
@@ -29,6 +31,11 @@ func NewHandler(notesSvc *notes.Service, appsSvc *apps.Service) *Handler {
 func (h *Handler) createToolHandler(name string) func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
 		result, err := h.HandleToolCall(ctx, name, args)
+		if err != nil {
+			log.Printf("[ERROR] MCP tool %s failed: %v", name, err)
+		} else if result != nil && result.IsError {
+			log.Printf("[ERROR] MCP tool %s returned error result: %s", name, toolErrorSummary(result))
+		}
 		return result, nil, err
 	}
 }
@@ -98,6 +105,27 @@ func newToolResultError(message string) *mcp.CallToolResult {
 		},
 		IsError: true,
 	}
+}
+
+func toolErrorSummary(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, content := range result.Content {
+		text, ok := content.(*mcp.TextContent)
+		if !ok {
+			continue
+		}
+		message := strings.TrimSpace(text.Text)
+		if message == "" {
+			continue
+		}
+		if len(message) > 512 {
+			return message[:512] + "... [truncated]"
+		}
+		return message
+	}
+	return "tool returned isError=true without text content"
 }
 
 func marshalToolJSON(value any) string {

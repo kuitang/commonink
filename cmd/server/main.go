@@ -348,14 +348,14 @@ func main() {
 		SpriteToken: resolvedSpriteToken,
 	}
 
-	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP))))
-	mux.Handle("POST /mcp/notes", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP))))
-	mux.Handle("POST /mcp/apps", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP))))
+	mcpAllRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP)))
+	mcpNotesRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP)))
+	mcpAppsRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP)))
 
-	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp")
-	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp/notes")
-	registerStatelessMCPMethodGuards(mux, authMiddleware, "/mcp/apps")
-	log.Println("MCP server mounted at POST /mcp, /mcp/notes, /mcp/apps (protected with rate limiting)")
+	mountMCPRoute(mux, "/mcp", mcpAllRoute)
+	mountMCPRoute(mux, "/mcp/notes", mcpNotesRoute)
+	mountMCPRoute(mux, "/mcp/apps", mcpAppsRoute)
+	log.Println("MCP server mounted at /mcp, /mcp/notes, /mcp/apps (GET/POST/DELETE/OPTIONS; protected with rate limiting)")
 
 	// Wrap mux with request logging middleware
 	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -363,8 +363,8 @@ func main() {
 		log.Printf("[REQ] %s %s %s (Host: %s, UA: %s)", r.Method, r.URL.Path, r.URL.RawQuery, r.Host, r.Header.Get("User-Agent"))
 
 		// Capture response status code
-		rw := &statusRecorder{ResponseWriter: w, statusCode: 200}
-		mux.ServeHTTP(rw, r)
+		loggedRW, rw := newStatusRecorder(w)
+		mux.ServeHTTP(loggedRW, r)
 
 		log.Printf("[RES] %s %s -> %d", r.Method, r.URL.Path, rw.statusCode)
 	})
@@ -450,9 +450,9 @@ func main() {
 	log.Println("    POST /billing/portal             - Stripe customer portal (protected)")
 	log.Println("    GET  /settings/billing           - Billing settings (protected)")
 	log.Println("  MCP (rate limited):")
-	log.Println("    POST /mcp                        - MCP endpoint (all tools, protected)")
-	log.Println("    POST /mcp/notes                  - MCP endpoint (notes toolset, protected)")
-	log.Println("    POST /mcp/apps                   - MCP endpoint (apps toolset, protected)")
+	log.Println("    GET|POST|DELETE /mcp             - MCP endpoint (all tools, protected)")
+	log.Println("    GET|POST|DELETE /mcp/notes       - MCP endpoint (notes toolset, protected)")
+	log.Println("    GET|POST|DELETE /mcp/apps        - MCP endpoint (apps toolset, protected)")
 	log.Println("  Health:")
 	log.Println("    GET  /health                     - Health check")
 	log.Println("")
@@ -605,7 +605,9 @@ func (h *AuthenticatedNotesHandler) getService(r *http.Request) (*notes.Service,
 		storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 	}
 	svc := notes.NewService(userDB, storageLimit)
-	_ = svc.Purge(30 * 24 * time.Hour)
+	if err := svc.Purge(30 * 24 * time.Hour); err != nil {
+		log.Printf("[ERROR] notes purge failed for user %s: %v", userID, err)
+	}
 	return svc, nil
 }
 
@@ -1158,6 +1160,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		log.Printf("[ERROR] apps stream unavailable for app=%s: response writer lacks http.Flusher (type=%T)", name, w)
 		writeError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
 	}
@@ -1325,7 +1328,9 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 			storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 		}
 		notesSvc = notes.NewService(userDB, storageLimit)
-		_ = notesSvc.Purge(30 * 24 * time.Hour)
+		if err := notesSvc.Purge(30 * 24 * time.Hour); err != nil {
+			log.Printf("[ERROR] MCP note purge failed for user %s: %v", userID, err)
+		}
 	}
 
 	var appsSvc *apps.Service
@@ -1337,15 +1342,11 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	mcpServer.ServeHTTP(w, r)
 }
 
-func registerStatelessMCPMethodGuards(mux *http.ServeMux, authMiddleware *auth.Middleware, route string) {
-	mux.Handle("GET "+route, authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "GET not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
-	})))
-	mux.Handle("DELETE "+route, authMiddleware.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "DELETE not supported in stateless MCP mode. Use POST.", http.StatusMethodNotAllowed)
-	})))
+func mountMCPRoute(mux *http.ServeMux, route string, handler http.Handler) {
+	mux.Handle("GET "+route, handler)
+	mux.Handle("POST "+route, handler)
+	mux.Handle("DELETE "+route, handler)
+	mux.Handle("OPTIONS "+route, handler)
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
@@ -1354,9 +1355,29 @@ type statusRecorder struct {
 	statusCode int
 }
 
+type statusRecorderWithFlusher struct {
+	*statusRecorder
+}
+
+func newStatusRecorder(w http.ResponseWriter) (http.ResponseWriter, *statusRecorder) {
+	recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+	if _, ok := w.(http.Flusher); ok {
+		return &statusRecorderWithFlusher{statusRecorder: recorder}, recorder
+	}
+	return recorder, recorder
+}
+
 func (r *statusRecorder) WriteHeader(code int) {
 	r.statusCode = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+func (r *statusRecorderWithFlusher) Flush() {
+	r.ResponseWriter.(http.Flusher).Flush()
 }
 
 // ErrorResponse represents an API error response
@@ -1368,7 +1389,9 @@ type ErrorResponse struct {
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("[ERROR] failed to encode JSON response (status=%d): %v", status, err)
+	}
 }
 
 // writeError writes a JSON error response with the given status code

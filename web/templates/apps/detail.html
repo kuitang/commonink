@@ -87,6 +87,7 @@
     var streamSource = null;
     var streamQuery = "lines=100";
     var streamRetryTimer = null;
+    var streamConnected = false;
 
     function clearStreamFlash() {
         var flash = document.getElementById('stream-inline-flash');
@@ -104,6 +105,7 @@
         } else {
             cls += ' bg-error-50 dark:bg-error-900/20 border-error-200 dark:border-error-800 text-error-800 dark:text-error-200';
         }
+        if (flash.className === cls && flash.textContent === message) return;
         flash.className = cls;
         flash.textContent = message;
     }
@@ -180,7 +182,7 @@
             return;
         }
         stopStream();
-        clearStreamFlash();
+        streamConnected = false;
         setLogOutput('Connecting to live logs...');
         streamSource = new EventSource('/api/apps/' + encodeURIComponent(appName) + '/stream?' + streamQuery);
 
@@ -188,8 +190,11 @@
             var payload;
             try { payload = JSON.parse(event.data); } catch (_err) { return; }
             if (!payload || typeof payload.html !== 'string') return;
+            if (!streamConnected) {
+                streamConnected = true;
+                clearStreamFlash();
+            }
             setFileListHTML(payload.html);
-            clearStreamFlash();
         });
 
         streamSource.addEventListener('log', function(event) {
@@ -200,23 +205,27 @@
                 setLogOutput('Error: ' + payload.error);
                 return;
             }
+            if (!streamConnected) {
+                streamConnected = true;
+                clearStreamFlash();
+            }
             var output = '';
             if (payload.output) output += payload.output;
             if (payload.stderr) output += (output ? '\n' : '') + payload.stderr;
             setLogOutput(output || 'No logs available');
-            clearStreamFlash();
         });
 
         streamSource.addEventListener('ping', function(_event) {});
 
         streamSource.onerror = function() {
+            streamConnected = false;
             stopStream();
             setLogOutput('Live logs disconnected. Retrying...');
             probeStreamStartError().then(function(errText) {
                 if (errText) {
                     console.error('App stream startup failed:', errText);
                     showStreamFlash('Live updates unavailable: ' + errText, 'error');
-                    setLogOutput('Live logs unavailable. See browser console for exact error.');
+                    setLogOutput('Live logs unavailable. Retrying in 3s. See browser console for exact error.');
                     return;
                 }
                 console.warn('App stream disconnected without HTTP error payload');
