@@ -1053,7 +1053,7 @@ func TestClaude_AppTools_Targeted(t *testing.T) {
 	assertClaudePromptExists(t, mcpClient)
 	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
 
-	base := fmt.Sprintf("cl-target-%d", time.Now().UnixNano()%1000000)
+	base := fmt.Sprintf("%s-%d", testutil.PrefixWithRunID("cl-target"), time.Now().UnixNano()%1000000)
 	nameA := base + "-a"
 	nameB := base + "-b"
 	prompt := fmt.Sprintf(
@@ -1086,7 +1086,7 @@ func TestClaude_AppWorkflow_OneShot(t *testing.T) {
 	assertClaudePromptExists(t, mcpClient)
 	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
 
-	base := fmt.Sprintf("cl-workflow-%d", time.Now().UnixNano()%1000000)
+	base := fmt.Sprintf("%s-%d", testutil.PrefixWithRunID("cl-workflow"), time.Now().UnixNano()%1000000)
 	nameA := base + "-a"
 	nameB := base + "-b"
 	prompt := fmt.Sprintf(

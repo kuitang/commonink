@@ -386,7 +386,7 @@ func TestAppsAPI_Roundtrip_CreateGetDelete(t *testing.T) {
 		t.Skip("SPRITE_TOKEN is not set or looks like a dummy token; skipping roundtrip test")
 	}
 	env := getAppsAPIEnv(t)
-	appName := "e2e-rt-" + strconv.FormatInt(time.Now().UnixMilli()%100000, 10)
+	appName := fmt.Sprintf("%s-%d", testutil.PrefixWithRunID("e2e-rt"), time.Now().UnixMilli()%100000)
 
 	defer func() {
 		_ = env.deleteAppViaMCP(appName)

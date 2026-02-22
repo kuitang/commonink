@@ -42,6 +42,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
+	e2etestutil "github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
 const (
@@ -730,7 +731,7 @@ func GenerateUniqueAppName(prefix string) string {
 	if _, err := crand.Read(suffix); err != nil {
 		panic(fmt.Sprintf("failed to generate unique app name suffix: %v", err))
 	}
-	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(suffix))
+	return fmt.Sprintf("%s-%s", e2etestutil.PrefixWithRunID(prefix), hex.EncodeToString(suffix))
 }
 
 // =============================================================================
