@@ -101,12 +101,9 @@ func (h *WebHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware *auth.Mid
 
 	// Settings - API Key management (auth required - redirect to login for web pages)
 	mux.Handle("GET /settings/api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleAPIKeySettings)))
-	mux.Handle("POST /settings/api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
-	mux.Handle("POST /settings/api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
+	mux.Handle("GET /settings/api-keys/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewAPIKeyPage)))
 
-	// API Key management - short URLs (aliases for /settings/api-keys)
-	mux.Handle("GET /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleAPIKeySettings)))
-	mux.Handle("GET /api-keys/new", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleNewAPIKeyPage)))
+	// API key form submission endpoints
 	mux.Handle("POST /api-keys", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleCreateAPIKey)))
 	mux.Handle("POST /api-keys/{id}/revoke", authMiddleware.RequireAuthWithRedirect(http.HandlerFunc(h.HandleRevokeAPIKey)))
 

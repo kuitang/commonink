@@ -970,8 +970,8 @@ func TestWebHandler_APIKeySettings_Properties(t *testing.T) {
 		email := testutil.EmailGenerator().Draw(rt, "email")
 		client, _ := webFormAuthClient(ts, email)
 
-		// Property: GET /api-keys returns 200 with API key list page
-		resp, err := client.Get(ts.URL + "/api-keys")
+		// Property: GET /settings/api-keys returns 200 with API key list page
+		resp, err := client.Get(ts.URL + "/settings/api-keys")
 		if err != nil {
 			rt.Fatalf("Request failed: %v", err)
 		}
@@ -1003,8 +1003,8 @@ func TestWebHandler_APIKeySettingsUnauthenticated(t *testing.T) {
 		return http.ErrUseLastResponse
 	}
 
-	// Property: Unauthenticated GET /api-keys redirects to login
-	resp, err := client.Get(ts.URL + "/api-keys")
+	// Property: Unauthenticated GET /settings/api-keys redirects to login
+	resp, err := client.Get(ts.URL + "/settings/api-keys")
 	if err != nil {
 		t.Fatalf("Request failed: %v", err)
 	}
@@ -1032,8 +1032,8 @@ func TestWebHandler_NewAPIKeyPage_Properties(t *testing.T) {
 		email := testutil.EmailGenerator().Draw(rt, "email")
 		client, _ := webFormAuthClient(ts, email)
 
-		// Property: GET /api-keys/new returns 200 with creation form
-		resp, err := client.Get(ts.URL + "/api-keys/new")
+		// Property: GET /settings/api-keys/new returns 200 with creation form
+		resp, err := client.Get(ts.URL + "/settings/api-keys/new")
 		if err != nil {
 			rt.Fatalf("Request failed: %v", err)
 		}

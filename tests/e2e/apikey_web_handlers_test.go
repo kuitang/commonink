@@ -26,12 +26,9 @@ import (
 // API KEY WEB HANDLER TESTS
 // These test the HTML form endpoints for API key management:
 //   GET  /settings/api-keys         - list page
-//   GET  /api-keys                  - list page (alias)
-//   GET  /api-keys/new              - new key form
-//   POST /settings/api-keys         - create key
-//   POST /api-keys                  - create key (alias)
-//   POST /settings/api-keys/{id}/revoke - revoke key
-//   POST /api-keys/{id}/revoke      - revoke key (alias)
+//   GET  /settings/api-keys/new     - new key form
+//   POST /api-keys                  - create key
+//   POST /api-keys/{id}/revoke      - revoke key
 // =============================================================================
 
 // webFormAPIKeyHelper provides helpers for API key web handler tests.
@@ -176,8 +173,8 @@ func testAPIKeyWeb_Roundtrip_Properties(rt *rapid.T, ts *webFormServer) {
 		rt.Fatal("Created page should contain the API key token with correct prefix")
 	}
 
-	// Property 3: Key appears in the /api-keys list page
-	listStatus, listBody := helper.getPage(client, "/api-keys")
+	// Property 3: Key appears in the /settings/api-keys list page
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys")
 	if listStatus != http.StatusOK {
 		rt.Fatalf("List API keys page should return 200, got %d", listStatus)
 	}
@@ -185,7 +182,7 @@ func testAPIKeyWeb_Roundtrip_Properties(rt *rapid.T, ts *webFormServer) {
 		rt.Fatalf("API key %q should appear in list page", keyName)
 	}
 
-	// Property 4: Key also appears in the /settings/api-keys page (alias)
+	// Property 4: Key also appears in the /settings/api-keys page
 	settingsStatus, settingsBody := helper.getPage(client, "/settings/api-keys")
 	if settingsStatus != http.StatusOK {
 		rt.Fatalf("Settings API keys page should return 200, got %d", settingsStatus)
@@ -225,22 +222,22 @@ func testAPIKeyWeb_PageRendering_Properties(rt *rapid.T, ts *webFormServer) {
 	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
-	// Property 1: GET /api-keys returns 200 with expected page elements
-	listStatus, listBody := helper.getPage(client, "/api-keys")
+	// Property 1: GET /settings/api-keys returns 200 with expected page elements
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys")
 	if listStatus != http.StatusOK {
-		rt.Fatalf("GET /api-keys should return 200, got %d", listStatus)
+		rt.Fatalf("GET /settings/api-keys should return 200, got %d", listStatus)
 	}
-	if !strings.Contains(listBody, "API Keys") {
-		rt.Fatal("API keys page should contain heading 'API Keys'")
+	if !strings.Contains(listBody, "API and OAuth Credentials") {
+		rt.Fatal("API keys page should contain heading 'API and OAuth Credentials'")
 	}
-	if !strings.Contains(listBody, "New API Key") {
-		rt.Fatal("API keys page should contain link to create new key")
+	if !strings.Contains(listBody, "Create API") {
+		rt.Fatal("API keys page should contain a create API action")
 	}
 
-	// Property 2: GET /api-keys/new returns 200 with form elements
-	newStatus, newBody := helper.getPage(client, "/api-keys/new")
+	// Property 2: GET /settings/api-keys/new returns 200 with form elements
+	newStatus, newBody := helper.getPage(client, "/settings/api-keys/new")
 	if newStatus != http.StatusOK {
-		rt.Fatalf("GET /api-keys/new should return 200, got %d", newStatus)
+		rt.Fatalf("GET /settings/api-keys/new should return 200, got %d", newStatus)
 	}
 	if !strings.Contains(newBody, "Create New API Key") {
 		rt.Fatal("New key page should contain 'Create New API Key'")
@@ -257,8 +254,8 @@ func testAPIKeyWeb_PageRendering_Properties(rt *rapid.T, ts *webFormServer) {
 	if settingsStatus != http.StatusOK {
 		rt.Fatalf("GET /settings/api-keys should return 200, got %d", settingsStatus)
 	}
-	if !strings.Contains(settingsBody, "API Keys") {
-		rt.Fatal("Settings API keys page should contain heading 'API Keys'")
+	if !strings.Contains(settingsBody, "API and OAuth Credentials") {
+		rt.Fatal("Settings API keys page should contain heading 'API and OAuth Credentials'")
 	}
 
 	// Property 4: Empty state shows "No API keys" message
@@ -286,7 +283,7 @@ func FuzzAPIKeyWeb_PageRendering_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property 3: Unauthenticated Access - Redirects to login
+// Property 3: Unauthenticated Access - method enforcement + redirects to login
 // =============================================================================
 
 func testAPIKeyWeb_UnauthAccess_Properties(rt *rapid.T, ts *webFormServer) {
@@ -295,28 +292,24 @@ func testAPIKeyWeb_UnauthAccess_Properties(rt *rapid.T, ts *webFormServer) {
 		return http.ErrUseLastResponse
 	}
 
-	// Property 1: GET /api-keys redirects unauthenticated users to login
+	// Property 1: GET /api-keys is method-not-allowed (path is POST-only)
 	resp, err := client.Get(ts.URL + "/api-keys")
 	if err != nil {
 		rt.Fatalf("Request failed: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		rt.Fatalf("Unauthenticated GET /api-keys should redirect (302), got %d", resp.StatusCode)
-	}
-	location := resp.Header.Get("Location")
-	if !strings.Contains(location, "login") {
-		rt.Fatalf("Should redirect to login, got: %s", location)
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		rt.Fatalf("GET /api-keys should return 405, got %d", resp.StatusCode)
 	}
 
-	// Property 2: GET /api-keys/new redirects unauthenticated users
-	resp2, err := client.Get(ts.URL + "/api-keys/new")
+	// Property 2: GET /settings/api-keys/new redirects unauthenticated users
+	resp2, err := client.Get(ts.URL + "/settings/api-keys/new")
 	if err != nil {
 		rt.Fatalf("Request failed: %v", err)
 	}
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusFound {
-		rt.Fatalf("Unauthenticated GET /api-keys/new should redirect (302), got %d", resp2.StatusCode)
+		rt.Fatalf("Unauthenticated GET /settings/api-keys/new should redirect (302), got %d", resp2.StatusCode)
 	}
 
 	// Property 3: POST /api-keys redirects unauthenticated users
@@ -357,6 +350,26 @@ func TestAPIKeyWeb_UnauthAccess_Properties(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		testAPIKeyWeb_UnauthAccess_Properties(rt, ts)
 	})
+}
+
+func TestAPIKeyWeb_GetAPIKeys_MethodNotAllowed(t *testing.T) {
+	ts := setupWebFormServer(t)
+	defer ts.cleanup()
+
+	client := ts.Client()
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	resp, err := client.Get(ts.URL + "/api-keys")
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api-keys should return 405, got %d", resp.StatusCode)
+	}
 }
 
 // =============================================================================
@@ -498,7 +511,7 @@ func testAPIKeyWeb_Revocation_Properties(rt *rapid.T, ts *webFormServer) {
 	}
 
 	// Property 1: Key appears in list
-	listStatus, listBody := helper.getPage(client, "/api-keys")
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys")
 	if listStatus != http.StatusOK {
 		rt.Fatalf("List API keys should return 200, got %d", listStatus)
 	}
@@ -506,24 +519,24 @@ func testAPIKeyWeb_Revocation_Properties(rt *rapid.T, ts *webFormServer) {
 		rt.Fatalf("Key %q should appear in list", keyName)
 	}
 
-	// Extract key ID from the revoke form action in the list page
+	// Extract key ID from the revoke form action in the list page.
 	// The form action pattern: /api-keys/{uuid}/revoke
 	keyID := extractKeyIDFromRevokeAction(listBody, "/api-keys/")
 	if keyID == "" {
 		rt.Fatal("List page should contain revoke form action with key ID")
 	}
 
-	// Property 2: POST /api-keys/{id}/revoke redirects to /api-keys
+	// Property 2: POST /api-keys/{id}/revoke redirects to /settings/api-keys
 	revokeStatus, revokeLocation, revokeBody := helper.postForm(client, "/api-keys/"+keyID+"/revoke", url.Values{})
 	if revokeStatus != http.StatusFound {
 		rt.Fatalf("Revoke should redirect (302), got %d, body: %s", revokeStatus, revokeBody[:min(len(revokeBody), 200)])
 	}
-	if !strings.Contains(revokeLocation, "/api-keys") {
-		rt.Fatalf("Revoke should redirect to /api-keys, got: %s", revokeLocation)
+	if !strings.Contains(revokeLocation, "/settings/api-keys") {
+		rt.Fatalf("Revoke should redirect to /settings/api-keys, got: %s", revokeLocation)
 	}
 
 	// Property 3: Key no longer appears in list after revocation
-	listStatus2, listBody2 := helper.getPage(client, "/api-keys")
+	listStatus2, listBody2 := helper.getPage(client, "/settings/api-keys")
 	if listStatus2 != http.StatusOK {
 		rt.Fatalf("List API keys should return 200 after revoke, got %d", listStatus2)
 	}
@@ -621,7 +634,7 @@ func testAPIKeyWeb_MultipleKeys_Properties(rt *rapid.T, ts *webFormServer) {
 	}
 
 	// Property: All keys appear in the list page
-	listStatus, listBody := helper.getPage(client, "/api-keys")
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys")
 	if listStatus != http.StatusOK {
 		rt.Fatalf("List should return 200, got %d", listStatus)
 	}
@@ -664,7 +677,7 @@ func testAPIKeyWeb_SettingsRoute_Properties(rt *rapid.T, ts *webFormServer) {
 	_, sessionCookie := helper.createUserWithPassword(rt, email, password)
 	client := helper.newAuthenticatedClient(sessionCookie)
 
-	// Create a key via the /settings/api-keys route
+	// Create a key via POST /api-keys.
 	createForm := url.Values{
 		"name":       {keyName},
 		"scope":      {"read_write"},
@@ -672,15 +685,15 @@ func testAPIKeyWeb_SettingsRoute_Properties(rt *rapid.T, ts *webFormServer) {
 		"email":      {email},
 		"password":   {password},
 	}
-	status, _, body := helper.postForm(client, "/settings/api-keys", createForm)
+	status, _, body := helper.postForm(client, "/api-keys", createForm)
 	if status != http.StatusOK {
-		rt.Fatalf("Create via settings route should succeed, got %d", status)
+		rt.Fatalf("Create via /api-keys should succeed, got %d", status)
 	}
 	if !strings.Contains(body, "API Key Created") {
-		rt.Fatal("Settings create should render created page")
+		rt.Fatal("Create should render created page")
 	}
 
-	// Property: /settings/api-keys and /api-keys both show the key
+	// Property: /settings/api-keys shows the key
 	settingsStatus, settingsBody := helper.getPage(client, "/settings/api-keys")
 	if settingsStatus != http.StatusOK {
 		rt.Fatalf("GET /settings/api-keys should return 200, got %d", settingsStatus)
@@ -691,12 +704,12 @@ func testAPIKeyWeb_SettingsRoute_Properties(rt *rapid.T, ts *webFormServer) {
 
 	// Property: Revocation via settings route works
 	// Extract key ID from settings page revoke form
-	keyID := extractKeyIDFromRevokeAction(settingsBody, "/settings/api-keys/")
+	keyID := extractKeyIDFromRevokeAction(settingsBody, "/api-keys/")
 	if keyID == "" {
 		rt.Fatal("Settings page should contain settings revoke form action with key ID")
 	}
 
-	revokeStatus, _, _ := helper.postForm(client, "/settings/api-keys/"+keyID+"/revoke", url.Values{})
+	revokeStatus, _, _ := helper.postForm(client, "/api-keys/"+keyID+"/revoke", url.Values{})
 	if revokeStatus != http.StatusFound {
 		rt.Fatalf("Settings revoke should redirect (302), got %d", revokeStatus)
 	}
@@ -749,7 +762,7 @@ func testAPIKeyWeb_DefaultScope_Properties(rt *rapid.T, ts *webFormServer) {
 	}
 
 	// Property: List page shows the key with read_write scope
-	listStatus, listBody := helper.getPage(client, "/api-keys")
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys")
 	if listStatus != http.StatusOK {
 		rt.Fatalf("List should return 200, got %d", listStatus)
 	}
@@ -790,8 +803,8 @@ func testAPIKeyWeb_ErrorDisplay_Properties(rt *rapid.T, ts *webFormServer) {
 
 	errorMsg := "Test+error+message"
 
-	// Property 1: /api-keys?error=... shows error message
-	listStatus, listBody := helper.getPage(client, "/api-keys?error="+errorMsg)
+	// Property 1: /settings/api-keys?error=... shows error message
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys?error="+errorMsg)
 	if listStatus != http.StatusOK {
 		rt.Fatalf("List with error should return 200, got %d", listStatus)
 	}
@@ -799,8 +812,8 @@ func testAPIKeyWeb_ErrorDisplay_Properties(rt *rapid.T, ts *webFormServer) {
 		rt.Fatal("List page should display error from query param")
 	}
 
-	// Property 2: /api-keys/new?error=... shows error message
-	newStatus, newBody := helper.getPage(client, "/api-keys/new?error="+errorMsg)
+	// Property 2: /settings/api-keys/new?error=... shows error message
+	newStatus, newBody := helper.getPage(client, "/settings/api-keys/new?error="+errorMsg)
 	if newStatus != http.StatusOK {
 		rt.Fatalf("New page with error should return 200, got %d", newStatus)
 	}
@@ -850,7 +863,7 @@ func testAPIKeyWeb_TokenOneTimeReveal_Properties(rt *rapid.T, ts *webFormServer)
 	}
 
 	// Property 2: Token does NOT appear in subsequent list pages
-	listStatus, listBody := helper.getPage(client, "/api-keys")
+	listStatus, listBody := helper.getPage(client, "/settings/api-keys")
 	if listStatus != http.StatusOK {
 		rt.Fatalf("List should return 200, got %d", listStatus)
 	}
@@ -958,8 +971,8 @@ func TestAPIKeyWeb_CreatedTokenWorks_Properties(t *testing.T) {
 // =============================================================================
 
 // extractKeyIDFromRevokeAction extracts a key ID from a revoke form action in HTML.
-// It looks for patterns like: action="/api-keys/{id}/revoke" or action="/settings/api-keys/{id}/revoke"
-// The prefix parameter should be e.g. "/api-keys/" or "/settings/api-keys/".
+// It looks for patterns like action="/api-keys/{id}/revoke".
+// The prefix parameter should be "/api-keys/".
 func extractKeyIDFromRevokeAction(html, prefix string) string {
 	suffix := "/revoke"
 	idx := strings.Index(html, prefix)
