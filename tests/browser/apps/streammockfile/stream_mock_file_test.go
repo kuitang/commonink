@@ -56,6 +56,7 @@ func TestBrowser_AppDetail_StreamMock_FileEvent(t *testing.T) {
 		"event: file",
 		`data: {"html":"<button data-path=\"mock.txt\" class=\"file-btn block w-full text-left px-2 py-1.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 truncate\">mock.txt</button>"}`,
 		"",
+		"",
 	}, "\n")
 
 	if err := page.Route(streamPattern, func(route playwright.Route) {

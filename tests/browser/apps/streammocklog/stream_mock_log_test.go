@@ -56,6 +56,7 @@ func TestBrowser_AppDetail_StreamMock_LogEvent(t *testing.T) {
 		"event: log",
 		`data: {"output":"mock log line","stderr":"","exit_code":0}`,
 		"",
+		"",
 	}, "\n")
 
 	if err := page.Route(streamPattern, func(route playwright.Route) {
