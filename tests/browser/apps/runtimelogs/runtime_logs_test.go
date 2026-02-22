@@ -8,7 +8,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-const spriteTimeoutMS = 120000
+const spriteTimeoutMS = 5000
 
 func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
 	t.Helper()

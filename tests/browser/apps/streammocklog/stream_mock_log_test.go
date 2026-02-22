@@ -8,7 +8,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-const spriteTimeoutMS = 120000
+const spriteTimeoutMS = 5000
 
 func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
 	t.Helper()
@@ -52,8 +52,8 @@ func TestBrowser_AppDetail_StreamMock_LogEvent(t *testing.T) {
 
 	streamPattern := "**/api/apps/" + appName + "/stream?*"
 	mockSSE := BuildTestSSEEventBody("log", map[string]any{
-		"output": "mock log line",
-		"stderr": "",
+		"output":    "mock log line",
+		"stderr":    "",
 		"exit_code": 0,
 	})
 

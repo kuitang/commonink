@@ -568,4 +568,3 @@ func TestCtrlEnter_SavesNote(t *testing.T) {
 		t.Errorf("Expected title %q, got %q", noteTitle, strings.TrimSpace(titleText))
 	}
 }
-

@@ -721,4 +721,3 @@ func TestBrowser_Auth_DefaultTheme_CardNoTranslateOnHover(t *testing.T) {
 		t.Errorf("Card should have no transform on hover in default theme, got %q", transformStr)
 	}
 }
-
