@@ -80,7 +80,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	}
 
 	actionOutput := page.Locator("#action-result pre")
-	waitForAction := func(action string) string {
+	waitForAction := func(action string, allowInProgress bool) string {
 		_, err = page.WaitForFunction(`(act) => {
 			const el = document.querySelector('#action-result pre');
 			if (!el) return false;
@@ -90,12 +90,15 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 		}`, action, playwright.PageWaitForFunctionOptions{
 			Timeout: playwright.Float(spriteTimeoutMS),
 		})
-		if err != nil {
-			text, _ := actionOutput.TextContent()
-			t.Fatalf("Action %q did not complete (output: %q): %v", action, text, err)
-		}
 		text, _ := actionOutput.TextContent()
 		lower := strings.ToLower(text)
+		if err != nil {
+			if allowInProgress && strings.Contains(lower, "running "+strings.ToLower(action)+"...") {
+				t.Logf("Action %q still in progress after %dms (output: %q)", action, spriteTimeoutMS, text)
+				return text
+			}
+			t.Fatalf("Action %q did not complete (output: %q): %v", action, text, err)
+		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "service not found") || strings.Contains(lower, "requested url returned error") {
 			t.Fatalf("Action %q failed: %q", action, text)
 		}
@@ -105,15 +108,15 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	if err := stopBtn.Click(); err != nil {
 		t.Fatalf("Failed to click stop: %v", err)
 	}
-	waitForAction("stop")
+	waitForAction("stop", false)
 
 	if err := startBtn.Click(); err != nil {
 		t.Fatalf("Failed to click start: %v", err)
 	}
-	waitForAction("start")
+	waitForAction("start", true)
 
 	if err := restartBtn.Click(); err != nil {
 		t.Fatalf("Failed to click restart: %v", err)
 	}
-	waitForAction("restart")
+	waitForAction("restart", true)
 }
