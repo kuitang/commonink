@@ -88,6 +88,7 @@
     var streamQuery = "lines=100";
     var streamRetryTimer = null;
     var streamConnected = false;
+    var streamReceivedEvent = false;
 
     function clearStreamFlash() {
         var flash = document.getElementById('stream-inline-flash');
@@ -190,6 +191,7 @@
             var payload;
             try { payload = JSON.parse(event.data); } catch (_err) { return; }
             if (!payload || typeof payload.html !== 'string') return;
+            streamReceivedEvent = true;
             if (!streamConnected) {
                 streamConnected = true;
                 clearStreamFlash();
@@ -205,6 +207,7 @@
                 setLogOutput('Error: ' + payload.error);
                 return;
             }
+            streamReceivedEvent = true;
             if (!streamConnected) {
                 streamConnected = true;
                 clearStreamFlash();
@@ -220,7 +223,9 @@
         streamSource.onerror = function() {
             streamConnected = false;
             stopStream();
-            setLogOutput('Live logs disconnected. Retrying...');
+            if (!streamReceivedEvent) {
+                setLogOutput('Live logs disconnected. Retrying...');
+            }
             probeStreamStartError().then(function(errText) {
                 if (errText) {
                     console.error('App stream startup failed:', errText);
