@@ -1,3 +1,6 @@
+//go:build sprite
+// +build sprite
+
 package browser
 
 import (
