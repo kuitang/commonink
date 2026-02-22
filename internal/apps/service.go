@@ -476,16 +476,16 @@ func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutS
 	appLogf("app_bash success user=%q app=%q sprite=%q exit_code=%d runtime_ms=%d port_status=%q next_status=%q", s.userID, meta.Name, meta.SpriteName, exitCode, runtimeMS, portStatus, nextStatus)
 
 	return &AppBashResult{
-		Stdout:         stdout,
-		Stderr:         stderr,
+		Stdout:          stdout,
+		Stderr:          stderr,
 		StdoutTruncated: stdoutBuf.Truncated(),
 		StderrTruncated: stderrBuf.Truncated(),
-		ExitCode:       exitCode,
-		RuntimeMS:      runtimeMS,
-		PortStatus:     portStatus,
-		PublicURL:      meta.PublicURL,
-		Warning:        warning,
-		TimeoutSeconds: timeoutSeconds,
+		ExitCode:        exitCode,
+		RuntimeMS:       runtimeMS,
+		PortStatus:      portStatus,
+		PublicURL:       meta.PublicURL,
+		Warning:         warning,
+		TimeoutSeconds:  timeoutSeconds,
 	}, nil
 }
 

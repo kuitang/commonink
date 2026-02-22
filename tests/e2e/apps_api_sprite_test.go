@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
 // spriteTokenIsReal returns true if the SPRITE_TOKEN env var looks like
@@ -44,7 +42,7 @@ func TestAppsAPI_Roundtrip_CreateGetDelete(t *testing.T) {
 		t.Skip("SPRITE_TOKEN is not set or looks like a dummy token; skipping roundtrip test")
 	}
 	env := getAppsAPIEnv(t)
-	appName := fmt.Sprintf("%s-%d", testutil.PrefixWithRunID("e2e-rt"), time.Now().UnixMilli()%100000)
+	appName := fmt.Sprintf("e2e-rt-%d", time.Now().UnixMilli()%100000)
 
 	defer func() {
 		_ = env.deleteAppViaMCP(appName)

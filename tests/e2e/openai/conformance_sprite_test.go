@@ -29,7 +29,7 @@ func TestOpenAI_AppTools_Targeted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	base := fmt.Sprintf("%s-%d", testutil.PrefixWithRunID("oa-target"), time.Now().UnixNano()%1000000)
+	base := fmt.Sprintf("oa-target-%d", time.Now().UnixNano()%1000000)
 	nameA := base + "-a"
 	nameB := base + "-b"
 	prompt := fmt.Sprintf(
@@ -66,7 +66,7 @@ func TestOpenAI_AppWorkflow_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
-	base := fmt.Sprintf("%s-%d", testutil.PrefixWithRunID("oa-workflow"), time.Now().UnixNano()%1000000)
+	base := fmt.Sprintf("oa-workflow-%d", time.Now().UnixNano()%1000000)
 	nameA := base + "-a"
 	nameB := base + "-b"
 	prompt := fmt.Sprintf(

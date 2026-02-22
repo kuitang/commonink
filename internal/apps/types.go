@@ -74,16 +74,16 @@ type AppReadResult struct {
 
 // AppBashResult is the response payload for app_bash.
 type AppBashResult struct {
-	Stdout         string `json:"stdout"`
-	Stderr         string `json:"stderr"`
+	Stdout          string `json:"stdout"`
+	Stderr          string `json:"stderr"`
 	StdoutTruncated bool   `json:"stdout_truncated"`
 	StderrTruncated bool   `json:"stderr_truncated"`
-	ExitCode       int    `json:"exit_code"`
-	RuntimeMS      int64  `json:"runtime_ms"`
-	PortStatus     string `json:"port_status,omitempty"`
-	PublicURL      string `json:"public_url,omitempty"`
-	Warning        string `json:"warning,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	ExitCode        int    `json:"exit_code"`
+	RuntimeMS       int64  `json:"runtime_ms"`
+	PortStatus      string `json:"port_status,omitempty"`
+	PublicURL       string `json:"public_url,omitempty"`
+	Warning         string `json:"warning,omitempty"`
+	TimeoutSeconds  int    `json:"timeout_seconds"`
 }
 
 // AppLogsResult is the response payload for app log tailing.

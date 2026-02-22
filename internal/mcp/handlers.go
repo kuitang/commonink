@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	maxAppWriteFilesInput         = 64
-	maxAppWritePathBytesInput     = 1024
-	maxAppWriteFileBytesInput     = 1 << 20
-	maxAppWriteTotalBytesInput    = 8 << 20
-	maxAppBashCommandBytesInput   = 32768
+	maxAppWriteFilesInput       = 64
+	maxAppWritePathBytesInput   = 1024
+	maxAppWriteFileBytesInput   = 1 << 20
+	maxAppWriteTotalBytesInput  = 8 << 20
+	maxAppBashCommandBytesInput = 32768
 )
 
 // Handler implements MCP tool call handling.
