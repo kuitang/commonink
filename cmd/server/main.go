@@ -17,6 +17,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"strconv"
 	"strings"
 	"syscall"
@@ -51,7 +53,106 @@ const (
 
 	// DefaultBucketName is the default S3 bucket for mock storage
 	DefaultBucketName = "commonink-public"
+
+	// Max time allowed for reading HTTP request headers.
+	HTTPReadHeaderTimeout = 10 * time.Second
 )
+
+type connIDContextKey struct{}
+
+var (
+	connectionIDCounter atomic.Uint64
+	connectionIDs       sync.Map
+)
+
+func newConnectionID() string {
+	seq := connectionIDCounter.Add(1)
+	return fmt.Sprintf("conn-%06d", seq)
+}
+
+func connectionIDForConn(conn net.Conn) string {
+	if conn == nil {
+		return "unknown"
+	}
+
+	if existing, ok := connectionIDs.Load(conn); ok {
+		if id, ok := existing.(string); ok {
+			return id
+		}
+	}
+
+	id, _ := connectionIDs.LoadOrStore(conn, newConnectionID())
+	if connectionID, ok := id.(string); ok {
+		return connectionID
+	}
+	return "unknown"
+}
+
+func connectionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return "unknown"
+	}
+
+	connID, ok := ctx.Value(connIDContextKey{}).(string)
+	if !ok || connID == "" {
+		return "unknown"
+	}
+
+	return connID
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: HTTPReadHeaderTimeout,
+
+		// Long-lived endpoints (MCP + SSE stream) must not be cut off by request timeouts.
+		ReadTimeout:  0,
+		WriteTimeout: 0,
+		IdleTimeout:  0,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			connID := connectionIDForConn(c)
+			return context.WithValue(ctx, connIDContextKey{}, connID)
+		},
+		ConnState: func(c net.Conn, state http.ConnState) {
+			if c == nil {
+				return
+			}
+
+			connID := connectionIDForConn(c)
+			switch state {
+			case http.StateNew:
+				log.Printf("[CONN OPEN] conn=%s remote=%s", connID, c.RemoteAddr())
+			case http.StateClosed:
+				log.Printf("[CONN CLOSE] conn=%s remote=%s", connID, c.RemoteAddr())
+				connectionIDs.Delete(c)
+			}
+		},
+	}
+
+	return server
+}
+
+func withRequestLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connID := connectionIDFromContext(r.Context())
+		start := time.Now()
+		wrapped, recorder := newStatusRecorder(w)
+
+		next.ServeHTTP(wrapped, r)
+
+		log.Printf(
+			"[REQ] conn=%s method=%s path=%s status=%d remote=%s duration=%s",
+			connID,
+			r.Method,
+			r.URL.RequestURI(),
+			recorder.statusCode,
+			r.RemoteAddr,
+			time.Since(start),
+		)
+	})
+}
 
 // =============================================================================
 // OAuth Token Verifier Adapter
@@ -358,25 +459,10 @@ func main() {
 	log.Println("MCP server mounted at /mcp, /mcp/notes, /mcp/apps (GET/POST/DELETE/OPTIONS; protected with rate limiting)")
 
 	// Wrap mux with request logging middleware
-	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Log every incoming request
-		log.Printf("[REQ] %s %s %s (Host: %s, UA: %s)", r.Method, r.URL.Path, r.URL.RawQuery, r.Host, r.Header.Get("User-Agent"))
-
-		// Capture response status code
-		loggedRW, rw := newStatusRecorder(w)
-		mux.ServeHTTP(loggedRW, r)
-
-		log.Printf("[RES] %s %s -> %d", r.Method, r.URL.Path, rw.statusCode)
-	})
+	loggedMux := withRequestLogging(mux)
 
 	// Create HTTP server
-	server := &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      loggedMux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	server := newHTTPServer(cfg.ListenAddr, loggedMux)
 
 	// Bind the listener BEFORE logging "ready" to avoid a race where the test
 	// detects the log line but the socket isn't accepting connections yet.
@@ -1138,6 +1224,7 @@ func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Reques
 func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
+		log.Printf("[STREAM END] conn=%s app=%q reason=failed to resolve service", connectionIDFromContext(r.Context()), "<unknown>")
 		writeError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
@@ -1145,13 +1232,24 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "App name is required")
+		log.Printf("[STREAM END] conn=%s app=%q reason=empty app name", connectionIDFromContext(r.Context()), name)
 		return
 	}
+
+	connID := connectionIDFromContext(r.Context())
+	streamStart := time.Now()
+	streamEndReason := "completed"
+	defer func() {
+		log.Printf("[STREAM END] conn=%s app=%s reason=%q duration=%s", connID, name, streamEndReason, time.Since(streamStart))
+	}()
+
+	log.Printf("[STREAM START] conn=%s app=%s", connID, name)
 
 	lines := 0
 	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
+			streamEndReason = "invalid lines parameter"
 			writeError(w, http.StatusBadRequest, "invalid lines parameter: must be a positive integer")
 			return
 		}
@@ -1160,6 +1258,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		streamEndReason = "response writer missing flusher"
 		log.Printf("[ERROR] apps stream unavailable for app=%s: response writer lacks http.Flusher (type=%T)", name, w)
 		writeError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
@@ -1167,16 +1266,19 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 
 	initialFiles, err := svc.ListFiles(r.Context(), name)
 	if err != nil {
+		streamEndReason = fmt.Sprintf("failed to list app files: %v", err)
 		writeAppError(w, "list app files", err)
 		return
 	}
 	initialLogs, err := svc.TailLogs(r.Context(), name, lines)
 	if err != nil {
+		streamEndReason = fmt.Sprintf("failed to tail app logs: %v", err)
 		writeAppError(w, "tail app logs", err)
 		return
 	}
 	filesHTML, err := h.renderFilesHTML(initialFiles.Files, "")
 	if err != nil {
+		streamEndReason = "failed to render file list"
 		writeError(w, http.StatusInternalServerError, "Failed to render file list stream")
 		return
 	}
@@ -1192,9 +1294,11 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 	logHash := hashJSON(initialLogPayload)
 
 	if !writeSSEEvent(w, flusher, "file", map[string]any{"html": filesHTML}) {
+		streamEndReason = "failed initial file event write"
 		return
 	}
 	if !writeSSEEvent(w, flusher, "log", initialLogPayload) {
+		streamEndReason = "failed initial log event write"
 		return
 	}
 
@@ -1204,6 +1308,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 	for {
 		select {
 		case <-r.Context().Done():
+			streamEndReason = fmt.Sprintf("context done: %v", r.Context().Err())
 			return
 		case <-ticker.C:
 			sentEvent := false
@@ -1218,6 +1323,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 			}
 			nextFilesHTML, renderErr := h.renderFilesHTML(nextFilesList, nextFilesErrText)
 			if renderErr != nil {
+				streamEndReason = fmt.Sprintf("apps stream render failed: %v", renderErr)
 				log.Printf("apps stream render failed for app=%s: %v", name, renderErr)
 				return
 			}
@@ -1225,6 +1331,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 			if nextFileHash != fileHash {
 				fileHash = nextFileHash
 				if !writeSSEEvent(w, flusher, "file", map[string]any{"html": nextFilesHTML}) {
+					streamEndReason = "failed file event write"
 					return
 				}
 				sentEvent = true
@@ -1235,6 +1342,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 			if nextLogHash != logHash {
 				logHash = nextLogHash
 				if !writeSSEEvent(w, flusher, "log", nextLogPayload) {
+					streamEndReason = "failed log event write"
 					return
 				}
 				sentEvent = true
@@ -1246,6 +1354,7 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 			if !writeSSEEvent(w, flusher, "ping", map[string]any{
 				"ts": time.Now().UTC().Format(time.RFC3339Nano),
 			}) {
+				streamEndReason = "failed ping event write"
 				return
 			}
 		}

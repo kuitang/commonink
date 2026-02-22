@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,6 +84,120 @@ func TestFirstServiceName_NoServiceSignal_Properties(t *testing.T) {
 			t.Fatalf("expected empty service name, got %q (output=%q)", got, output)
 		}
 	})
+}
+
+func TestNewHTTPServer_HasNoRequestTimeoutsForLongLivedConnections(t *testing.T) {
+	server := newHTTPServer("127.0.0.1:0", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	if server.ReadTimeout != 0 {
+		t.Fatalf("expected ReadTimeout to be 0, got %s", server.ReadTimeout)
+	}
+
+	if server.WriteTimeout != 0 {
+		t.Fatalf("expected WriteTimeout to be 0, got %s", server.WriteTimeout)
+	}
+
+	if server.IdleTimeout != 0 {
+		t.Fatalf("expected IdleTimeout to be 0, got %s", server.IdleTimeout)
+	}
+
+	if server.ReadHeaderTimeout != HTTPReadHeaderTimeout {
+		t.Fatalf("expected ReadHeaderTimeout=%s, got %s", HTTPReadHeaderTimeout, server.ReadHeaderTimeout)
+	}
+
+	if server.ConnContext == nil {
+		t.Fatal("expected ConnContext to be set")
+	}
+
+	if server.ConnState == nil {
+		t.Fatal("expected ConnState to be set")
+	}
+}
+
+func TestConnectionIDForConn_IsStableAndUniqueForDifferentConns(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	first := connectionIDForConn(clientConn)
+	second := connectionIDForConn(clientConn)
+	if first != second {
+		t.Fatalf("expected stable connection ID for same conn, got %q and %q", first, second)
+	}
+
+	other := connectionIDForConn(serverConn)
+	if first == other {
+		t.Fatalf("expected unique connection IDs for different conns, got same id %q", first)
+	}
+}
+
+func TestConnectionIDFromContext(t *testing.T) {
+	t.Run("MissingContext", func(t *testing.T) {
+		if got := connectionIDFromContext(context.Background()); got != "unknown" {
+			t.Fatalf("expected missing context connection id to be unknown, got %q", got)
+		}
+	})
+
+	t.Run("SetContext", func(t *testing.T) {
+		const expected = "conn-test-1"
+		ctx := context.WithValue(context.Background(), connIDContextKey{}, expected)
+		if got := connectionIDFromContext(ctx); got != expected {
+			t.Fatalf("expected connection id %q, got %q", expected, got)
+		}
+	})
+}
+
+func TestRequestLogging_IncludesConnectionIDFor405OnMCP(t *testing.T) {
+	var logs bytes.Buffer
+	origOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(origOutput)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /mcp", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := newHTTPServer("127.0.0.1:0", withRequestLogging(mux))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to bind listener: %v", err)
+	}
+	defer listener.Close()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.Serve(listener)
+	}()
+
+	client := &http.Client{}
+	resp, err := client.Get("http://" + listener.Addr().String() + "/mcp")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, resp.StatusCode)
+	}
+
+	if err := server.Shutdown(context.Background()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("server shutdown failed: %v", err)
+	}
+
+	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("server exited with error: %v", err)
+	}
+
+	logOutput := logs.String()
+	line := "conn=unknown"
+	if strings.Contains(logOutput, line) {
+		t.Fatalf("expected request log to include real connection id, got: %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "[REQ]") {
+		t.Fatalf("expected request log marker [REQ], got: %q", logOutput)
+	}
 }
 
 type noFlushResponseWriter struct {
