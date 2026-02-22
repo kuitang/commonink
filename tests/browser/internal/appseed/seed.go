@@ -132,12 +132,28 @@ func SeedApp(t testing.TB, baseURL, sessionID, appName string) string {
 		"path":    "server.py",
 		"content": seedAppPythonServer,
 	})
-	callTool(t, baseURL, sessionID, "app_bash", map[string]any{
-		"app":     appName,
-		"command": "sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080",
+	createAppResp := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
+		"app": appName,
+		"command": `if [ ! -f /home/sprite/server.py ]; then
+  echo "server.py missing at /home/sprite/server.py"
+  exit 1
+fi
+sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080`,
 	})
+	var createAppResult struct {
+		ExitCode int    `json:"exit_code"`
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+	}
+	if err := json.Unmarshal(createAppResp, &createAppResult); err != nil {
+		t.Fatalf("SeedApp: failed to parse app_bash create command result: %v", err)
+	}
+	if createAppResult.ExitCode != 0 {
+		t.Fatalf("SeedApp: failed to create local service for app %s: exit=%d stdout=%q stderr=%q", appName, createAppResult.ExitCode, createAppResult.Stdout, createAppResult.Stderr)
+	}
 
 	deadline := time.Now().Add(30 * time.Second)
+	pollInterval := 250 * time.Millisecond
 	localReady := false
 	lastLocalResult := ""
 	for time.Now().Before(deadline) {
@@ -155,7 +171,7 @@ func SeedApp(t testing.TB, baseURL, sessionID, appName string) string {
 			localReady = true
 			break
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(pollInterval)
 	}
 	if !localReady {
 		servicesList := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
@@ -192,7 +208,7 @@ func SeedApp(t testing.TB, baseURL, sessionID, appName string) string {
 				}
 			}
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(pollInterval)
 	}
 
 	if len(lastBody) > 300 {

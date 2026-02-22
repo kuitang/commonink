@@ -33,9 +33,9 @@ func submitCreateAPIKeyForm(t *testing.T, page playwright.Page, name, scope stri
 	t.Helper()
 	page.Locator("input#name").Fill(name)
 	page.Locator(fmt.Sprintf("input[name='scope'][value='%s']", scope)).Check()
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 }
 
@@ -146,7 +146,7 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 	}
 
 	// Submit form
-	submitButton := page.Locator("button[type='submit']")
+	submitButton := page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit button: %v", err)
@@ -154,14 +154,14 @@ func TestBrowser_APIKeySettings_CreateKey(t *testing.T) {
 
 	// Wait for page to reload with new API key
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Page did not reload: %v", err)
 	}
 
 	// Verify API key value is displayed (only shown once)
-	tokenElement := page.Locator("code#new-token, code#token-value")
+	tokenElement := page.Locator("code#token-value")
 	err = tokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
@@ -235,11 +235,11 @@ func TestBrowser_APIKeySettings_ListKeys(t *testing.T) {
 		page.Locator("input[name='scope'][value='read_write']").Check()
 
 		// Submit
-		page.Locator("button[type='submit']").Click()
+		page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 		// Wait for redirect
 		page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State: playwright.LoadStateNetworkidle,
+			State: playwright.LoadStateDomcontentloaded,
 		})
 	}
 
@@ -312,10 +312,10 @@ func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 
 	page.Locator("input#name").Fill(tokenName)
 	page.Locator("input[name='scope'][value='read_write']").Check()
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Navigate back to API keys page (in case we're showing the new key display)
@@ -343,7 +343,7 @@ func TestBrowser_APIKeySettings_RevokeKey(t *testing.T) {
 
 	// Wait for page to reload
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Page did not reload after revoke: %v", err)
@@ -388,14 +388,14 @@ func TestBrowser_APIKeySettings_CopyKey(t *testing.T) {
 
 	page.Locator("input#name").Fill("Key for Copy Test")
 	page.Locator("input[name='scope'][value='read_write']").Check()
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Get the API key value before clicking copy
-	tokenElement := WaitForSelector(t, page, "code#new-token, code#token-value")
+	tokenElement := WaitForSelector(t, page, "code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get API key value: %v", err)
@@ -507,11 +507,11 @@ func TestBrowser_APIKeySettings_CreateWithoutReauthentication(t *testing.T) {
 	page.Locator("input[name='scope'][value='read_write']").Check()
 
 	// Submit form
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	// Wait for page to reload
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Verify API key value is displayed
@@ -606,10 +606,10 @@ func TestBrowser_APIKeySettings_ReadOnlyScope(t *testing.T) {
 	// Create a read-only API key
 	page.Locator("input#name").Fill("Read Only Key")
 	page.Locator("input[name='scope'][value='read']").Check()
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Navigate back to see the API key in the list
@@ -651,7 +651,7 @@ func TestBrowser_APIKeySettings_RequiresAuth(t *testing.T) {
 
 	// Wait for page to load
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// The auth middleware redirects to /login for web pages (RequireAuthWithRedirect)
@@ -747,14 +747,14 @@ func TestBrowser_APIKeySettings_UseKeyForAPICall(t *testing.T) {
 	// Create an API key
 	page.Locator("input#name").Fill("Key for API Test")
 	page.Locator("input[name='scope'][value='read_write']").Check()
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Get the API key value
-	tokenElement := WaitForSelector(t, page, "code#new-token, code#token-value")
+	tokenElement := WaitForSelector(t, page, "code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get API key value: %v", err)
@@ -830,7 +830,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 		t.Fatalf("Failed to select scope: %v", err)
 	}
 
-	submitButton := page.Locator("button[type='submit']")
+	submitButton := page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')")
 	err = submitButton.Click()
 	if err != nil {
 		t.Fatalf("Failed to click submit: %v", err)
@@ -838,15 +838,15 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 
 	// Wait for page to reload with new API key
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Page did not reload: %v", err)
 	}
 
 	// Wait for API key element to appear with extended timeout
-	// The key might be in code#new-token (settings/api-keys.html) or code#token-value (api-keys/created.html)
-	tokenElement := page.Locator("code#new-token, code#token-value")
+	// The key is displayed in code#token-value on the created key page.
+	tokenElement := page.Locator("code#token-value")
 	err = tokenElement.First().WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
@@ -899,7 +899,7 @@ func TestBrowser_APIKeySettings_RevokedKeyFailsAPI(t *testing.T) {
 
 	// Wait for page to reload
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Verify API key no longer works via API
@@ -953,14 +953,14 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	tokenName := "Key for Navigate Test"
 	page.Locator("input#name").Fill(tokenName)
 	page.Locator("input[name='scope'][value='read_write']").Check()
-	page.Locator("button[type='submit']").Click()
+	page.Locator("form[action='/api-keys'] button[type='submit']:has-text('Create API Key')").Click()
 
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Verify API key is displayed
-	tokenElement := WaitForSelector(t, page, "code#new-token, code#token-value")
+	tokenElement := WaitForSelector(t, page, "code#token-value")
 	tokenValue, err := tokenElement.TextContent()
 	if err != nil {
 		t.Fatalf("Failed to get API key value: %v", err)
@@ -973,14 +973,14 @@ func TestBrowser_APIKeySettings_NavigateAwayMasksKey(t *testing.T) {
 	// Navigate away to /notes
 	Navigate(t, page, env.BaseURL, "/notes")
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// Navigate back to /settings/api-keys
 	navigateAPIKeyHub(t, page, env.BaseURL)
 
-	// The new-token element should not be visible
-	newTokenElement := page.Locator("code#new-token, code#token-value")
+	// The API key element should not be visible on the settings page after navigation.
+	newTokenElement := page.Locator("code#token-value")
 	err = newTokenElement.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(browserMaxTimeoutMS),
