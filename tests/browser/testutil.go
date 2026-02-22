@@ -50,6 +50,10 @@ const (
 	// Never introduce a larger timeout value anywhere in tests/browser.
 	browserMaxTimeoutMS = 5000
 	browserMaxTimeout   = 5 * time.Second
+
+	// Exported aliases for subpackages under tests/browser.
+	BrowserMaxTimeoutMS = browserMaxTimeoutMS
+	BrowserMaxTimeout   = browserMaxTimeout
 )
 
 var browserSharedFixtureSessionTables = []string{
@@ -64,7 +68,6 @@ var browserSharedFixtureSessionTables = []string{
 }
 
 var browserFixtureMu sync.Mutex
-var browserTestMutex sync.Mutex
 var browserSharedFixture *BrowserTestEnv
 
 // BrowserTestEnv is the unified test environment for all browser tests.
@@ -98,10 +101,6 @@ type BrowserTestEnv struct {
 // SetupBrowserTestEnv creates a fully wired test server with all services.
 func SetupBrowserTestEnv(t *testing.T) *BrowserTestEnv {
 	t.Helper()
-
-	// Tests in this package mutate global DB state; serialize to keep fixture resets deterministic.
-	browserTestMutex.Lock()
-	t.Cleanup(browserTestMutex.Unlock)
 
 	env := getOrCreateSharedBrowserTestEnv(t)
 	resetSharedBrowserTestEnvState(t, env)
@@ -552,6 +551,19 @@ func (env *BrowserTestEnv) NewContext(t *testing.T) playwright.BrowserContext {
 	return ctx
 }
 
+// NewContextWithOptions creates a new browser context with caller-provided options.
+func (env *BrowserTestEnv) NewContextWithOptions(t *testing.T, options playwright.BrowserNewContextOptions) playwright.BrowserContext {
+	t.Helper()
+
+	ctx, err := env.browser.NewContext(options)
+	if err != nil {
+		t.Fatalf("could not create browser context with options: %v", err)
+	}
+	ctx.SetDefaultTimeout(browserMaxTimeoutMS)
+	ctx.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+	return ctx
+}
+
 // =============================================================================
 // Navigation and wait helpers
 // =============================================================================
@@ -706,6 +718,15 @@ func GenerateUniqueEmail(prefix string) string {
 	return fmt.Sprintf("%s-%s@example.com", prefix, hex.EncodeToString(suffix))
 }
 
+// GenerateUniqueAppName generates a globally unique app name-safe identifier.
+func GenerateUniqueAppName(prefix string) string {
+	suffix := make([]byte, 16)
+	if _, err := crand.Read(suffix); err != nil {
+		panic(fmt.Sprintf("failed to generate unique app name suffix: %v", err))
+	}
+	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(suffix))
+}
+
 // =============================================================================
 // UI action helpers
 // =============================================================================
@@ -749,7 +770,7 @@ func PublishNoteViaUI(t *testing.T, page playwright.Page) string {
 	}
 
 	err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Failed to wait for page load after publish: %v", err)
@@ -897,6 +918,11 @@ func testFirstServiceName(servicesOutput string) string {
 		}
 	}
 	return ""
+}
+
+// TestFirstServiceName exposes service-name parsing for subpackage tests.
+func TestFirstServiceName(servicesOutput string) string {
+	return testFirstServiceName(servicesOutput)
 }
 
 func testLogStreamPayload(result *apps.AppLogsResult, err error) map[string]any {

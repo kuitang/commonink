@@ -21,7 +21,7 @@ func TestBrowser_PublishNote(t *testing.T) {
 
 	authCtx := env.NewContext(t)
 	defer authCtx.Close()
-	env.LoginUser(t, authCtx, "test@example.com")
+	env.LoginUser(t, authCtx, GenerateUniqueEmail("public-note"))
 
 	page, err := authCtx.NewPage()
 	if err != nil {
@@ -58,7 +58,7 @@ func TestBrowser_PublishNote(t *testing.T) {
 
 	// Wait for page to reload
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for page load: %v", err)
@@ -108,7 +108,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 
 	authCtx := env.NewContext(t)
 	defer authCtx.Close()
-	env.LoginUser(t, authCtx, "unpublish@example.com")
+	env.LoginUser(t, authCtx, GenerateUniqueEmail("unpublish-note"))
 
 	page, err := authCtx.NewPage()
 	if err != nil {
@@ -142,7 +142,7 @@ func TestBrowser_UnpublishNote(t *testing.T) {
 	}
 
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for load: %v", err)
@@ -201,7 +201,7 @@ func TestBrowser_PublicNoteSEO(t *testing.T) {
 	// Create authenticated context to create and publish note
 	authCtx := env.NewContext(t)
 	defer authCtx.Close()
-	env.LoginUser(t, authCtx, "seo@example.com")
+	env.LoginUser(t, authCtx, GenerateUniqueEmail("seo-note"))
 
 	authPage, err := authCtx.NewPage()
 	if err != nil {
@@ -271,7 +271,7 @@ func TestBrowser_ShareLinkIsShortURL(t *testing.T) {
 	// Create authenticated context
 	authCtx := env.NewContext(t)
 	defer authCtx.Close()
-	env.LoginUser(t, authCtx, "share@example.com")
+	env.LoginUser(t, authCtx, GenerateUniqueEmail("share-note"))
 
 	authPage, err := authCtx.NewPage()
 	if err != nil {
@@ -406,17 +406,14 @@ func TestBrowser_CopyShareURL_Regression(t *testing.T) {
 	env.InitBrowser(t)
 
 	// Create context with clipboard permissions so we can read back
-	authCtx, err := env.browser.NewContext(playwright.BrowserNewContextOptions{
+	authCtx := env.NewContextWithOptions(t, playwright.BrowserNewContextOptions{
 		Permissions: []string{"clipboard-read", "clipboard-write"},
 	})
-	if err != nil {
-		t.Fatalf("failed to create browser context: %v", err)
-	}
 	authCtx.SetDefaultTimeout(browserMaxTimeoutMS)
 	authCtx.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
 	defer authCtx.Close()
 
-	env.LoginUser(t, authCtx, "copyurl@example.com")
+	env.LoginUser(t, authCtx, GenerateUniqueEmail("copyurl-note"))
 
 	page, err := authCtx.NewPage()
 	if err != nil {

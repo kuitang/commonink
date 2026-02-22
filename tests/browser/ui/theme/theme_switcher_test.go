@@ -393,7 +393,7 @@ func TestBrowser_ThemeVisual_DefaultAttributes(t *testing.T) {
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'default'); localStorage.removeItem('ci_darkmode'); }`)
 	page.Reload()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// data-theme="default" on html
@@ -446,7 +446,7 @@ func TestBrowser_ThemeVisual_AcademicAttributes(t *testing.T) {
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'academic'); localStorage.removeItem('ci_darkmode'); }`)
 	page.Reload()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// data-theme="academic" on html
@@ -524,7 +524,7 @@ func TestBrowser_ThemeVisual_NeonfizzAttributes(t *testing.T) {
 	page.Evaluate(`() => { localStorage.setItem('ci_theme', 'neonfizz'); localStorage.removeItem('ci_darkmode'); }`)
 	page.Reload()
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 
 	// data-theme="neonfizz" on html

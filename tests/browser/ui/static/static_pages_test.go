@@ -157,7 +157,7 @@ func TestBrowser_Static_PrivacyLinkNavigates(t *testing.T) {
 
 	// Wait for navigation
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Navigation did not complete: %v", err)
@@ -194,7 +194,7 @@ func TestBrowser_Static_TermsLinkNavigates(t *testing.T) {
 
 	// Wait for navigation
 	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State: playwright.LoadStateNetworkidle,
+		State: playwright.LoadStateDomcontentloaded,
 	})
 	if err != nil {
 		t.Fatalf("Navigation did not complete: %v", err)
@@ -322,7 +322,7 @@ func TestBrowser_Static_NoScroll_Desktop(t *testing.T) {
 		}
 
 		err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State: playwright.LoadStateNetworkidle,
+			State: playwright.LoadStateDomcontentloaded,
 		})
 		if err != nil {
 			t.Fatalf("%s did not finish loading: %v", pagePath, err)
@@ -356,7 +356,7 @@ func TestBrowser_Static_NoScroll_Mobile(t *testing.T) {
 		}
 
 		err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State: playwright.LoadStateNetworkidle,
+			State: playwright.LoadStateDomcontentloaded,
 		})
 		if err != nil {
 			t.Fatalf("%s did not finish loading: %v", pagePath, err)
