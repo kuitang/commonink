@@ -122,6 +122,32 @@ func (m *MockEmailService) Count() int {
 	return len(m.Emails)
 }
 
+// LastEmailForRecipient returns the most recent email sent to the provided recipient.
+// The bool return value is false when no matching email exists.
+func (m *MockEmailService) LastEmailForRecipient(to string) (SentEmail, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.Emails) - 1; i >= 0; i-- {
+		if m.Emails[i].To == to {
+			return m.Emails[i], true
+		}
+	}
+	return SentEmail{}, false
+}
+
+// CountForRecipient returns the number of captured emails sent to the provided recipient.
+func (m *MockEmailService) CountForRecipient(to string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for i := range m.Emails {
+		if m.Emails[i].To == to {
+			count++
+		}
+	}
+	return count
+}
+
 type outboxEmailEvent struct {
 	Sequence       uint64 `json:"sequence"`
 	To             string `json:"to"`

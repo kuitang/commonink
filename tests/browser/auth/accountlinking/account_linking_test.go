@@ -16,6 +16,17 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
+func newPageFromContext(t *testing.T, ctx playwright.BrowserContext) playwright.Page {
+	t.Helper()
+	page, err := ctx.NewPage()
+	if err != nil {
+		t.Fatalf("Failed to create page from context: %v", err)
+	}
+	page.SetDefaultTimeout(browserMaxTimeoutMS)
+	page.SetDefaultNavigationTimeout(browserMaxTimeoutMS)
+	return page
+}
+
 // =============================================================================
 // Test helpers for account linking scenarios
 // =============================================================================

@@ -36,9 +36,11 @@ export SPRITE_TOKEN ?= $(or $(shell ./scripts/resolve-sprite-token.sh 2>/dev/nul
 TEST_SKIP_PATTERNS ?=
 BROWSER_TEST_SKIP_PATTERNS ?=
 CI_BROWSER_SKIP_PATTERNS ?= TestBrowser_NotesCRUD_Pagination|TestScreenshot_AllThemes|TestBrowser_AppDetail_FileSidebar|TestBrowser_AppDetail_VisitAndPost|TestBrowser_AppDetail_LogsShowPost
+MODULE_PATH ?= $(shell go list -m -f '{{.Path}}')
 CPU_COUNT := $(shell nproc 2>/dev/null || echo 4)
 GO_TEST_PARALLEL ?= $(CPU_COUNT)
 GO_TEST_PACKAGE_PARALLEL ?= $(CPU_COUNT)
+GO_TEST_TIMEOUT ?= 120s
 RAPID_CHECKS ?= 10
 RAPID_CHECKS_FULL ?= 100
 RAPID_CHECKS_CONFORMANCE ?= 3
@@ -70,14 +72,21 @@ run-email: build
 	@bash -c 'source secrets.sh && $(BINARY_PATH) --no-oidc --no-s3'
 
 ## test: Quick tests (rapid property tests, excludes e2e conformance + browser)
+FAST_TEST_PACKAGES := $(filter-out \
+	$(MODULE_PATH)/tests/e2e/claude% \
+	$(MODULE_PATH)/tests/e2e/openai% \
+	$(MODULE_PATH)/tests/browser% \
+	, $(shell go list ./...))
+
 test:
-	go test $(BUILD_TAGS) -v -timeout 120s -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
-		$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser') \
+	go test $(BUILD_TAGS) -v -timeout $(GO_TEST_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
+		$(FAST_TEST_PACKAGES) \
 		-run 'Test' -rapid.checks=$(RAPID_CHECKS) $(if $(strip $(TEST_SKIP_PATTERNS)), -skip '$(TEST_SKIP_PATTERNS)',)
 
 ## test-browser: Run browser tests (Playwright)
 test-browser:
-	go test -v ./tests/browser/... $(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip '$(BROWSER_TEST_SKIP_PATTERNS)',)
+	go test -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -v $(MODULE_PATH)/tests/browser/... \
+		$(if $(strip $(BROWSER_TEST_SKIP_PATTERNS)), -skip '$(BROWSER_TEST_SKIP_PATTERNS)',)
 
 ## test-all: Run test + browser test suite
 test-all:
@@ -239,16 +248,13 @@ test-full:
 	log_path="test-results/full-test-$${run_id}.log"; \
 	coverage_out="test-results/coverage-$${run_id}.out"; \
 	coverage_html="test-results/coverage-$${run_id}.html"; \
-		rapid_packages="$$(go list ./... | grep -v 'tests/e2e/claude' | grep -v 'tests/e2e/openai' | grep -v 'tests/browser')"; \
-		browser_packages="$$(go list ./tests/browser/...)"; \
 		echo "Writing full test log to $$log_path"; \
 		{ \
 			echo "Running non-conformance packages with -rapid.checks=$(RAPID_CHECKS_FULL)"; \
 			go test $(BUILD_TAGS) -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) -coverprofile="$$coverage_out" -coverpkg=./... \
-				$$rapid_packages -rapid.checks=$(RAPID_CHECKS_FULL); \
+				$(FAST_TEST_PACKAGES) -rapid.checks=$(RAPID_CHECKS_FULL); \
 			echo "Running browser packages"; \
-			go test -v -timeout $(GO_TEST_FULL_TIMEOUT) -p $(GO_TEST_PACKAGE_PARALLEL) -parallel $(GO_TEST_PARALLEL) \
-				$$browser_packages; \
+			$(MAKE) test-browser BROWSER_TEST_SKIP_PATTERNS='$(BROWSER_TEST_SKIP_PATTERNS)'; \
 				echo "Running conformance packages with -rapid.checks=$(RAPID_CHECKS_CONFORMANCE)"; \
 				set +e; \
 				TEST_LISTEN_PORT="$$claude_test_port" TEST_SERVER_LABEL="claude" env -u TEST_PUBLIC_URL \
