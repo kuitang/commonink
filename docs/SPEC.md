@@ -101,8 +101,8 @@ Schema source: `internal/db/schema.go`.
 - Consent persistence used by runtime OAuth handler is placeholder-backed and does not persist grants as expected.
   - `internal/auth/consent.go`
   - Wiring: `cmd/server/main.go`
-- Paid-tier rate-limit routing is not wired (`getIsPaid` always returns `false`).
-  - `cmd/server/main.go`
+- Paid-tier rate-limit routing is wired via `auth.GetIsPaid(ctx)` cached in auth middleware.
+  - `internal/auth/middleware.go`, `cmd/server/main.go`
 
 ## Source-of-Truth Rule
 Behavioral truth is code under:

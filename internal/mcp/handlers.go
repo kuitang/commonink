@@ -14,17 +14,15 @@ import (
 )
 
 // Handler implements MCP tool call handling.
-type Handler struct {
-	notesSvc *notes.Service
-	appsSvc  *apps.Service
-}
+// Services are resolved per-request from context values set by the
+// AuthenticatedMCPHandler (see WithNotesSvc / WithAppsSvc).
+type Handler struct{}
 
-// NewHandler creates a new MCP handler with notes/apps services.
-func NewHandler(notesSvc *notes.Service, appsSvc *apps.Service) *Handler {
-	return &Handler{
-		notesSvc: notesSvc,
-		appsSvc:  appsSvc,
-	}
+// NewHandler creates a new MCP handler.
+// The handler is stateless; per-request notes/apps services are pulled
+// from context by tool handler closures.
+func NewHandler() *Handler {
+	return &Handler{}
 }
 
 // createToolHandler returns a tool handler function for the given tool name.
@@ -44,19 +42,19 @@ func (h *Handler) createToolHandler(name string) func(ctx context.Context, req *
 func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments map[string]any) (*mcp.CallToolResult, error) {
 	switch name {
 	case "note_view":
-		return h.handleNoteView(arguments)
+		return h.handleNoteView(ctx, arguments)
 	case "note_create":
-		return h.handleNoteCreate(arguments)
+		return h.handleNoteCreate(ctx, arguments)
 	case "note_update":
-		return h.handleNoteUpdate(arguments)
+		return h.handleNoteUpdate(ctx, arguments)
 	case "note_search":
-		return h.handleNoteSearch(arguments)
+		return h.handleNoteSearch(ctx, arguments)
 	case "note_list":
-		return h.handleNoteList(arguments)
+		return h.handleNoteList(ctx, arguments)
 	case "note_delete":
-		return h.handleNoteDelete(arguments)
+		return h.handleNoteDelete(ctx, arguments)
 	case "note_edit":
-		return h.handleNoteEdit(arguments)
+		return h.handleNoteEdit(ctx, arguments)
 	case "app_create":
 		return h.handleAppCreate(ctx, arguments)
 	case "app_write":
@@ -74,18 +72,20 @@ func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments map
 	}
 }
 
-func (h *Handler) requireNotes() error {
-	if h.notesSvc == nil {
-		return errors.New("notes tools are unavailable on this MCP endpoint")
+func requireNotes(ctx context.Context) (*notes.Service, error) {
+	svc := NotesSvcFromContext(ctx)
+	if svc == nil {
+		return nil, errors.New("notes tools are unavailable on this MCP endpoint")
 	}
-	return nil
+	return svc, nil
 }
 
-func (h *Handler) requireApps() error {
-	if h.appsSvc == nil {
-		return errors.New("app tools are unavailable on this MCP endpoint")
+func requireApps(ctx context.Context) (*apps.Service, error) {
+	svc := AppsSvcFromContext(ctx)
+	if svc == nil {
+		return nil, errors.New("app tools are unavailable on this MCP endpoint")
 	}
-	return nil
+	return svc, nil
 }
 
 // newToolResultText creates a successful tool result with text content.
@@ -136,8 +136,9 @@ func marshalToolJSON(value any) string {
 	return string(data)
 }
 
-func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteView(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -146,7 +147,7 @@ func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, erro
 		return newToolResultError("id must be a string"), nil
 	}
 
-	note, err := h.notesSvc.Read(id)
+	note, err := notesSvc.Read(id)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to read note: %v", err)), nil
 	}
@@ -182,8 +183,9 @@ func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, erro
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
-func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteCreate(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -197,7 +199,7 @@ func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, er
 		content = c
 	}
 
-	note, err := h.notesSvc.Create(notes.CreateNoteParams{
+	note, err := notesSvc.Create(notes.CreateNoteParams{
 		Title:   title,
 		Content: content,
 	})
@@ -223,8 +225,9 @@ func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, er
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
-func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteUpdate(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -251,7 +254,7 @@ func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, er
 	}
 	params.PriorHash = &priorHash
 
-	note, err := h.notesSvc.Update(id, params)
+	note, err := notesSvc.Update(id, params)
 	if err != nil {
 		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
 			return newToolResultError(err.Error()), nil
@@ -277,8 +280,9 @@ func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, er
 	return newToolResultText(marshalToolJSON(result)), nil
 }
 
-func (h *Handler) handleNoteSearch(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteSearch(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -287,7 +291,7 @@ func (h *Handler) handleNoteSearch(args map[string]any) (*mcp.CallToolResult, er
 		return newToolResultError("query must be a string"), nil
 	}
 
-	results, err := h.notesSvc.SearchWithSnippets(query)
+	results, err := notesSvc.SearchWithSnippets(query)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to search notes: %v", err)), nil
 	}
@@ -295,8 +299,9 @@ func (h *Handler) handleNoteSearch(args map[string]any) (*mcp.CallToolResult, er
 	return newToolResultText(marshalToolJSON(results)), nil
 }
 
-func (h *Handler) handleNoteList(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteList(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -309,7 +314,7 @@ func (h *Handler) handleNoteList(args map[string]any) (*mcp.CallToolResult, erro
 		offset = int(o)
 	}
 
-	results, err := h.notesSvc.List(limit, offset)
+	results, err := notesSvc.List(limit, offset)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to list notes: %v", err)), nil
 	}
@@ -342,8 +347,9 @@ func (h *Handler) handleNoteList(args map[string]any) (*mcp.CallToolResult, erro
 	return newToolResultText(marshalToolJSON(response)), nil
 }
 
-func (h *Handler) handleNoteDelete(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteDelete(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -351,15 +357,16 @@ func (h *Handler) handleNoteDelete(args map[string]any) (*mcp.CallToolResult, er
 	if !ok {
 		return newToolResultError("id must be a string"), nil
 	}
-	if err := h.notesSvc.Delete(id); err != nil {
+	if err := notesSvc.Delete(id); err != nil {
 		return newToolResultError(fmt.Sprintf("failed to delete note: %v", err)), nil
 	}
 
 	return newToolResultText(fmt.Sprintf("Note %s moved to trash. It will be permanently deleted after 30 days.", id)), nil
 }
 
-func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteEdit(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -395,7 +402,7 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 	}
 	priorHash := &parsed
 
-	note, meta, err := h.notesSvc.StrReplace(id, oldStr, newStr, replaceAll, priorHash)
+	note, meta, err := notesSvc.StrReplace(id, oldStr, newStr, replaceAll, priorHash)
 	if err != nil {
 		if errors.Is(err, notes.ErrNoMatch) || errors.Is(err, notes.ErrAmbiguousMatch) ||
 			errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
@@ -428,7 +435,8 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 }
 
 func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -445,7 +453,7 @@ func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (*mc
 		names = append(names, name)
 	}
 
-	result, err := h.appsSvc.Create(ctx, names)
+	result, err := appsSvc.Create(ctx, names)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to create app: %v", err)), nil
 	}
@@ -457,7 +465,8 @@ func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (*mc
 }
 
 func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -474,7 +483,7 @@ func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (*mcp
 		return newToolResultError("content must be a string"), nil
 	}
 
-	result, err := h.appsSvc.WriteFile(ctx, appName, filePath, content)
+	result, err := appsSvc.WriteFile(ctx, appName, filePath, content)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
@@ -482,7 +491,8 @@ func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (*mcp
 }
 
 func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -495,7 +505,7 @@ func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (*mcp.
 		return newToolResultError("path must be a string"), nil
 	}
 
-	result, err := h.appsSvc.ReadFile(ctx, appName, filePath)
+	result, err := appsSvc.ReadFile(ctx, appName, filePath)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
 	}
@@ -503,7 +513,8 @@ func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (*mcp.
 }
 
 func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -525,7 +536,7 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.
 		timeoutSeconds = int(parsed)
 	}
 
-	result, err := h.appsSvc.RunBash(ctx, appName, command, timeoutSeconds)
+	result, err := appsSvc.RunBash(ctx, appName, command, timeoutSeconds)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to run command: %v", err)), nil
 	}
@@ -533,11 +544,12 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.
 }
 
 func (h *Handler) handleAppList(ctx context.Context) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
-	items, err := h.appsSvc.List(ctx)
+	items, err := appsSvc.List(ctx)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to list apps: %v", err)), nil
 	}
@@ -553,7 +565,8 @@ func (h *Handler) handleAppList(ctx context.Context) (*mcp.CallToolResult, error
 }
 
 func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return newToolResultError(err.Error()), nil
 	}
 
@@ -561,7 +574,7 @@ func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (*mc
 	if !ok {
 		return newToolResultError("app must be a string"), nil
 	}
-	result, err := h.appsSvc.Delete(ctx, appName)
+	result, err := appsSvc.Delete(ctx, appName)
 	if err != nil {
 		return newToolResultError(fmt.Sprintf("failed to delete app: %v", err)), nil
 	}

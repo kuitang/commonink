@@ -6,18 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/kuitang/agent-notes/internal/db"
+	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
-
-var sharedFixtureSessionTables = []string{
-	"sessions",
-	"magic_tokens",
-	"user_keys",
-	"oauth_clients",
-	"oauth_tokens",
-	"oauth_codes",
-	"oauth_consents",
-	"short_urls",
-}
 
 // resetSharedDBFixtureState clears mutable DB state for a long-lived shared fixture.
 // It keeps the open sessions DB handle and server process but removes all test data.
@@ -57,7 +47,7 @@ func resetSharedDBFixtureState(tempDir string, sessionsDB *db.SessionsDB) error 
 		_ = tx.Rollback()
 	}()
 
-	for _, table := range sharedFixtureSessionTables {
+	for _, table := range testutil.SharedFixtureSessionTables {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}

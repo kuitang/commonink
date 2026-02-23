@@ -154,9 +154,13 @@ func (s *Service) WriteFile(ctx context.Context, appName, relPath, content strin
 		return nil, err
 	}
 
+	// Apply a timeout to the sprite I/O operation, matching RunBash's pattern.
+	writeCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultBashTimeoutSeconds)*time.Second)
+	defer cancel()
+
 	b64 := base64.StdEncoding.EncodeToString([]byte(content))
 	py := "import base64, pathlib, sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(base64.b64decode(sys.argv[2]))"
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "python3", "-c", py, fullPath, b64)
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(writeCtx, "python3", "-c", py, fullPath, b64)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("failed to write file on sprite: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -188,8 +192,13 @@ func (s *Service) ReadFile(ctx context.Context, appName, relPath string) (*AppRe
 		return nil, err
 	}
 
+	// T1e: Apply a timeout to the sprite I/O operation, matching RunBash's pattern.
+	// Without this, a stuck sprite command can block the request goroutine indefinitely.
+	readCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultBashTimeoutSeconds)*time.Second)
+	defer cancel()
+
 	py := "import base64, pathlib, sys; p=pathlib.Path(sys.argv[1]); sys.stdout.write(base64.b64encode(p.read_bytes()).decode())"
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "python3", "-c", py, fullPath)
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(readCtx, "python3", "-c", py, fullPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file on sprite: %v: %s", err, strings.TrimSpace(string(output)))

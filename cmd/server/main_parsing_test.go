@@ -80,6 +80,62 @@ func TestFirstServiceName_NoServiceSignal_Properties(t *testing.T) {
 	})
 }
 
+// =============================================================================
+// T1d: shellQuote property tests
+// =============================================================================
+
+// Property: safe service names (alphanumeric + hyphen/underscore/dot/slash)
+// must be accepted and wrapped in single quotes.
+func TestShellQuote_SafeNames_Properties(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		name := rapid.StringMatching(`[a-zA-Z0-9._/-]{1,50}`).Draw(t, "safeName")
+		quoted, err := shellQuote(name)
+		if err != nil {
+			t.Fatalf("shellQuote(%q) should succeed for safe name, got error: %v", name, err)
+		}
+		// Result must be single-quoted
+		if !strings.HasPrefix(quoted, "'") || !strings.HasSuffix(quoted, "'") {
+			t.Fatalf("shellQuote(%q) = %q, expected single-quoted", name, quoted)
+		}
+		// The inner content (strip outer quotes) must contain the original name
+		inner := quoted[1 : len(quoted)-1]
+		if inner != name {
+			t.Fatalf("shellQuote(%q) inner = %q, expected %q", name, inner, name)
+		}
+	})
+}
+
+// Property: shell metacharacters must be rejected.
+func TestShellQuote_MetacharsRejected_Properties(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// Generate a string that contains at least one shell metacharacter
+		metaChars := []string{
+			" ", ";", "&", "|", "$", "`", "(", ")", "{", "}", "<", ">",
+			"'", "\"", "\\", "\n", "\t", "*", "?", "[", "]", "!", "#",
+		}
+		idx := rapid.IntRange(0, len(metaChars)-1).Draw(t, "metaIdx")
+		prefix := rapid.StringMatching(`[a-z]{0,5}`).Draw(t, "prefix")
+		suffix := rapid.StringMatching(`[a-z]{0,5}`).Draw(t, "suffix")
+		input := prefix + metaChars[idx] + suffix
+
+		_, err := shellQuote(input)
+		if err == nil {
+			t.Fatalf("shellQuote(%q) should reject input with metachar %q", input, metaChars[idx])
+		}
+	})
+}
+
+// Property: empty string should still be quoted safely (no error - empty is safe).
+func TestShellQuote_EmptyString(t *testing.T) {
+	quoted, err := shellQuote("")
+	if err != nil {
+		t.Fatalf("shellQuote(\"\") should succeed, got error: %v", err)
+	}
+	if quoted != "''" {
+		t.Fatalf("shellQuote(\"\") = %q, expected \"''\"", quoted)
+	}
+}
+
 type noFlushResponseWriter struct {
 	header http.Header
 	status int

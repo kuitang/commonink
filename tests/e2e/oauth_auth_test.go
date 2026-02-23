@@ -2159,3 +2159,242 @@ func FuzzOAuth_TokenFormat_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testOAuth_TokenFormat_Properties))
 }
+
+// =============================================================================
+// T1b: PROPERTY - Tampered redirect_uri in consent cookie is rejected
+// =============================================================================
+
+func testOAuth_ConsentTamperedRedirectURI_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	ctx := context.Background()
+
+	// Create a legitimate client with a specific redirect URI
+	legitimateRedirectURI := "https://legitimate.example.test/callback"
+	result, err := ts.oauthProvider.CreateClient(ctx, oauth.CreateClientParams{
+		ClientName:   "T1b-Test-Client",
+		RedirectURIs: []string{legitimateRedirectURI},
+		IsPublic:     true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	// Register and login a user
+	userEmail := uniqueOAuthEmail("t1b-test@example.com")
+	userID := createTestUserRapid(ts, userEmail)
+	client := loginUserRapid(ts, userEmail)
+
+	// Generate PKCE
+	verifier, challenge, err := oauth.GeneratePKCE()
+	if err != nil {
+		t.Fatalf("Failed to generate PKCE: %v", err)
+	}
+
+	state := generateSecureRandom(32)
+
+	// Step 1: Start the OAuth flow to get the consent page + cookie
+	authorizeURL := fmt.Sprintf("%s/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=notes:read&state=%s&code_challenge=%s&code_challenge_method=S256",
+		ts.URL, result.ClientID, url.QueryEscape(legitimateRedirectURI), state, challenge)
+
+	resp, err := client.Get(authorizeURL)
+	if err != nil {
+		t.Fatalf("Authorize request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	// The server set the oauth_auth_req cookie. Now tamper with it.
+	// Construct a tampered cookie with a malicious redirect_uri
+	tamperedRedirectURI := rapid.OneOf(
+		rapid.Just("https://evil.attacker.test/steal"),
+		rapid.Just("https://phishing.example.test/callback"),
+		rapid.Just("http://localhost:9999/malicious"),
+	).Draw(t, "tamperedURI")
+
+	authReqData := url.Values{
+		"client_id":             {result.ClientID},
+		"redirect_uri":          {tamperedRedirectURI},
+		"scope":                 {"notes:read"},
+		"state":                 {state},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	tamperedCookie := base64.RawURLEncoding.EncodeToString([]byte(authReqData.Encode()))
+
+	// Replace the oauth_auth_req cookie in the jar
+	serverURL, _ := url.Parse(ts.URL)
+	client.Jar.SetCookies(serverURL, []*http.Cookie{
+		{
+			Name:  "oauth_auth_req",
+			Value: tamperedCookie,
+			Path:  "/oauth",
+		},
+	})
+
+	// Step 2: Submit consent with decision=allow
+	consentResp, err := client.PostForm(ts.URL+"/oauth/consent", url.Values{
+		"decision": {"allow"},
+	})
+	if err != nil {
+		t.Fatalf("Consent request failed: %v", err)
+	}
+	defer consentResp.Body.Close()
+
+	// Property: The server must NOT redirect to the tampered redirect_uri.
+	// It should render an error page (400) instead.
+	finalURL := consentResp.Request.URL.String()
+	if strings.Contains(finalURL, "evil.attacker") || strings.Contains(finalURL, "phishing.example") || strings.Contains(finalURL, "localhost:9999") {
+		t.Fatalf("Server redirected to tampered redirect_uri: %s", finalURL)
+	}
+
+	// Property: Status should indicate error (not a redirect to the tampered URI)
+	// With the fix, the server should return a 400 error page
+	if consentResp.StatusCode == http.StatusFound {
+		location := consentResp.Header.Get("Location")
+		if strings.Contains(location, tamperedRedirectURI) {
+			t.Fatalf("Server redirected to tampered redirect_uri in Location header: %s", location)
+		}
+	}
+
+	_ = verifier
+	_ = userID
+}
+
+func TestOAuth_ConsentTamperedRedirectURI_Properties(t *testing.T) {
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOAuth_ConsentTamperedRedirectURI_PropertiesWithServer(rt, ts)
+	})
+}
+
+// =============================================================================
+// T1c: PROPERTY - Auth code replay after token exchange returns invalid_grant
+// =============================================================================
+
+func testOAuth_AuthCodeReplay_PropertiesWithServer(t *rapid.T, ts *oauthTestServer) {
+	// Create a client
+	redirectURI := "https://replay-test.example.test/callback"
+	result, err := ts.oauthProvider.CreateClient(context.Background(), oauth.CreateClientParams{
+		ClientName:   "T1c-Replay-Client",
+		RedirectURIs: []string{redirectURI},
+		IsPublic:     true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	// Register user and login
+	userEmail := uniqueOAuthEmail("t1c-replay@example.com")
+	_ = createTestUserRapid(ts, userEmail)
+	client := loginUserRapid(ts, userEmail)
+
+	// Generate PKCE
+	verifier, challenge, err := oauth.GeneratePKCE()
+	if err != nil {
+		t.Fatalf("Failed to generate PKCE: %v", err)
+	}
+
+	state := generateSecureRandom(32)
+
+	// Build the authorize URL
+	authorizeURL := fmt.Sprintf(
+		"%s/oauth/authorize?client_id=%s&redirect_uri=%s&response_type=code&scope=notes:read+notes:write&state=%s&code_challenge=%s&code_challenge_method=S256",
+		ts.URL, result.ClientID, url.QueryEscape(redirectURI), state, challenge)
+
+	// Step 1: Hit authorize - should render consent page (200)
+	authResp, err := client.Get(authorizeURL)
+	if err != nil {
+		t.Fatalf("Authorize request failed: %v", err)
+	}
+
+	var code string
+	if authResp.StatusCode == http.StatusFound {
+		// Already consented - extract code from redirect
+		location := authResp.Header.Get("Location")
+		locURL, parseErr := url.Parse(location)
+		if parseErr != nil {
+			t.Fatalf("Failed to parse redirect URL: %v", parseErr)
+		}
+		code = locURL.Query().Get("code")
+		authResp.Body.Close()
+	} else if authResp.StatusCode == http.StatusOK {
+		// Consent page rendered - submit consent
+		authResp.Body.Close()
+		consentResp, consentErr := client.PostForm(ts.URL+"/oauth/consent", url.Values{
+			"decision": {"allow"},
+		})
+		if consentErr != nil {
+			t.Fatalf("Consent POST failed: %v", consentErr)
+		}
+		defer consentResp.Body.Close()
+		if consentResp.StatusCode != http.StatusFound {
+			t.Fatalf("Consent should redirect (302), got %d", consentResp.StatusCode)
+		}
+		location := consentResp.Header.Get("Location")
+		locURL, parseErr := url.Parse(location)
+		if parseErr != nil {
+			t.Fatalf("Failed to parse consent redirect URL: %v", parseErr)
+		}
+		code = locURL.Query().Get("code")
+	} else {
+		authResp.Body.Close()
+		t.Fatalf("Unexpected authorize response status: %d", authResp.StatusCode)
+	}
+
+	if code == "" {
+		t.Fatalf("No authorization code obtained from OAuth flow")
+	}
+
+	// First token exchange - should succeed
+	tokenResp, err := client.PostForm(ts.URL+"/oauth/token", url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {result.ClientID},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		t.Fatalf("First token exchange request failed: %v", err)
+	}
+
+	var tokenResult map[string]interface{}
+	json.NewDecoder(tokenResp.Body).Decode(&tokenResult)
+	tokenResp.Body.Close()
+
+	if _, ok := tokenResult["access_token"]; !ok {
+		t.Fatalf("First token exchange should succeed, got: %v", tokenResult)
+	}
+
+	// Property: Replaying the same code must return invalid_grant
+	replayResp, err := client.PostForm(ts.URL+"/oauth/token", url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {result.ClientID},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		t.Fatalf("Replay token exchange request failed: %v", err)
+	}
+	defer replayResp.Body.Close()
+
+	var replayResult map[string]interface{}
+	json.NewDecoder(replayResp.Body).Decode(&replayResult)
+
+	// Property: Replayed code must be rejected
+	if replayResp.StatusCode == http.StatusOK {
+		t.Fatalf("Replaying auth code should fail, but got 200 with: %v", replayResult)
+	}
+
+	// Property: Error must be invalid_grant
+	if errCode, ok := replayResult["error"].(string); !ok || errCode != "invalid_grant" {
+		t.Fatalf("Expected error=invalid_grant, got: %v", replayResult)
+	}
+}
+
+func TestOAuth_AuthCodeReplay_Properties(t *testing.T) {
+	ts := setupOAuthTestServer(t)
+	defer ts.cleanup()
+	rapid.Check(t, func(rt *rapid.T) {
+		testOAuth_AuthCodeReplay_PropertiesWithServer(rt, ts)
+	})
+}

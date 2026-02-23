@@ -29,6 +29,7 @@ func drawHTTPSRedirectURI(t *rapid.T, key string) string {
 }
 
 func TestValidateRedirectURI_HTTPSAccepted_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		redirectURI := drawHTTPSRedirectURI(rt, "redirect_uri")
 		if err := validateRedirectURI(redirectURI); err != nil {
@@ -38,6 +39,7 @@ func TestValidateRedirectURI_HTTPSAccepted_Properties(t *testing.T) {
 }
 
 func TestValidateRedirectURI_HTTPLoopbackAccepted_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		path := drawPath(rt, "path")
 		host := rapid.SampledFrom([]string{
@@ -58,6 +60,7 @@ func TestValidateRedirectURI_HTTPLoopbackAccepted_Properties(t *testing.T) {
 }
 
 func TestValidateRedirectURI_HTTPRejected_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		host := drawHost(rt, "host")
 		path := drawPath(rt, "path")
@@ -74,6 +77,7 @@ func TestValidateRedirectURI_HTTPRejected_Properties(t *testing.T) {
 }
 
 func TestValidateRedirectURI_FragmentRejected_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		host := drawHost(rt, "host")
 		path := drawPath(rt, "path")
@@ -91,6 +95,7 @@ func TestValidateRedirectURI_FragmentRejected_Properties(t *testing.T) {
 }
 
 func TestValidateRedirectURIs_MixedListRejected_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		valid := drawHTTPSRedirectURI(rt, "valid")
 		host := drawHost(rt, "invalid_host")

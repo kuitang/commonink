@@ -58,16 +58,6 @@ func (s *Service) revisionHashFromState(ctx context.Context, title, content stri
 	return hash, nil
 }
 
-// NewServiceForHardcodedUser creates a new notes service for the hardcoded test user
-// This is a convenience function for Milestone 1
-func NewServiceForHardcodedUser() (*Service, error) {
-	userDB, err := db.OpenUserDB(HardcodedUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open user database: %w", err)
-	}
-	return &Service{userDB: userDB, storageLimit: FreeStorageLimitBytes}, nil
-}
-
 // GetStorageUsage returns the current storage usage for this user
 func (s *Service) GetStorageUsage() (StorageUsageInfo, error) {
 	ctx := context.Background()

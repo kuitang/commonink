@@ -54,6 +54,7 @@ func testCheckStorageLimit_Properties(t *rapid.T) {
 }
 
 func TestCheckStorageLimit_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCheckStorageLimit_Properties)
 }
 
@@ -81,6 +82,7 @@ func testCheckStorageLimitForUpdate_ShrinkAlways_Properties(t *rapid.T) {
 }
 
 func TestCheckStorageLimitForUpdate_ShrinkAlways_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCheckStorageLimitForUpdate_ShrinkAlways_Properties)
 }
 
@@ -117,6 +119,7 @@ func testCheckStorageLimitForUpdate_GrowEnforced_Properties(t *rapid.T) {
 }
 
 func TestCheckStorageLimitForUpdate_GrowEnforced_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCheckStorageLimitForUpdate_GrowEnforced_Properties)
 }
 
@@ -158,6 +161,7 @@ func testNewStorageUsageInfo_Properties(t *rapid.T) {
 }
 
 func TestNewStorageUsageInfo_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testNewStorageUsageInfo_Properties)
 }
 
@@ -178,6 +182,7 @@ func testStorageLimitConstant_Properties(t *rapid.T) {
 }
 
 func TestStorageLimitConstant_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStorageLimitConstant_Properties)
 }
 
@@ -203,6 +208,7 @@ func testEmptyDB_ZeroUsage_Properties(t *rapid.T) {
 }
 
 func TestEmptyDB_ZeroUsage_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEmptyDB_ZeroUsage_Properties)
 }
 
@@ -275,6 +281,7 @@ func testStorageUsageTracking_Properties(t *rapid.T) {
 }
 
 func TestStorageUsageTracking_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStorageUsageTracking_Properties)
 }
 
@@ -316,6 +323,7 @@ func testWithinLimit_CreateSucceeds_Properties(t *rapid.T) {
 }
 
 func TestWithinLimit_CreateSucceeds_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testWithinLimit_CreateSucceeds_Properties)
 }
 
@@ -370,6 +378,7 @@ func testUpdateShrink_AlwaysSucceeds_Properties(t *rapid.T) {
 }
 
 func TestUpdateShrink_AlwaysSucceeds_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUpdateShrink_AlwaysSucceeds_Properties)
 }
 

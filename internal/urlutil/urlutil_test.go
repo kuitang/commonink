@@ -61,6 +61,7 @@ func drawAbsoluteURL(rt *rapid.T, label string) string {
 }
 
 func TestOriginFromRequest_UsesRequestOrigin(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		scheme := rapid.SampledFrom([]string{"http", "https"}).Draw(rt, "scheme")
 		host := fmt.Sprintf(
@@ -81,6 +82,7 @@ func TestOriginFromRequest_UsesRequestOrigin(t *testing.T) {
 }
 
 func TestOriginFromRequest_ForwardsInvalidProtoThenFallsBack(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://preview.example.test/callback", nil)
 		req.Header.Set("X-Forwarded-Proto", rapid.SampledFrom([]string{"ftp", "wss", "chrome://", "ws"}).Draw(rt, "proto"))
@@ -93,6 +95,7 @@ func TestOriginFromRequest_ForwardsInvalidProtoThenFallsBack(t *testing.T) {
 }
 
 func TestOriginFromRequest_UsesFallbackWhenHostMissing(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		fallback := rapid.SampledFrom([]string{
 			"https://fallback.one",
@@ -108,6 +111,7 @@ func TestOriginFromRequest_UsesFallbackWhenHostMissing(t *testing.T) {
 }
 
 func TestOriginFromRequest_ArbitraryValidURLs(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		requestURL := drawAbsoluteURL(rt, "request")
 		parsed, err := url.Parse(requestURL)
@@ -136,6 +140,7 @@ func TestOriginFromRequest_ArbitraryValidURLs(t *testing.T) {
 }
 
 func TestBuildAbsolute_GeneratesExpectedURLs(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		base := fmt.Sprintf(
 			"https://%s.%s",
@@ -190,6 +195,7 @@ func TestBuildAbsolute_GeneratesExpectedURLs(t *testing.T) {
 }
 
 func TestBuildAbsolute_ArbitraryValidOriginsAndPaths(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		base := drawOrigin(rt, "base")
 		if rapid.Bool().Draw(rt, "baseSlash") {

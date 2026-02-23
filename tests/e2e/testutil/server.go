@@ -32,6 +32,24 @@ import (
 )
 
 // =============================================================================
+// Shared fixture state constants
+// =============================================================================
+
+// SharedFixtureSessionTables lists every sessions-DB table that must be cleared
+// between test runs. Both the e2e and browser test suites reference this slice
+// so there is a single canonical definition.
+var SharedFixtureSessionTables = []string{
+	"sessions",
+	"magic_tokens",
+	"user_keys",
+	"oauth_clients",
+	"oauth_tokens",
+	"oauth_codes",
+	"oauth_consents",
+	"short_urls",
+}
+
+// =============================================================================
 // Server Fixture: Subprocess-based server that starts once
 // =============================================================================
 

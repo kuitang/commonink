@@ -8,24 +8,9 @@ import (
 	"testing"
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 	"github.com/playwright-community/playwright-go"
 )
-
-// spriteTimeoutMS is a longer timeout for Playwright waits that depend on
-// sprite API calls (file listing, log fetching, bash commands) which go over the network.
-// Sprite bash commands can take up to 120s.
-const spriteTimeoutMS = 120000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 // =============================================================================
 // Unified Feed Tests
@@ -61,18 +46,17 @@ func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
 	// Create a note through the UI to keep this suite user-behavior focused.
 	CreateNoteViaUI(t, page, env.BaseURL, "Feed Test Note", "Content for feed test")
-	navigateSprite(t, page, env.BaseURL, "/notes")
+	spriteutil.Navigate(t, page, env.BaseURL, "/notes")
 
 	// Assert: app-card is visible
 	appCard := page.Locator("article.themed-card a[href*='/apps/']").First()
 	err = appCard.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("App card not visible in unified feed: %v", err)
@@ -82,7 +66,7 @@ func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 	noteCard := page.Locator("article.themed-card a[href*='/notes/']").First()
 	err = noteCard.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Note card not visible in unified feed: %v", err)
@@ -110,8 +94,7 @@ func TestBrowser_UnifiedFeed_EmptyState(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
 	Navigate(t, page, env.BaseURL, "/notes")
 
@@ -119,7 +102,7 @@ func TestBrowser_UnifiedFeed_EmptyState(t *testing.T) {
 	emptyHeading := page.Locator("h3:has-text('No notes yet')")
 	err = emptyHeading.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Empty state heading not visible: %v", err)
@@ -129,7 +112,7 @@ func TestBrowser_UnifiedFeed_EmptyState(t *testing.T) {
 	createLink := page.Locator("a:has-text('Create your first note')")
 	err = createLink.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Create first note link not visible in empty state: %v", err)
@@ -169,10 +152,9 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.Navigate(t, page, env.BaseURL, "/apps/"+appName)
 
 	// Assert: header with app name
 	heading := page.Locator("h1")
@@ -188,7 +170,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	statusBadge := page.Locator("#status-badge")
 	err = statusBadge.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Status badge not visible: %v", err)
@@ -199,7 +181,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	serverPyBtn := page.Locator("button.file-btn[data-path='server.py']")
 	err = serverPyBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		fileListHTML, _ := page.Locator("#file-list").InnerHTML()
@@ -218,7 +200,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		const el = document.getElementById('editor-filename');
 		return el && el.textContent.includes('server.py');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		fnText, _ := editorFilename.TextContent()
@@ -232,7 +214,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		const value = (el && el.value) ? el.value : '';
 		return value.trim().length > 0 && value.indexOf('Error:') !== 0;
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		editorValue, _ := editorContent.InputValue()
@@ -276,8 +258,7 @@ func TestBrowser_AppDetail_Stream_UsesMockSSEData(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
 	streamPattern := "**/api/apps/" + appName + "/stream?*"
 	mockSSE := strings.Join([]string{
@@ -302,12 +283,12 @@ func TestBrowser_AppDetail_Stream_UsesMockSSEData(t *testing.T) {
 		t.Fatalf("Failed to install stream route mock: %v", err)
 	}
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.Navigate(t, page, env.BaseURL, "/apps/"+appName)
 
 	mockFileBtn := page.Locator("button.file-btn[data-path='mock.txt']")
 	if err := mockFileBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	}); err != nil {
 		fileListHTML, _ := page.Locator("#file-list").InnerHTML()
 		t.Fatalf("Mock SSE file payload did not render: %v\nfile-list=%q", err, fileListHTML)
@@ -342,8 +323,7 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
 	consoleErrors := make([]string, 0, 8)
 	page.OnConsole(func(msg playwright.ConsoleMessage) {
@@ -366,12 +346,12 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 		t.Fatalf("Failed to install stream error route mock: %v", err)
 	}
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.Navigate(t, page, env.BaseURL, "/apps/"+appName)
 
 	serverPyBtn := page.Locator("button.file-btn[data-path='server.py']")
 	if err := serverPyBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	}); err != nil {
 		fileListHTML, _ := page.Locator("#file-list").InnerHTML()
 		t.Fatalf("Initial file list missing after SSE failure: %v\nfile-list=%q", err, fileListHTML)
@@ -380,7 +360,7 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 	flash := page.Locator("#stream-inline-flash")
 	if err := flash.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	}); err != nil {
 		t.Fatalf("SSE error flash did not appear: %v", err)
 	}
@@ -397,7 +377,7 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 			&& !flash.classList.contains('hidden')
 			&& (flash.textContent || '').includes('Streaming not supported');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	}); err != nil {
 		flashText, _ := flash.TextContent()
 		t.Fatalf("SSE error flash was not sticky across retry: %v\nflash=%q", err, flashText)
@@ -436,13 +416,12 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
 	// Navigate to the public URL
 	_, err = page.Goto(publicURL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
+		Timeout:   playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to public URL %s: %v", publicURL, err)
@@ -452,7 +431,7 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	msgInput := page.Locator("input#msg")
 	err = msgInput.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Message input not visible on public app page: %v", err)
@@ -481,7 +460,7 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	echoP := page.Locator("p#echo")
 	err = echoP.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Echo paragraph not visible: %v", err)
@@ -524,12 +503,11 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create page: %v", err)
 	}
-	postPage.SetDefaultTimeout(spriteTimeoutMS)
-	postPage.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(postPage)
 
 	_, err = postPage.Goto(publicURL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
+		Timeout:   playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to public URL: %v", err)
@@ -538,7 +516,7 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	msgInput := postPage.Locator("input#msg")
 	err = msgInput.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Message input not visible: %v", err)
@@ -556,10 +534,9 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.Navigate(t, page, env.BaseURL, "/apps/"+appName)
 
 	// The log panel fetches logs on page load. Wait for it to populate.
 	logOutput := page.Locator("#log-output")
@@ -567,7 +544,7 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 		const el = document.getElementById('log-output');
 		return el && el.textContent.includes('POST');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		logText, _ := logOutput.TextContent()
@@ -608,16 +585,15 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	spriteutil.SetPageTimeouts(page)
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.Navigate(t, page, env.BaseURL, "/apps/"+appName)
 
 	// Assert: Start button visible
 	startBtn := page.Locator("#btn-start")
 	err = startBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Start button not visible: %v", err)
@@ -627,7 +603,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	restartBtn := page.Locator("#btn-restart")
 	err = restartBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Restart button not visible: %v", err)
@@ -637,7 +613,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	stopBtn := page.Locator("#btn-stop")
 	err = stopBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.TimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Stop button not visible: %v", err)
@@ -652,7 +628,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 			if (!text) return false;
 			return text.indexOf(('running ' + act + '...').toLowerCase()) === -1;
 		}`, action, playwright.PageWaitForFunctionOptions{
-			Timeout: playwright.Float(spriteTimeoutMS),
+			Timeout: playwright.Float(spriteutil.TimeoutMS),
 		})
 		if err != nil {
 			text, _ := actionOutput.TextContent()

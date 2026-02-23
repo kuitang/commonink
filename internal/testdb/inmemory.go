@@ -14,7 +14,7 @@ func NewUserDBInMemory(userID string) (*db.UserDB, error) {
 		userID = "test-user"
 	}
 
-	dekHex := hex.EncodeToString(db.GetHardcodedDEK())
+	dekHex := hex.EncodeToString(db.TestDEK())
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
 
 	sqlDB, err := sql.Open(db.SQLiteDriverName, dsn)

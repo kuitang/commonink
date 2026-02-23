@@ -69,6 +69,7 @@ func testRateLimiter_RequestsWithinLimit(t *rapid.T) {
 }
 
 func TestRateLimiter_RequestsWithinLimit(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_RequestsWithinLimit)
 }
 
@@ -115,6 +116,7 @@ func testRateLimiter_ExceedingLimitBlocked(t *rapid.T) {
 }
 
 func TestRateLimiter_ExceedingLimitBlocked(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_ExceedingLimitBlocked)
 }
 
@@ -163,6 +165,7 @@ func testRateLimiter_UserIndependence(t *rapid.T) {
 }
 
 func TestRateLimiter_UserIndependence(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_UserIndependence)
 }
 
@@ -224,6 +227,7 @@ func testRateLimiter_PaidUsersHigherLimits(t *rapid.T) {
 }
 
 func TestRateLimiter_PaidUsersHigherLimits(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_PaidUsersHigherLimits)
 }
 
@@ -282,6 +286,7 @@ func testRateLimiter_IdleLimiterCleanup(t *rapid.T) {
 }
 
 func TestRateLimiter_IdleLimiterCleanup(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_IdleLimiterCleanup)
 }
 
@@ -336,6 +341,7 @@ func testRateLimiter_ActiveLimiterNotCleaned(t *rapid.T) {
 }
 
 func TestRateLimiter_ActiveLimiterNotCleaned(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_ActiveLimiterNotCleaned)
 }
 
@@ -413,6 +419,7 @@ func testRateLimiter_ConcurrentAccess(t *rapid.T) {
 }
 
 func TestRateLimiter_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_ConcurrentAccess)
 }
 
@@ -452,6 +459,7 @@ func testRateLimiter_GetLimiterConsistency(t *rapid.T) {
 }
 
 func TestRateLimiter_GetLimiterConsistency(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_GetLimiterConsistency)
 }
 
@@ -498,6 +506,7 @@ func testRateLimiter_TierChangeCreatesNewLimiter(t *rapid.T) {
 }
 
 func TestRateLimiter_TierChangeCreatesNewLimiter(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_TierChangeCreatesNewLimiter)
 }
 
@@ -546,6 +555,7 @@ func testRateLimiter_LenReturnsCorrectCount(t *rapid.T) {
 }
 
 func TestRateLimiter_LenReturnsCorrectCount(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_LenReturnsCorrectCount)
 }
 
@@ -589,6 +599,7 @@ func testRateLimiter_DefaultConfigValid(t *rapid.T) {
 }
 
 func TestRateLimiter_DefaultConfigValid(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_DefaultConfigValid)
 }
 
@@ -635,6 +646,7 @@ func testRateLimiter_StopGracefulShutdown(t *rapid.T) {
 }
 
 func TestRateLimiter_StopGracefulShutdown(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRateLimiter_StopGracefulShutdown)
 }
 

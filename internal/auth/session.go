@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/db"
@@ -119,18 +120,28 @@ func (s *SessionService) Cleanup(ctx context.Context) error {
 
 // secureCookies controls whether session cookies require HTTPS.
 // Set to false for local development/testing over HTTP.
-var secureCookies = true
+// T2f: Changed from plain bool to atomic.Bool to eliminate data race
+// when SetSecureCookies is called at startup while other goroutines
+// may read via GetSecureCookies.
+var secureCookies atomic.Bool
+
+func init() {
+	// Default to true (secure cookies enabled)
+	secureCookies.Store(true)
+}
 
 // SetSecureCookies enables or disables the Secure flag on session cookies.
 // Call with false for local development over HTTP.
+// Thread-safe via atomic.Bool.
 func SetSecureCookies(secure bool) {
-	secureCookies = secure
+	secureCookies.Store(secure)
 }
 
 // GetSecureCookies returns the current secure cookie setting.
 // Used by other packages that need to set cookies with consistent security settings.
+// Thread-safe via atomic.Bool.
 func GetSecureCookies() bool {
-	return secureCookies
+	return secureCookies.Load()
 }
 
 // SetCookie sets the session cookie on the response.
@@ -140,7 +151,7 @@ func SetCookie(w http.ResponseWriter, sessionID string) {
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secureCookies,
+		Secure:   secureCookies.Load(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(SessionDuration.Seconds()),
 	})
@@ -153,7 +164,7 @@ func ClearCookie(w http.ResponseWriter) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secureCookies,
+		Secure:   secureCookies.Load(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1, // Delete immediately
 	})

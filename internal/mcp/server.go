@@ -7,23 +7,125 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/kuitang/agent-notes/internal/apps"
-	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Server wraps the MCP server with notes handling
+// Server wraps a pre-built MCP server that is created once per toolset at
+// startup. Per-request notes/apps services are injected via context values
+// (see WithNotesSvc / WithAppsSvc) before dispatching to the underlying
+// StreamableHTTPHandler.
 type Server struct {
 	mcpServer   *mcp.Server
 	handler     *Handler
 	httpHandler http.Handler
+	registry    *mcpSessionRegistry
 }
 
 const (
 	mcpDebugBodyLogLimitBytes = 8 * 1024
+
+	// MaxSessionIDLength is the maximum allowed length for an Mcp-Session-Id
+	// header value. Values exceeding this limit are rejected with 400.
+	MaxSessionIDLength = 256
+
+	// sessionSweepInterval is how often the background goroutine checks for
+	// expired session entries.
+	sessionSweepInterval = 5 * time.Minute
+
+	// sessionMaxAge is how long an idle session entry is kept before the
+	// sweeper removes it.
+	sessionMaxAge = 30 * time.Minute
 )
+
+// mcpSessionEntry tracks a single remembered MCP session.
+type mcpSessionEntry struct {
+	id       string
+	lastSeen time.Time
+}
+
+// mcpSessionRegistry provides application-level tracking of MCP session IDs
+// that have been observed through the handler. A background goroutine sweeps
+// expired entries on a ticker.
+type mcpSessionRegistry struct {
+	mu       sync.Mutex
+	sessions map[string]*mcpSessionEntry
+	done     chan struct{} // closed to stop the sweeper
+}
+
+func newMCPSessionRegistry() *mcpSessionRegistry {
+	r := &mcpSessionRegistry{
+		sessions: make(map[string]*mcpSessionEntry),
+		done:     make(chan struct{}),
+	}
+	go r.sweepLoop()
+	return r
+}
+
+// rememberMCPSession records or refreshes a session ID. Returns false if the
+// ID exceeds MaxSessionIDLength.
+func (r *mcpSessionRegistry) rememberMCPSession(id string) bool {
+	if len(id) > MaxSessionIDLength {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.sessions[id]
+	if !ok {
+		entry = &mcpSessionEntry{id: id}
+		r.sessions[id] = entry
+	}
+	entry.lastSeen = time.Now()
+	return true
+}
+
+// sweepLoop runs until Stop is called, removing sessions older than
+// sessionMaxAge every sessionSweepInterval.
+func (r *mcpSessionRegistry) sweepLoop() {
+	ticker := time.NewTicker(sessionSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.done:
+			return
+		case now := <-ticker.C:
+			r.sweep(now)
+		}
+	}
+}
+
+func (r *mcpSessionRegistry) sweep(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, entry := range r.sessions {
+		if now.Sub(entry.lastSeen) > sessionMaxAge {
+			delete(r.sessions, id)
+		}
+	}
+}
+
+// Stop terminates the background sweeper goroutine.
+func (r *mcpSessionRegistry) Stop() {
+	select {
+	case <-r.done:
+		// already stopped
+	default:
+		close(r.done)
+	}
+}
+
+// Len returns the current number of tracked sessions (for testing).
+func (r *mcpSessionRegistry) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sessions)
+}
+
+// ---------------------------------------------------------------------------
+// Response logging helpers
+// ---------------------------------------------------------------------------
 
 type mcpResponseLogger struct {
 	http.ResponseWriter
@@ -92,9 +194,18 @@ func formatBodyForLog(b []byte, truncated bool) string {
 	return text
 }
 
+// ---------------------------------------------------------------------------
+// Server construction
+// ---------------------------------------------------------------------------
+
 // NewServer creates a new MCP server for the selected toolset.
-func NewServer(notesSvc *notes.Service, appsSvc *apps.Service, toolset Toolset) *Server {
-	handler := NewHandler(notesSvc, appsSvc)
+// The server is safe to reuse across requests; per-request state (notes/apps
+// services) is resolved from context inside tool handler closures.
+//
+// Call Stop() when the server is no longer needed to release the session
+// registry sweeper goroutine.
+func NewServer(toolset Toolset) *Server {
+	handler := NewHandler()
 
 	// Create MCP server with metadata
 	mcpServer := mcp.NewServer(
@@ -113,45 +224,38 @@ func NewServer(notesSvc *notes.Service, appsSvc *apps.Service, toolset Toolset) 
 	}
 	registerPrompts(mcpServer, toolset)
 
+	registry := newMCPSessionRegistry()
+
 	// Create Streamable HTTP handler (MCP Spec 2025-03-26)
-	// This creates a single endpoint that handles both POST and GET requests
-	// per the Streamable HTTP transport specification
 	httpHandler := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
-			// Return the same server for all requests
-			// In future, could return different servers based on auth context
+			// Return the same shared server for all requests.
 			return mcpServer
 		},
 		&mcp.StreamableHTTPOptions{
-			// JSONResponse: true returns application/json responses
-			// This is simpler for clients that don't support SSE streaming
-			// Per MCP spec §2.1.5, JSON responses are valid for all operations
 			JSONResponse: true,
-
-			// Stateless: true because each request is authenticated independently
-			// via OAuth/API Key tokens. The server is created per-user per-request,
-			// so session state doesn't need to persist across requests.
-			// With stateless mode, initialize/initialized handshake is skipped.
-			Stateless: true,
+			Stateless:    true,
 		},
 	)
+
+	log.Printf("MCP server built for toolset %q (%d tools registered)", toolset, len(tools))
 
 	return &Server{
 		mcpServer:   mcpServer,
 		handler:     handler,
 		httpHandler: httpHandler,
+		registry:    registry,
 	}
 }
 
-// ServeHTTP implements http.Handler for Streamable HTTP transport
-// Per MCP spec 2025-03-26: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
-//
-// The Streamable HTTP transport provides:
-// - Single endpoint for all MCP communication
-// - POST for client messages (JSON-RPC requests, notifications, responses)
-// - GET for server-initiated messages (optional SSE stream)
-// - Session management via Mcp-Session-Id header
-// - Optional resumability via event IDs
+// Stop releases background resources (session sweeper).
+func (s *Server) Stop() {
+	if s.registry != nil {
+		s.registry.Stop()
+	}
+}
+
+// ServeHTTP implements http.Handler for Streamable HTTP transport.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Set CORS headers for all requests
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -163,6 +267,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Max-Age", "86400")
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+
+	// Enforce max session ID length
+	sessionID := r.Header.Get("Mcp-Session-Id")
+	if len(sessionID) > MaxSessionIDLength {
+		http.Error(w, "Mcp-Session-Id exceeds maximum length", http.StatusBadRequest)
+		return
+	}
+	if sessionID != "" {
+		if !s.registry.rememberMCPSession(sessionID) {
+			http.Error(w, "Mcp-Session-Id exceeds maximum length", http.StatusBadRequest)
+			return
+		}
 	}
 
 	debug := mcpDebugEnabled()
@@ -188,12 +305,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("MCP[debug]: request body: %s", formatBodyForLog(reqBody, false))
 	}
 
-	// Delegate to the SDK's Streamable HTTP handler
-	// The handler manages:
-	// - POST: Client messages (JSON-RPC) - responds with JSON or SSE
-	// - GET: Server-initiated messages (SSE stream)
-	// - Session management (Mcp-Session-Id header)
-	// - Stream resumption (Last-Event-ID header)
 	respLogger := newMCPResponseLogger(w)
 	s.httpHandler.ServeHTTP(respLogger, r)
 

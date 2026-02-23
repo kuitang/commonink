@@ -207,10 +207,10 @@ func testUserDB_ValidUserID_Properties(t *rapid.T) {
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
 
-	// Property: OpenUserDB with valid userID returns non-nil database wrapper
-	db1, err := OpenUserDB(userID)
+	// Property: OpenUserDBWithDEK with valid userID and DEK returns non-nil database wrapper
+	db1, err := OpenUserDBWithDEK(userID, TestDEK())
 	if err != nil {
-		t.Fatalf("OpenUserDB failed for userID %q: %v", userID, err)
+		t.Fatalf("OpenUserDBWithDEK failed for userID %q: %v", userID, err)
 	}
 	if db1 == nil {
 		t.Fatal("Expected non-nil database wrapper")
@@ -228,9 +228,9 @@ func testUserDB_ValidUserID_Properties(t *rapid.T) {
 	}
 
 	// Property: Same userID returns cached instance (singleton per user)
-	db2, err := OpenUserDB(userID)
+	db2, err := OpenUserDBWithDEK(userID, TestDEK())
 	if err != nil {
-		t.Fatalf("Second OpenUserDB call failed: %v", err)
+		t.Fatalf("Second OpenUserDBWithDEK call failed: %v", err)
 	}
 	if db1.DB() != db2.DB() {
 		t.Fatal("Expected same database instance for same userID")
@@ -254,7 +254,7 @@ func testUserDB_EmptyUserID_Properties(t *rapid.T) {
 	setupTestDirRapid(t)
 
 	// Property: Empty userID always returns error
-	_, err := OpenUserDB("")
+	_, err := OpenUserDBWithDEK("", TestDEK())
 	if err == nil {
 		t.Fatal("Expected error for empty userID")
 	}
@@ -578,10 +578,10 @@ func FuzzUserDB_ContentSizeLimit_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property: InitSchemas initializes all databases
+// Property: OpenUserDBWithDEK initializes multiple user databases with explicit DEK
 // =============================================================================
 
-func testInitSchemas_Properties(t *rapid.T) {
+func testOpenUserDBWithDEK_MultiInit_Properties(t *rapid.T) {
 	setupTestDirRapid(t)
 	ctx := context.Background()
 
@@ -592,12 +592,7 @@ func testInitSchemas_Properties(t *rapid.T) {
 		userIDs[i] = testutil.ValidUserID().Draw(t, "userID")
 	}
 
-	err := InitSchemas(userIDs...)
-	if err != nil {
-		t.Fatalf("InitSchemas failed: %v", err)
-	}
-
-	// Property: Sessions database is initialized
+	// Initialize sessions database
 	sessDB, err := OpenSessionsDB()
 	if err != nil {
 		t.Fatalf("Failed to get sessions database: %v", err)
@@ -606,9 +601,9 @@ func testInitSchemas_Properties(t *rapid.T) {
 		t.Fatal("Sessions database is nil")
 	}
 
-	// Property: All user databases are initialized
+	// Property: All user databases are initialized with explicit DEK
 	for _, userID := range userIDs {
-		userDB, err := OpenUserDB(userID)
+		userDB, err := OpenUserDBWithDEK(userID, TestDEK())
 		if err != nil {
 			t.Fatalf("Failed to get user database for %s: %v", userID, err)
 		}
@@ -627,13 +622,13 @@ func testInitSchemas_Properties(t *rapid.T) {
 	}
 }
 
-func TestInitSchemas_Properties(t *testing.T) {
-	rapid.Check(t, testInitSchemas_Properties)
+func TestOpenUserDBWithDEK_MultiInit_Properties(t *testing.T) {
+	rapid.Check(t, testOpenUserDBWithDEK_MultiInit_Properties)
 }
 
-func FuzzInitSchemas_Properties(f *testing.F) {
+func FuzzOpenUserDBWithDEK_MultiInit_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testInitSchemas_Properties))
+	f.Fuzz(rapid.MakeFuzz(testOpenUserDBWithDEK_MultiInit_Properties))
 }
 
 // =============================================================================
@@ -653,7 +648,7 @@ func testCloseAll_Properties(t *rapid.T) {
 	numUsers := rapid.IntRange(1, 3).Draw(t, "numUsers")
 	for i := 0; i < numUsers; i++ {
 		userID := testutil.ValidUserID().Draw(t, "userID")
-		_, err := OpenUserDB(userID)
+		_, err := OpenUserDBWithDEK(userID, TestDEK())
 		if err != nil {
 			t.Fatalf("Failed to open user DB for iteration %d: %v", i, err)
 		}
@@ -676,34 +671,55 @@ func FuzzCloseAll_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property: GetHardcodedDEK returns correct length and is a copy
+// Property: OpenUserDBWithDEK rejects empty/zero DEK (T1a security fix)
 // =============================================================================
 
-func testGetHardcodedDEK_Properties(t *rapid.T) {
-	dek := GetHardcodedDEK()
+func testOpenUserDBWithDEK_ZeroDEK_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
 
-	// Property: DEK is 32 bytes (256 bits for AES-256)
-	if len(dek) != 32 {
-		t.Fatalf("Expected DEK length 32, got %d", len(dek))
+	userID := testutil.ValidUserID().Draw(t, "userID")
+
+	// Property: all-zero 32-byte DEK must be rejected
+	zeroDEK := make([]byte, 32)
+	_, err := OpenUserDBWithDEK(userID, zeroDEK)
+	if err == nil {
+		t.Fatal("Expected error for all-zero DEK, got nil")
 	}
 
-	// Property: Returns a copy (mutating doesn't affect internal state)
-	originalFirstByte := dek[0]
-	dek[0] = 0xFF
+	// Property: empty DEK (0 bytes) must be rejected
+	_, err = OpenUserDBWithDEK(userID, []byte{})
+	if err == nil {
+		t.Fatal("Expected error for empty DEK, got nil")
+	}
 
-	dek2 := GetHardcodedDEK()
-	if dek2[0] != originalFirstByte {
-		t.Fatal("GetHardcodedDEK returns a reference instead of a copy")
+	// Property: wrong-length DEK must be rejected
+	shortDEK := make([]byte, rapid.IntRange(1, 31).Draw(t, "shortLen"))
+	for i := range shortDEK {
+		shortDEK[i] = byte(i + 1)
+	}
+	_, err = OpenUserDBWithDEK(userID, shortDEK)
+	if err == nil {
+		t.Fatal("Expected error for short DEK, got nil")
+	}
+
+	// Property: valid non-zero DEK must succeed
+	validDEK := TestDEK()
+	db, err := OpenUserDBWithDEK(userID, validDEK)
+	if err != nil {
+		t.Fatalf("OpenUserDBWithDEK failed with valid DEK: %v", err)
+	}
+	if db == nil {
+		t.Fatal("Expected non-nil database wrapper with valid DEK")
 	}
 }
 
-func TestGetHardcodedDEK_Properties(t *testing.T) {
-	rapid.Check(t, testGetHardcodedDEK_Properties)
+func TestOpenUserDBWithDEK_ZeroDEK_Properties(t *testing.T) {
+	rapid.Check(t, testOpenUserDBWithDEK_ZeroDEK_Properties)
 }
 
-func FuzzGetHardcodedDEK_Properties(f *testing.F) {
+func FuzzOpenUserDBWithDEK_ZeroDEK_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testGetHardcodedDEK_Properties))
+	f.Fuzz(rapid.MakeFuzz(testOpenUserDBWithDEK_ZeroDEK_Properties))
 }
 
 // =============================================================================
@@ -1107,14 +1123,14 @@ func testDataDirectory_Wiring_Properties(t *rapid.T) {
 		t.Fatalf("Expected 0 sessions in fresh DB, got %d", sessCount)
 	}
 
-	// --- Property 2: OpenUserDB creates user .db files in the custom DataDirectory ---
+	// --- Property 2: OpenUserDBWithDEK creates user .db files in the custom DataDirectory ---
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := OpenUserDBWithDEK(userID, TestDEK())
 	if err != nil {
-		t.Fatalf("OpenUserDB failed with custom DataDirectory %q: %v", customPath, err)
+		t.Fatalf("OpenUserDBWithDEK failed with custom DataDirectory %q: %v", customPath, err)
 	}
 	if userDB == nil {
-		t.Fatal("OpenUserDB returned nil")
+		t.Fatal("OpenUserDBWithDEK returned nil")
 	}
 
 	expectedUserDBPath := filepath.Join(customPath, userID+".db")
@@ -1153,9 +1169,9 @@ func testDataDirectory_Wiring_Properties(t *rapid.T) {
 		t.Fatalf("Expected 0 sessions after reset, got %d", sessCount2)
 	}
 
-	userDB2, err := OpenUserDB(userID)
+	userDB2, err := OpenUserDBWithDEK(userID, TestDEK())
 	if err != nil {
-		t.Fatalf("OpenUserDB failed after reset: %v", err)
+		t.Fatalf("OpenUserDBWithDEK failed after reset: %v", err)
 	}
 	noteCount2, err := userDB2.Queries().CountNotes(ctx)
 	if err != nil {
@@ -1816,7 +1832,7 @@ func testMigrateUserDB_PreExistingDB_Properties(t *rapid.T) {
 
 	// Seed an encrypted file DB with both old-schema tables.
 	dbPath := filepath.Join(DataDirectory, userID+".db")
-	dekHex := hex.EncodeToString(hardcodedDEK)
+	dekHex := hex.EncodeToString(TestDEK())
 	dsn := fmt.Sprintf("%s?_pragma_key=x'%s'&_pragma_cipher_page_size=4096&_fts5_tokenizer=porter", dbPath, dekHex)
 	dsn = appendSQLiteParams(dsn, sqliteCommonParams())
 
@@ -1836,9 +1852,9 @@ func testMigrateUserDB_PreExistingDB_Properties(t *rapid.T) {
 
 	// Open via the normal path (UserDBSchema exec + MigrateUserDB).
 	// Property: must always succeed regardless of which migration columns were missing.
-	db, err := OpenUserDB(userID)
+	db, err := OpenUserDBWithDEK(userID, TestDEK())
 	if err != nil {
-		t.Fatalf("OpenUserDB failed (presentInOld=%v): %v", presentInOld, err)
+		t.Fatalf("OpenUserDBWithDEK failed (presentInOld=%v): %v", presentInOld, err)
 	}
 
 	// Property: every migration column is queryable after open.

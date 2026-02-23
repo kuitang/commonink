@@ -40,6 +40,7 @@ import (
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
+	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
 const (
@@ -51,17 +52,6 @@ const (
 	browserMaxTimeoutMS = 5000
 	browserMaxTimeout   = 5 * time.Second
 )
-
-var browserSharedFixtureSessionTables = []string{
-	"sessions",
-	"magic_tokens",
-	"user_keys",
-	"oauth_clients",
-	"oauth_tokens",
-	"oauth_codes",
-	"oauth_consents",
-	"short_urls",
-}
 
 var browserFixtureMu sync.Mutex
 var browserTestMutex sync.Mutex
@@ -230,7 +220,7 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 
 	// Rate-limited notes API
 	getUserID := func(r *http.Request) string { return auth.GetUserID(r.Context()) }
-	getIsPaid := func(r *http.Request) bool { return false }
+	getIsPaid := func(r *http.Request) bool { return auth.GetIsPaid(r.Context()) }
 	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
 
 	// Notes API uses real CRUD (auth middleware opens user DB)
@@ -240,12 +230,16 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesPutHandler))))
 	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesDeleteHandler))))
 
-	// MCP handler (authenticated, all tools)
+	// Build MCP server once (tool registrations are stateless)
+	mcpServer := mcp.NewServer(mcp.ToolsetAll)
+	t.Cleanup(mcpServer.Stop)
+
 	mcpHandler := &authenticatedMCPHandler{
+		MCPServer:   mcpServer,
 		Toolset:     mcp.ToolsetAll,
 		SpriteToken: spriteToken,
 	}
-	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
+	mux.Handle("POST /mcp", rateLimitMW(authMiddleware.RequireBearerAuth(http.HandlerFunc(mcpHandler.ServeHTTP))))
 
 	// Apps management API routes (authenticated)
 	appsHandler := &authenticatedAppsHandler{
@@ -311,7 +305,7 @@ func clearSharedBrowserSessionsDB(sessionsDB *db.SessionsDB) error {
 		_ = tx.Rollback()
 	}()
 
-	for _, table := range browserSharedFixtureSessionTables {
+	for _, table := range testutil.SharedFixtureSessionTables {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}
@@ -770,8 +764,10 @@ func PublishNoteViaUI(t *testing.T, page playwright.Page) string {
 // Authenticated MCP handler (local copy for browser test env)
 // =============================================================================
 
-// authenticatedMCPHandler wraps MCP with auth context for the browser test env.
+// authenticatedMCPHandler wraps a pre-built MCP server with per-request
+// auth-derived service injection for the browser test env.
 type authenticatedMCPHandler struct {
+	MCPServer   *mcp.Server
 	Toolset     mcp.Toolset
 	SpriteToken string
 }
@@ -785,24 +781,25 @@ func (h *authenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 
 	userID := auth.GetUserID(r.Context())
 
-	var notesSvc *notes.Service
+	ctx := r.Context()
+
 	if h.Toolset != mcp.ToolsetApps {
 		storageLimit := notes.FreeStorageLimitBytes
 		account, err := userDB.Queries().GetAccount(r.Context(), userID)
 		if err == nil && account.SubscriptionStatus.Valid {
 			storageLimit = notes.StorageLimitForStatus(account.SubscriptionStatus.String)
 		}
-		notesSvc = notes.NewService(userDB, storageLimit)
+		notesSvc := notes.NewService(userDB, storageLimit)
 		_ = notesSvc.Purge(30 * 24 * time.Hour)
+		ctx = mcp.WithNotesSvc(ctx, notesSvc)
 	}
 
-	var appsSvc *apps.Service
 	if h.Toolset != mcp.ToolsetNotes {
-		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
+		appsSvc := apps.NewService(userDB, userID, h.SpriteToken)
+		ctx = mcp.WithAppsSvc(ctx, appsSvc)
 	}
 
-	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
-	mcpServer.ServeHTTP(w, r)
+	h.MCPServer.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // =============================================================================
@@ -842,6 +839,22 @@ func writeTestSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string
 	}
 	flusher.Flush()
 	return true
+}
+
+// testShellQuote mirrors the production shellQuote in cmd/server/main.go.
+func testShellQuote(s string) (string, error) {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.', r == '/':
+			// safe
+		default:
+			return "", fmt.Errorf("testShellQuote: disallowed character %q in %q", string(r), s)
+		}
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'", nil
 }
 
 func testFirstServiceName(servicesOutput string) string {
@@ -1164,14 +1177,21 @@ func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// shellQuote: allowlist-based quoting to prevent shell injection via svcName.
+	quoted, quoteErr := testShellQuote(svcName)
+	if quoteErr != nil {
+		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("Invalid service name: %v", quoteErr)})
+		return
+	}
+
 	var cmd string
 	switch action {
 	case "start":
-		cmd = fmt.Sprintf("sprite-env services start %q", svcName)
+		cmd = "sprite-env services start " + quoted
 	case "stop":
-		cmd = fmt.Sprintf("sprite-env services stop %q", svcName)
+		cmd = "sprite-env services stop " + quoted
 	case "restart":
-		cmd = fmt.Sprintf("sprite-env services stop %q && sprite-env services start %q", svcName, svcName)
+		cmd = "sprite-env services stop " + quoted + " && sprite-env services start " + quoted
 	default:
 		writeTestJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid action"})
 		return

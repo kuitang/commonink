@@ -44,6 +44,7 @@ func testContentPreview_NoTruncation_Properties(t *rapid.T) {
 }
 
 func TestContentPreview_NoTruncation_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testContentPreview_NoTruncation_Properties)
 }
 
@@ -85,6 +86,7 @@ func testContentPreview_Truncation_Properties(t *rapid.T) {
 }
 
 func TestContentPreview_Truncation_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testContentPreview_Truncation_Properties)
 }
 
@@ -109,6 +111,7 @@ func testContentPreview_Empty_Properties(t *rapid.T) {
 }
 
 func TestContentPreview_Empty_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testContentPreview_Empty_Properties)
 }
 
@@ -131,6 +134,7 @@ func testCountLines_Empty_Properties(t *rapid.T) {
 }
 
 func TestCountLines_Empty_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCountLines_Empty_Properties)
 }
 
@@ -158,6 +162,7 @@ func testCountLines_NewlineCount_Properties(t *rapid.T) {
 }
 
 func TestCountLines_NewlineCount_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCountLines_NewlineCount_Properties)
 }
 
@@ -183,6 +188,7 @@ func testCountLines_SingleLine_Properties(t *rapid.T) {
 }
 
 func TestCountLines_SingleLine_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCountLines_SingleLine_Properties)
 }
 
@@ -230,6 +236,7 @@ func testFormatWithLineNumbers_LineFormat_Properties(t *rapid.T) {
 }
 
 func TestFormatWithLineNumbers_LineFormat_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testFormatWithLineNumbers_LineFormat_Properties)
 }
 
@@ -258,6 +265,7 @@ func testFormatWithLineNumbers_FullRange_Properties(t *rapid.T) {
 }
 
 func TestFormatWithLineNumbers_FullRange_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testFormatWithLineNumbers_FullRange_Properties)
 }
 
@@ -299,6 +307,7 @@ func testFormatWithLineNumbers_SubRange_Properties(t *rapid.T) {
 }
 
 func TestFormatWithLineNumbers_SubRange_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testFormatWithLineNumbers_SubRange_Properties)
 }
 
@@ -327,6 +336,7 @@ func testFormatWithLineNumbers_Empty_Properties(t *rapid.T) {
 }
 
 func TestFormatWithLineNumbers_Empty_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testFormatWithLineNumbers_Empty_Properties)
 }
 

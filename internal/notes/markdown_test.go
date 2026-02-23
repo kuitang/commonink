@@ -85,6 +85,7 @@ func testMarkdown_HeadingsRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_HeadingsRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_HeadingsRender_Properties)
 }
 
@@ -128,6 +129,7 @@ func testMarkdown_CodeBlocksRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_CodeBlocksRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_CodeBlocksRender_Properties)
 }
 
@@ -164,6 +166,7 @@ func testMarkdown_InlineCodeRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_InlineCodeRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_InlineCodeRender_Properties)
 }
 
@@ -210,6 +213,7 @@ func testMarkdown_LinksRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_LinksRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_LinksRender_Properties)
 }
 
@@ -251,6 +255,7 @@ func testMarkdown_BoldRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_BoldRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_BoldRender_Properties)
 }
 
@@ -292,6 +297,7 @@ func testMarkdown_ItalicRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_ItalicRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_ItalicRender_Properties)
 }
 
@@ -346,6 +352,7 @@ func testMarkdown_ParagraphsRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_ParagraphsRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_ParagraphsRender_Properties)
 }
 
@@ -395,6 +402,7 @@ func testMarkdown_UnorderedListRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_UnorderedListRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_UnorderedListRender_Properties)
 }
 
@@ -444,6 +452,7 @@ func testMarkdown_OrderedListRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_OrderedListRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_OrderedListRender_Properties)
 }
 
@@ -487,6 +496,7 @@ func testMarkdown_BlockquoteRender_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_BlockquoteRender_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_BlockquoteRender_Properties)
 }
 
@@ -545,6 +555,7 @@ func testMarkdown_ValidHTMLDocument_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_ValidHTMLDocument_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_ValidHTMLDocument_Properties)
 }
 
@@ -598,6 +609,7 @@ func testMarkdown_XSSPrevention_Properties(t *rapid.T) {
 }
 
 func TestMarkdown_XSSPrevention_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMarkdown_XSSPrevention_Properties)
 }
 

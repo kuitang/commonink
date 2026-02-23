@@ -13,6 +13,20 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
+// initTestSchemas is a test helper that replaces the removed InitSchemas function.
+// It initializes sessions DB and user DBs with the test DEK.
+func initTestSchemas(userIDs ...string) error {
+	if _, err := OpenSessionsDB(); err != nil {
+		return fmt.Errorf("failed to initialize sessions database: %w", err)
+	}
+	for _, userID := range userIDs {
+		if _, err := OpenUserDBWithDEK(userID, TestDEK()); err != nil {
+			return fmt.Errorf("failed to initialize user database for %s: %w", userID, err)
+		}
+	}
+	return nil
+}
+
 // TestMilestone1Setup verifies the complete database setup for Milestone 1
 // with the hardcoded test user
 func TestMilestone1Setup(t *testing.T) {
@@ -23,7 +37,7 @@ func TestMilestone1Setup(t *testing.T) {
 	const testUserID = "test-user-001"
 
 	// Initialize schemas for test user
-	err := InitSchemas(testUserID)
+	err := initTestSchemas(testUserID)
 	if err != nil {
 		t.Fatalf("Failed to initialize schemas: %v", err)
 	}
@@ -60,7 +74,7 @@ func TestMilestone1Setup(t *testing.T) {
 	}
 
 	// Verify user database
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, TestDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -191,7 +205,7 @@ func TestDatabaseEncryption(t *testing.T) {
 	const testUserID = "test-user-encrypted"
 
 	// Create encrypted database
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, TestDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -241,12 +255,22 @@ func TestDatabaseEncryption(t *testing.T) {
 // Milestone 1 Regression Tests (merged from milestone1_test.go)
 // =============================================================================
 
-// TestMilestone1Constants verifies the hardcoded constants for Milestone 1
+// TestMilestone1Constants verifies test DEK and user ID constants
 func TestMilestone1Constants(t *testing.T) {
-	// Verify DEK is 32 bytes (256 bits)
-	dek := GetHardcodedDEK()
+	// Verify TestDEK is 32 bytes (256 bits) and non-zero
+	dek := TestDEK()
 	if len(dek) != 32 {
-		t.Errorf("DEK must be 32 bytes for AES-256, got %d", len(dek))
+		t.Errorf("TestDEK must be 32 bytes for AES-256, got %d", len(dek))
+	}
+	allZero := true
+	for _, b := range dek {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Error("TestDEK must not be all zeros")
 	}
 
 	// Verify test user ID constant
@@ -264,13 +288,13 @@ func TestMilestone1QuickStart(t *testing.T) {
 	const testUserID = "test-user-001"
 
 	// Step 1: Initialize database for test user
-	err := InitSchemas(testUserID)
+	err := initTestSchemas(testUserID)
 	if err != nil {
 		t.Fatalf("Failed to initialize: %v", err)
 	}
 
 	// Step 2: Get user database
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, TestDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -351,12 +375,12 @@ func TestMilestone1FTS5Search(t *testing.T) {
 	const testUserID = "test-user-001"
 
 	// Initialize
-	err := InitSchemas(testUserID)
+	err := initTestSchemas(testUserID)
 	if err != nil {
 		t.Fatalf("Failed to initialize: %v", err)
 	}
 
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, TestDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -438,7 +462,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 	const testUserID = "test-user-concurrent"
 
 	// Initialize database
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, TestDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}

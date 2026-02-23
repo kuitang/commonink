@@ -91,6 +91,7 @@ func createTestNoteRapid(t *rapid.T, svc *Service, title, content string) *Note 
 // =============================================================================
 
 func TestPublic_AccessibleAfterSetPublic_Properties(t *testing.T) {
+	t.Parallel()
 	// Create a fresh environment for each rapid iteration to ensure isolation
 	rapid.Check(t, func(rt *rapid.T) {
 		// Create fresh test environment for each iteration
@@ -184,6 +185,7 @@ func FuzzPublic_AccessibleAfterSetPublic_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_PrivateReturnsError_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -273,6 +275,7 @@ func FuzzPublic_PrivateReturnsError_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_OwnerCanToggle_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -357,6 +360,7 @@ func FuzzPublic_OwnerCanToggle_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_ListReturnsOnlyPublic_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -448,6 +452,7 @@ func FuzzPublic_ListReturnsOnlyPublic_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_S3ObjectCreatedDeleted_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -547,6 +552,7 @@ func FuzzPublic_S3ObjectCreatedDeleted_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_SetPublicNonExistent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -601,6 +607,7 @@ func FuzzPublic_SetPublicNonExistent_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_SetPublicEmptyID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -650,6 +657,7 @@ func FuzzPublic_SetPublicEmptyID_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_GetPublicEmptyID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -699,6 +707,7 @@ func FuzzPublic_GetPublicEmptyID_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_GetPublicURL_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)
@@ -761,6 +770,7 @@ func FuzzPublic_GetPublicURL_Properties(f *testing.F) {
 // =============================================================================
 
 func TestPublic_ListPagination_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		testID := testCounter.Add(1)
 		userID := fmt.Sprintf("%s-public-test%d", HardcodedUserID, testID)

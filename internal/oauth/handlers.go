@@ -380,6 +380,20 @@ func (h *Handler) HandleConsentSubmit(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
+	// T1b: Re-validate redirect_uri against registered client URIs.
+	// The cookie is client-controlled and may have been tampered with.
+	client, err := h.provider.GetClient(r.Context(), req.ClientID)
+	if err != nil {
+		// Do NOT redirect to an untrusted redirect_uri
+		h.renderAuthError(w, r, "", "", ErrInvalidClient)
+		return
+	}
+	if err := h.provider.ValidateClientRedirectURI(client, req.RedirectURI); err != nil {
+		// Do NOT redirect to an untrusted redirect_uri
+		h.renderAuthError(w, r, "", "", err)
+		return
+	}
+
 	// Verify user is still authenticated
 	sessionID, err := auth.GetFromRequest(r)
 	if err != nil {
@@ -598,9 +612,13 @@ func (h *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Delete the authorization code (one-time use)
+	// Delete the authorization code (one-time use).
+	// T1c: If deletion fails, we MUST abort — otherwise the same code can be
+	// replayed because it was never removed from the store.
 	if err := h.provider.DeleteAuthorizationCode(r.Context(), req.Code); err != nil {
-		// Log error but continue - code will expire anyway
+		log.Printf("[OAUTH] CRITICAL: failed to delete authorization code: %v", err)
+		h.writeTokenError(w, http.StatusInternalServerError, "server_error", "failed to consume authorization code")
+		return
 	}
 
 	// Create tokens
