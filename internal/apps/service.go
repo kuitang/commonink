@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"sort"
 	"strconv"
@@ -14,15 +14,28 @@ import (
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/db"
+	"github.com/kuitang/agent-notes/internal/errs"
 	sprites "github.com/superfly/sprites-go"
 )
 
+// ErrAppNotFound is returned when an app does not exist.
+var ErrAppNotFound = errors.New("app not found")
+
 const (
-	defaultBashTimeoutSeconds = 120
-	maxBashTimeoutSeconds     = 600
+	defaultExecTimeoutSeconds = 120
+	maxExecTimeoutSeconds     = 600
+	maxExecOutputBytes        = 1 << 20
+	maxExecArgvBytes          = 32768
+	maxAppWriteFiles          = 64
+	maxAppWritePathBytes      = 1024
+	maxAppWriteFileBytes      = 1 << 20
+	maxAppWriteTotalBytes     = 8 << 20
 	defaultLogLines           = 200
 	maxLogLines               = 1000
 	maxFileListEntries        = 1000
+	defaultSpriteAPITimeout   = 45 * time.Second
+	defaultSpriteIOTimeout    = 120 * time.Second
+	defaultSpriteProbeTimeout = 10 * time.Second
 )
 
 // Service owns app metadata persistence and Sprite operations.
@@ -89,33 +102,65 @@ func (s *Service) Create(ctx context.Context, candidateNames []string) (*AppCrea
 			return nil, err
 		}
 
-		sprite, err := s.client.CreateSprite(ctx, name, nil)
+		createCtx, createCancel := context.WithTimeout(ctx, defaultSpriteAPITimeout)
+		sprite, err := s.client.CreateSprite(createCtx, name, nil)
+		createCancel()
 		if err != nil {
 			attempts = append(attempts, toCreateAttempt(name, err))
 			continue
 		}
-
-		if err := sprite.UpdateURLSettings(ctx, &sprites.URLSettings{Auth: "public"}); err != nil {
-			_ = s.client.DeleteSprite(ctx, name)
-			attempts = append(attempts, toCreateAttempt(name, err))
+		spriteName := strings.TrimSpace(sprite.Name())
+		if spriteName == "" {
+			attemptErr := errors.New("sprite API returned empty sprite name")
+			if cleanupErr := s.deleteSpriteBestEffort(ctx, name, "app_create sprite.create cleanup"); cleanupErr != nil {
+				attemptErr = fmt.Errorf("%w (plus cleanup failure: %v)", attemptErr, cleanupErr)
+			}
+			attempts = append(attempts, toCreateAttempt(name, attemptErr))
 			continue
 		}
 
+		settingsCtx, settingsCancel := context.WithTimeout(ctx, defaultSpriteAPITimeout)
+		if err := sprite.UpdateURLSettings(settingsCtx, &sprites.URLSettings{Auth: "public"}); err != nil {
+			settingsCancel()
+			attemptErr := err
+			if cleanupErr := s.deleteSpriteBestEffort(ctx, spriteName, "app_create sprite.url_settings cleanup"); cleanupErr != nil {
+				attemptErr = fmt.Errorf("%w (plus cleanup failure: %v)", err, cleanupErr)
+			}
+			attempts = append(attempts, toCreateAttempt(name, attemptErr))
+			continue
+		}
+		settingsCancel()
+
 		publicURL := ""
 		status := "created"
-		if fresh, err := s.client.GetSprite(ctx, name); err == nil {
-			publicURL = strings.TrimSpace(fresh.URL)
-			if fresh.Status != "" {
-				status = fresh.Status
+		getCtx, getCancel := context.WithTimeout(ctx, defaultSpriteAPITimeout)
+		fresh, err := s.client.GetSprite(getCtx, spriteName)
+		getCancel()
+		if err != nil {
+			verifyErr := fmt.Errorf("failed to verify created sprite metadata: %w", err)
+			cleanupErr := s.deleteSpriteBestEffort(ctx, spriteName, "app_create sprite.get cleanup")
+			if cleanupErr != nil {
+				verifyErr = fmt.Errorf("%w (plus cleanup failure: %v)", verifyErr, cleanupErr)
 			}
+			attempts = append(attempts, toCreateAttempt(name, verifyErr))
+			continue
+		}
+		if freshName := strings.TrimSpace(fresh.Name()); freshName != "" {
+			spriteName = freshName
+		}
+		publicURL = strings.TrimSpace(fresh.URL)
+		if fresh.Status != "" {
+			status = fresh.Status
 		}
 
 		now := time.Now().UTC().Unix()
 		if _, err := s.userDB.DB().ExecContext(ctx, `
 			INSERT INTO apps(name, sprite_name, public_url, status, created_at, updated_at)
 			VALUES(?, ?, ?, ?, ?, ?)
-		`, name, name, publicURL, status, now, now); err != nil {
-			_ = s.client.DeleteSprite(ctx, name)
+		`, name, spriteName, publicURL, status, now, now); err != nil {
+			if cleanupErr := s.deleteSpriteBestEffort(ctx, spriteName, "app_create metadata insert cleanup"); cleanupErr != nil {
+				return nil, fmt.Errorf("failed to persist app metadata: %w (plus cleanup failure: %v)", err, cleanupErr)
+			}
 			return nil, fmt.Errorf("failed to persist app metadata: %w", err)
 		}
 
@@ -137,104 +182,200 @@ func (s *Service) Create(ctx context.Context, candidateNames []string) (*AppCrea
 	}, nil
 }
 
-func (s *Service) WriteFile(ctx context.Context, appName, relPath, content string) (*AppWriteResult, error) {
+func (s *Service) WriteFiles(ctx context.Context, appName string, files []AppWriteFileInput) (*AppWriteResult, error) {
 	if err := s.requireClient(); err != nil {
 		return nil, err
 	}
+	if len(files) == 0 {
+		return nil, errors.New("files is required")
+	}
+	if len(files) > maxAppWriteFiles {
+		return nil, fmt.Errorf("files must contain <= %d items", maxAppWriteFiles)
+	}
+
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
-
-	cleanPath, fullPath, err := sanitizePath(relPath)
-	if err != nil {
+	if err := s.verifySpriteBinding(ctx, meta); err != nil {
 		return nil, err
 	}
 
-	b64 := base64.StdEncoding.EncodeToString([]byte(content))
-	py := "import base64, pathlib, sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(base64.b64decode(sys.argv[2]))"
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "python3", "-c", py, fullPath, b64)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed to write file on sprite: %v: %s", err, strings.TrimSpace(string(out)))
+	type validatedWrite struct {
+		path    string
+		content string
+	}
+	validated := make([]validatedWrite, 0, len(files))
+	seen := make(map[string]struct{}, len(files))
+	totalBytes := 0
+	for i, file := range files {
+		cleanPath, _, sanitizeErr := sanitizePath(file.Path)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("files[%d].path invalid: %w", i, sanitizeErr)
+		}
+		if len(cleanPath) > maxAppWritePathBytes {
+			return nil, fmt.Errorf("files[%d].path must be <= %d bytes", i, maxAppWritePathBytes)
+		}
+		contentBytes := len(file.Content)
+		if contentBytes > maxAppWriteFileBytes {
+			return nil, fmt.Errorf("files[%d].content must be <= %d bytes", i, maxAppWriteFileBytes)
+		}
+		totalBytes += contentBytes
+		if totalBytes > maxAppWriteTotalBytes {
+			return nil, fmt.Errorf("total file content must be <= %d bytes", maxAppWriteTotalBytes)
+		}
+		if _, exists := seen[cleanPath]; exists {
+			return nil, fmt.Errorf("duplicate file path: %q", cleanPath)
+		}
+		seen[cleanPath] = struct{}{}
+		validated = append(validated, validatedWrite{
+			path:    cleanPath,
+			content: file.Content,
+		})
+	}
+
+	fs := s.client.Sprite(meta.SpriteName).FilesystemAt("/home/sprite")
+	runCtx, runCancel := context.WithTimeout(ctx, defaultSpriteIOTimeout)
+	defer runCancel()
+
+	filesWritten := make([]AppWriteFileResult, 0, len(validated))
+	for _, write := range validated {
+		if writeErr := fs.WriteFileContext(runCtx, write.path, []byte(write.content), 0o644); writeErr != nil {
+			return nil, fmt.Errorf("failed to write file %q on sprite after %d/%d files: %w", write.path, len(filesWritten), len(validated), writeErr)
+		}
+		filesWritten = append(filesWritten, AppWriteFileResult{
+			Path:         write.path,
+			BytesWritten: len(write.content),
+		})
 	}
 
 	if err := s.touch(ctx, meta.Name, meta.Status, meta.PublicURL); err != nil {
 		return nil, err
 	}
 	return &AppWriteResult{
-		App:          meta.Name,
-		Path:         cleanPath,
-		BytesWritten: len(content),
+		App:               meta.Name,
+		FilesWritten:      filesWritten,
+		TotalBytesWritten: totalBytes,
+		TotalFilesWritten: len(filesWritten),
 	}, nil
 }
 
-func (s *Service) ReadFile(ctx context.Context, appName, relPath string) (*AppReadResult, error) {
+func (s *Service) ReadFiles(ctx context.Context, appName string, paths []string) (*AppReadResult, error) {
 	if err := s.requireClient(); err != nil {
 		return nil, err
 	}
+	if len(paths) == 0 {
+		return nil, errors.New("files is required")
+	}
+	if len(paths) > maxAppWriteFiles {
+		return nil, fmt.Errorf("files must contain <= %d items", maxAppWriteFiles)
+	}
+
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
-
-	cleanPath, fullPath, err := sanitizePath(relPath)
-	if err != nil {
+	if err := s.verifySpriteBinding(ctx, meta); err != nil {
 		return nil, err
 	}
 
-	py := "import base64, pathlib, sys; p=pathlib.Path(sys.argv[1]); sys.stdout.write(base64.b64encode(p.read_bytes()).decode())"
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "python3", "-c", py, fullPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file on sprite: %v: %s", err, strings.TrimSpace(string(output)))
+	cleanPaths := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for i, rawPath := range paths {
+		cleanPath, _, sanitizeErr := sanitizePath(rawPath)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("files[%d].path invalid: %w", i, sanitizeErr)
+		}
+		if len(cleanPath) > maxAppWritePathBytes {
+			return nil, fmt.Errorf("files[%d].path must be <= %d bytes", i, maxAppWritePathBytes)
+		}
+		if _, exists := seen[cleanPath]; exists {
+			return nil, fmt.Errorf("duplicate file path: %q", cleanPath)
+		}
+		seen[cleanPath] = struct{}{}
+		cleanPaths = append(cleanPaths, cleanPath)
 	}
 
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(output)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode file content: %w", err)
+	fs := s.client.Sprite(meta.SpriteName).FilesystemAt("/home/sprite")
+	timeoutCtx, runCancel := context.WithTimeout(ctx, defaultSpriteIOTimeout)
+	defer runCancel()
+	files := make([]AppWriteFileInput, 0, len(cleanPaths))
+	totalBytes := 0
+	for _, cleanPath := range cleanPaths {
+		if err := timeoutCtx.Err(); err != nil {
+			return nil, fmt.Errorf("timeout reading files after %d/%d files: %w", len(files), len(cleanPaths), err)
+		}
+		decoded, readErr := fs.ReadFile(cleanPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read file %q on sprite after %d/%d files: %w", cleanPath, len(files), len(cleanPaths), readErr)
+		}
+		contentBytes := len(decoded)
+		if contentBytes > maxAppWriteFileBytes {
+			return nil, fmt.Errorf("file %q exceeds max supported size %d bytes", cleanPath, maxAppWriteFileBytes)
+		}
+		totalBytes += contentBytes
+		if totalBytes > maxAppWriteTotalBytes {
+			return nil, fmt.Errorf("total file content must be <= %d bytes", maxAppWriteTotalBytes)
+		}
+		files = append(files, AppWriteFileInput{
+			Path:    cleanPath,
+			Content: string(decoded),
+		})
 	}
 
 	return &AppReadResult{
-		App:     meta.Name,
-		Path:    cleanPath,
-		Content: string(decoded),
+		App:   meta.Name,
+		Files: files,
 	}, nil
 }
 
-func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutSeconds int) (*AppBashResult, error) {
+func (s *Service) RunExec(ctx context.Context, appName string, argv []string, timeoutSeconds int) (*AppExecResult, error) {
 	if err := s.requireClient(); err != nil {
 		return nil, err
+	}
+	if len(argv) == 0 {
+		return nil, errors.New("command argv must not be empty")
+	}
+	argvTotalBytes := 0
+	for _, arg := range argv {
+		argvTotalBytes += len(arg)
+	}
+	if argvTotalBytes > maxExecArgvBytes {
+		return nil, fmt.Errorf("total argv size must be <= %d bytes", maxExecArgvBytes)
 	}
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
+		return nil, err
+	}
+	if err := s.verifySpriteBinding(ctx, meta); err != nil {
 		return nil, err
 	}
 
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = defaultBashTimeoutSeconds
+		timeoutSeconds = defaultExecTimeoutSeconds
 	}
-	if timeoutSeconds > maxBashTimeoutSeconds {
-		return nil, fmt.Errorf("timeout_seconds must be <= %d", maxBashTimeoutSeconds)
+	if timeoutSeconds > maxExecTimeoutSeconds {
+		return nil, fmt.Errorf("timeout_seconds must be <= %d", maxExecTimeoutSeconds)
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(runCtx, "bash", "-lc", command)
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = "/home/sprite"
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	stdoutBuf := newCappedOutputBuffer(maxExecOutputBytes)
+	stderrBuf := newCappedOutputBuffer(maxExecOutputBytes)
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
 	start := time.Now()
 	runErr := cmd.Run()
@@ -259,7 +400,10 @@ func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutS
 		}
 	}
 
-	portStatus, warning := s.detectPortAndService(ctx, meta.SpriteName)
+	portStatus, warning, probeErr := s.detectPortAndService(ctx, meta.SpriteName)
+	if probeErr != nil {
+		return nil, fmt.Errorf("failed to probe sprite runtime after command: %w", probeErr)
+	}
 	nextStatus := meta.Status
 	if portStatus == "listening" {
 		nextStatus = "running"
@@ -271,15 +415,25 @@ func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutS
 		return nil, err
 	}
 
-	return &AppBashResult{
-		Stdout:         stdout,
-		Stderr:         stderr,
-		ExitCode:       exitCode,
-		RuntimeMS:      runtimeMS,
-		PortStatus:     portStatus,
-		PublicURL:      meta.PublicURL,
-		Warning:        warning,
-		TimeoutSeconds: timeoutSeconds,
+	message := "Command succeeded."
+	if exitCode != 0 {
+		message = fmt.Sprintf("Command failed with exit code %d.", exitCode)
+	} else if exitCode == -1 {
+		message = "Command timed out."
+	}
+
+	return &AppExecResult{
+		Message:         message,
+		Stdout:          stdout,
+		Stderr:          stderr,
+		StdoutTruncated: stdoutBuf.Truncated(),
+		StderrTruncated: stderrBuf.Truncated(),
+		ExitCode:        exitCode,
+		RuntimeMS:       runtimeMS,
+		PortStatus:      portStatus,
+		PublicURL:       meta.PublicURL,
+		Warning:         warning,
+		TimeoutSeconds:  timeoutSeconds,
 	}, nil
 }
 
@@ -321,7 +475,7 @@ func (s *Service) Get(ctx context.Context, appName string) (*AppMetadata, error)
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found")
+			return nil, errs.Wrap(errs.NotFound, "app not found", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -336,8 +490,11 @@ func (s *Service) ListFiles(ctx context.Context, appName string) (*AppListFilesR
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
+		return nil, err
+	}
+	if err := s.verifySpriteBinding(ctx, meta); err != nil {
 		return nil, err
 	}
 
@@ -346,13 +503,21 @@ func (s *Service) ListFiles(ctx context.Context, appName string) (*AppListFilesR
 		"-o -path '*/venv' -o -path '*/venv/*' -o -path '*/__pycache__' -o -path '*/__pycache__/*' \\) " +
 		"-prune -o -printf '%P\\0%y\\0%s\\0%T@\\0'"
 
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(ctx, "bash", "-lc", listCmd)
+	runCtx, runCancel := context.WithTimeout(ctx, defaultSpriteIOTimeout)
+	defer runCancel()
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(runCtx, "bash", "-lc", listCmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list files on sprite: %v: %s", err, strings.TrimSpace(string(output)))
 	}
 
 	tokens := bytes.Split(output, []byte{0})
+	if n := len(tokens); n > 0 && len(tokens[n-1]) == 0 {
+		tokens = tokens[:n-1]
+	}
+	if len(tokens)%4 != 0 {
+		return nil, fmt.Errorf("failed to parse files listing output")
+	}
 	files := make([]AppFileEntry, 0, len(tokens)/4)
 	for i := 0; i+3 < len(tokens); i += 4 {
 		relPath := string(tokens[i])
@@ -367,16 +532,20 @@ func (s *Service) ListFiles(ctx context.Context, appName string) (*AppListFilesR
 
 		sizeBytes := int64(0)
 		if kind == "file" {
-			if parsed, parseErr := strconv.ParseInt(string(tokens[i+2]), 10, 64); parseErr == nil && parsed > 0 {
-				sizeBytes = parsed
+			parsed, parseErr := strconv.ParseInt(string(tokens[i+2]), 10, 64)
+			if parseErr != nil || parsed < 0 {
+				return nil, fmt.Errorf("failed to parse file size for %q", relPath)
 			}
+			sizeBytes = parsed
 		}
 
 		modifiedAt := time.Unix(0, 0).UTC()
 		if modifiedRaw := string(tokens[i+3]); modifiedRaw != "" {
-			if parsed, parseErr := strconv.ParseFloat(modifiedRaw, 64); parseErr == nil && parsed >= 0 {
-				modifiedAt = time.Unix(int64(parsed), 0).UTC()
+			parsed, parseErr := strconv.ParseFloat(modifiedRaw, 64)
+			if parseErr != nil || parsed < 0 {
+				return nil, fmt.Errorf("failed to parse modified time for %q", relPath)
 			}
+			modifiedAt = time.Unix(int64(parsed), 0).UTC()
 		}
 
 		files = append(files, AppFileEntry{
@@ -408,8 +577,11 @@ func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*App
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
+		return nil, err
+	}
+	if err := s.verifySpriteBinding(ctx, meta); err != nil {
 		return nil, err
 	}
 
@@ -420,7 +592,7 @@ func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*App
 		lines = maxLogLines
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultBashTimeoutSeconds)*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultExecTimeoutSeconds)*time.Second)
 	defer cancel()
 
 	cmdText := fmt.Sprintf("if command -v journalctl >/dev/null 2>&1; then journalctl -n %d --no-pager; elif [ -f '/.sprite/logs/services/web.log' ]; then tail -n %d '/.sprite/logs/services/web.log'; elif ls /.sprite/logs/services/*.log >/dev/null 2>&1; then tail -n %d /.sprite/logs/services/*.log; else echo 'no logs available on this sprite runtime'; fi", lines, lines, lines)
@@ -447,7 +619,7 @@ func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*App
 			exitCode = exitErr.ExitCode()
 		} else if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			exitCode = -1
-			stderr = fmt.Sprintf("log command timed out after %d seconds", defaultBashTimeoutSeconds)
+			stderr = fmt.Sprintf("log command timed out after %d seconds", defaultExecTimeoutSeconds)
 		} else {
 			return nil, fmt.Errorf("failed to tail logs on sprite: %w", runErr)
 		}
@@ -470,13 +642,19 @@ func (s *Service) Delete(ctx context.Context, appName string) (*AppDeleteResult,
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
+	if err := s.verifySpriteBinding(ctx, meta); err != nil {
+		return nil, err
+	}
 
-	if err := s.client.DeleteSprite(ctx, meta.SpriteName); err != nil && !isSpriteNotFound(err) {
-		return nil, fmt.Errorf("failed to delete sprite: %w", err)
+	deleteCtx, deleteCancel := context.WithTimeout(ctx, defaultSpriteAPITimeout)
+	err = s.client.DeleteSprite(deleteCtx, meta.SpriteName)
+	deleteCancel()
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete sprite %q: %w", meta.SpriteName, err)
 	}
 	if _, err := s.userDB.DB().ExecContext(ctx, `DELETE FROM apps WHERE name = ?`, meta.Name); err != nil {
 		return nil, fmt.Errorf("failed to delete app metadata: %w", err)
@@ -518,36 +696,102 @@ func (s *Service) touch(ctx context.Context, appName, status, publicURL string) 
 	return nil
 }
 
-func (s *Service) detectPortAndService(ctx context.Context, spriteName string) (string, string) {
+func (s *Service) verifySpriteBinding(ctx context.Context, meta *AppMetadata) error {
+	if meta == nil {
+		return errors.New("app metadata is missing")
+	}
+	spriteName := strings.TrimSpace(meta.SpriteName)
+	if spriteName == "" {
+		return errors.New("app metadata missing sprite name")
+	}
+
+	verifyCtx, cancel := context.WithTimeout(ctx, defaultSpriteAPITimeout)
+	defer cancel()
+	sprite, err := s.client.GetSprite(verifyCtx, spriteName)
+	if err != nil {
+		return fmt.Errorf("failed to verify sprite %q: %w", spriteName, err)
+	}
+
+	expectedHost := normalizedURLHost(meta.PublicURL)
+	if expectedHost == "" {
+		return nil
+	}
+	actualHost := normalizedURLHost(sprite.URL)
+	if actualHost == "" {
+		return fmt.Errorf("sprite %q verification failed: API returned empty URL", spriteName)
+	}
+	if !strings.EqualFold(expectedHost, actualHost) {
+		return fmt.Errorf("sprite binding mismatch for app %q: metadata host=%q but sprite host=%q (sprite_name=%q)", meta.Name, expectedHost, actualHost, spriteName)
+	}
+	return nil
+}
+
+func normalizedURLHost(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+	parsed, err := url.Parse(text)
+	if err == nil && parsed.Hostname() != "" {
+		return strings.ToLower(parsed.Hostname())
+	}
+	if !strings.Contains(text, "://") {
+		parsedWithScheme, parseErr := url.Parse("https://" + text)
+		if parseErr == nil && parsedWithScheme.Hostname() != "" {
+			return strings.ToLower(parsedWithScheme.Hostname())
+		}
+	}
+	return ""
+}
+
+func (s *Service) detectPortAndService(ctx context.Context, spriteName string) (string, string, error) {
 	sprite := s.client.Sprite(spriteName)
-	portCmd := sprite.CommandContext(ctx, "bash", "-lc", "if command -v ss >/dev/null 2>&1; then if ss -tln 2>/dev/null | grep -q ':8080'; then echo listening; else echo not_listening; fi; else echo unknown; fi")
+	portProbeCmd := "if command -v ss >/dev/null 2>&1; then if ss -tln 2>/dev/null | grep -q ':8080'; then echo listening; else echo not_listening; fi; else echo unknown; fi"
+	portCtx, portCancel := context.WithTimeout(ctx, defaultSpriteProbeTimeout)
+	defer portCancel()
+	portCmd := sprite.CommandContext(portCtx, "bash", "-lc", portProbeCmd)
 	out, err := portCmd.Output()
 	if err != nil {
-		return "unknown", "Port probe failed after app_bash."
+		return "", "", fmt.Errorf("port probe command failed: %w", err)
 	}
 
 	status := strings.TrimSpace(string(out))
 	if status == "" {
 		status = "unknown"
 	}
+	if status != "listening" && status != "not_listening" && status != "unknown" {
+		return "", "", fmt.Errorf("port probe returned unexpected status %q", status)
+	}
 	if status != "listening" {
 		if status == "unknown" {
-			return status, "Warning: ss is unavailable on this sprite runtime; port 8080 status could not be determined."
+			return status, "Warning: ss is unavailable on this sprite runtime; port 8080 status could not be determined.", nil
 		}
-		return status, ""
+		return status, "", nil
 	}
 
-	serviceCmd := sprite.CommandContext(ctx, "bash", "-lc", "if command -v sprite-env >/dev/null 2>&1; then sprite-env services list 2>/dev/null; else echo __no_sprite_env__; fi")
+	serviceProbeCmd := "if command -v sprite-env >/dev/null 2>&1; then sprite-env services list 2>/dev/null; else echo __no_sprite_env__; fi"
+	serviceCtx, serviceCancel := context.WithTimeout(ctx, defaultSpriteProbeTimeout)
+	defer serviceCancel()
+	serviceCmd := sprite.CommandContext(serviceCtx, "bash", "-lc", serviceProbeCmd)
 	serviceOut, err := serviceCmd.Output()
 	if err != nil {
-		return status, ""
+		return "", "", fmt.Errorf("service probe command failed: %w", err)
 	}
 	text := strings.TrimSpace(string(serviceOut))
 	lower := strings.ToLower(text)
 	if text == "" || strings.Contains(lower, "no services") || strings.Contains(text, "__no_sprite_env__") {
-		return status, "Warning: process listening on 8080 but no persistent service registered. Use sprite-env services create to ensure app survives Sprite sleep."
+		return status, "Warning: process listening on 8080 but no persistent service registered. Use sprite-env services create to ensure app survives Sprite sleep.", nil
 	}
-	return status, ""
+	return status, "", nil
+}
+
+func (s *Service) deleteSpriteBestEffort(ctx context.Context, spriteName, reason string) error {
+	deleteCtx, cancel := context.WithTimeout(ctx, defaultSpriteAPITimeout)
+	defer cancel()
+	if err := s.client.DeleteSprite(deleteCtx, spriteName); err != nil && !isSpriteNotFound(err) {
+		return fmt.Errorf("cleanup delete failed: %w", err)
+	}
+	return nil
 }
 
 func sanitizePath(raw string) (string, string, error) {
@@ -582,4 +826,44 @@ func toCreateAttempt(name string, err error) AppCreateAttempt {
 
 func isSpriteNotFound(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
+type cappedOutputBuffer struct {
+	maxBytes  int
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func newCappedOutputBuffer(maxBytes int) *cappedOutputBuffer {
+	return &cappedOutputBuffer{maxBytes: maxBytes}
+}
+
+func (b *cappedOutputBuffer) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.maxBytes <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	remaining := b.maxBytes - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = b.buf.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+	_, _ = b.buf.Write(p)
+	return len(p), nil
+}
+
+func (b *cappedOutputBuffer) String() string {
+	return b.buf.String()
+}
+
+func (b *cappedOutputBuffer) Truncated() bool {
+	return b.truncated
 }

@@ -88,7 +88,7 @@ sequenceDiagram
 - `GET /api/apps/{name}/files`
 - `GET /api/apps/{name}/files/{path...}`
 - `GET /api/apps/{name}/logs` (`?lines=<n>` optional)
-- App deployment remains MCP-only via `app_create`, `app_write`, `app_bash`.
+- App deployment remains MCP-only via `app_create` and `app_bash` (use bash heredocs to write files while `BASH_ONLY` is enabled).
 - MCP is mounted in stateless POST mode at top-level router:
 - `POST /mcp` (all tools)
 - `POST /mcp/notes` (notes toolset)

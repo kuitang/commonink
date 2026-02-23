@@ -3,6 +3,7 @@ package notes
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
+	"github.com/kuitang/agent-notes/internal/errs"
 )
 
 const (
@@ -56,16 +58,6 @@ func (s *Service) revisionHashFromState(ctx context.Context, title, content stri
 		return "", fmt.Errorf("failed to compute revision hash: %w", err)
 	}
 	return hash, nil
-}
-
-// NewServiceForHardcodedUser creates a new notes service for the hardcoded test user
-// This is a convenience function for Milestone 1
-func NewServiceForHardcodedUser() (*Service, error) {
-	userDB, err := db.OpenUserDB(HardcodedUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open user database: %w", err)
-	}
-	return &Service{userDB: userDB, storageLimit: FreeStorageLimitBytes}, nil
 }
 
 // GetStorageUsage returns the current storage usage for this user
@@ -132,8 +124,8 @@ func (s *Service) Read(id string) (*Note, error) {
 	ctx := context.Background()
 
 	dbNote, err := s.userDB.Queries().GetNote(ctx, id)
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("note not found: %s", id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", errs.Wrap(errs.NotFound, "note not found", ErrNoteNotFound), id)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read note: %w", err)
@@ -165,8 +157,8 @@ func (s *Service) Update(id string, params UpdateNoteParams) (*Note, error) {
 
 	// Check if note exists first
 	existing, err := s.userDB.Queries().GetNote(ctx, id)
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("note not found: %s", id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", errs.Wrap(errs.NotFound, "note not found", ErrNoteNotFound), id)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read note: %w", err)
@@ -261,7 +253,7 @@ func (s *Service) Delete(id string) error {
 		return fmt.Errorf("failed to check note existence: %w", err)
 	}
 	if exists == 0 {
-		return fmt.Errorf("note not found: %s", id)
+		return fmt.Errorf("%w: %s", errs.Wrap(errs.NotFound, "note not found", ErrNoteNotFound), id)
 	}
 
 	err = s.userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{

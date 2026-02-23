@@ -189,6 +189,7 @@ func testSessionsDB_Schema_Properties(t *rapid.T) {
 }
 
 func TestSessionsDB_Schema_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSessionsDB_Schema_Properties)
 }
 
@@ -207,10 +208,11 @@ func testUserDB_ValidUserID_Properties(t *rapid.T) {
 
 	userID := testutil.ValidUserID().Draw(t, "userID")
 
-	// Property: OpenUserDB with valid userID returns non-nil database wrapper
-	db1, err := OpenUserDB(userID)
+	// Property: OpenUserDBWithDEK with valid userID returns non-nil database wrapper
+	dek := testDEK()
+	db1, err := OpenUserDBWithDEK(userID, dek)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed for userID %q: %v", userID, err)
+		t.Fatalf("OpenUserDBWithDEK failed for userID %q: %v", userID, err)
 	}
 	if db1 == nil {
 		t.Fatal("Expected non-nil database wrapper")
@@ -228,9 +230,9 @@ func testUserDB_ValidUserID_Properties(t *rapid.T) {
 	}
 
 	// Property: Same userID returns cached instance (singleton per user)
-	db2, err := OpenUserDB(userID)
+	db2, err := OpenUserDBWithDEK(userID, dek)
 	if err != nil {
-		t.Fatalf("Second OpenUserDB call failed: %v", err)
+		t.Fatalf("Second OpenUserDBWithDEK call failed: %v", err)
 	}
 	if db1.DB() != db2.DB() {
 		t.Fatal("Expected same database instance for same userID")
@@ -238,6 +240,7 @@ func testUserDB_ValidUserID_Properties(t *rapid.T) {
 }
 
 func TestUserDB_ValidUserID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_ValidUserID_Properties)
 }
 
@@ -254,7 +257,7 @@ func testUserDB_EmptyUserID_Properties(t *rapid.T) {
 	setupTestDirRapid(t)
 
 	// Property: Empty userID always returns error
-	_, err := OpenUserDB("")
+	_, err := OpenUserDBWithDEK("", testDEK())
 	if err == nil {
 		t.Fatal("Expected error for empty userID")
 	}
@@ -266,6 +269,7 @@ func testUserDB_EmptyUserID_Properties(t *rapid.T) {
 }
 
 func TestUserDB_EmptyUserID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_EmptyUserID_Properties)
 }
 
@@ -320,6 +324,7 @@ func testUserDB_Schema_Properties(t *rapid.T) {
 }
 
 func TestUserDB_Schema_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_Schema_Properties)
 }
 
@@ -407,6 +412,7 @@ func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
 }
 
 func TestUserDB_MultipleUsers_Isolation_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_MultipleUsers_Isolation_Properties)
 }
 
@@ -507,6 +513,7 @@ func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_Sync_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_Sync_Properties)
 }
 
@@ -569,6 +576,7 @@ func testUserDB_ContentSizeLimit_Properties(t *rapid.T) {
 }
 
 func TestUserDB_ContentSizeLimit_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_ContentSizeLimit_Properties)
 }
 
@@ -578,23 +586,19 @@ func FuzzUserDB_ContentSizeLimit_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property: InitSchemas initializes all databases
+// Property: Multiple user DBs can be initialized with explicit DEK
 // =============================================================================
 
-func testInitSchemas_Properties(t *rapid.T) {
+func testMultipleUserDBInit_Properties(t *rapid.T) {
 	setupTestDirRapid(t)
 	ctx := context.Background()
+	dek := testDEK()
 
 	// Generate random user IDs
 	numUsers := rapid.IntRange(1, 3).Draw(t, "numUsers")
 	userIDs := make([]string, numUsers)
 	for i := 0; i < numUsers; i++ {
 		userIDs[i] = testutil.ValidUserID().Draw(t, "userID")
-	}
-
-	err := InitSchemas(userIDs...)
-	if err != nil {
-		t.Fatalf("InitSchemas failed: %v", err)
 	}
 
 	// Property: Sessions database is initialized
@@ -606,9 +610,9 @@ func testInitSchemas_Properties(t *rapid.T) {
 		t.Fatal("Sessions database is nil")
 	}
 
-	// Property: All user databases are initialized
+	// Property: All user databases are initialized with explicit DEK
 	for _, userID := range userIDs {
-		userDB, err := OpenUserDB(userID)
+		userDB, err := OpenUserDBWithDEK(userID, dek)
 		if err != nil {
 			t.Fatalf("Failed to get user database for %s: %v", userID, err)
 		}
@@ -627,13 +631,13 @@ func testInitSchemas_Properties(t *rapid.T) {
 	}
 }
 
-func TestInitSchemas_Properties(t *testing.T) {
-	rapid.Check(t, testInitSchemas_Properties)
+func TestMultipleUserDBInit_Properties(t *testing.T) {
+	rapid.Check(t, testMultipleUserDBInit_Properties)
 }
 
-func FuzzInitSchemas_Properties(f *testing.F) {
+func FuzzMultipleUserDBInit_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testInitSchemas_Properties))
+	f.Fuzz(rapid.MakeFuzz(testMultipleUserDBInit_Properties))
 }
 
 // =============================================================================
@@ -650,10 +654,11 @@ func testCloseAll_Properties(t *rapid.T) {
 	}
 
 	// Open some user databases
+	dek := testDEK()
 	numUsers := rapid.IntRange(1, 3).Draw(t, "numUsers")
 	for i := 0; i < numUsers; i++ {
 		userID := testutil.ValidUserID().Draw(t, "userID")
-		_, err := OpenUserDB(userID)
+		_, err := OpenUserDBWithDEK(userID, dek)
 		if err != nil {
 			t.Fatalf("Failed to open user DB for iteration %d: %v", i, err)
 		}
@@ -676,34 +681,53 @@ func FuzzCloseAll_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property: GetHardcodedDEK returns correct length and is a copy
+// Property: No hardcoded DEK fallback exists — OpenUserDB must not compile
+// without an explicit DEK parameter. This test enforces that the hardcoded
+// DEK exploit is removed. If OpenUserDB(userID) still exists, this test fails.
 // =============================================================================
 
-func testGetHardcodedDEK_Properties(t *rapid.T) {
-	dek := GetHardcodedDEK()
+func testNoHardcodedDEK_Fallback_Properties(t *rapid.T) {
+	setupTestDirRapid(t)
 
-	// Property: DEK is 32 bytes (256 bits for AES-256)
-	if len(dek) != 32 {
-		t.Fatalf("Expected DEK length 32, got %d", len(dek))
+	userID := testutil.ValidUserID().Draw(t, "userID")
+
+	// Property: OpenUserDBWithDEK with nil DEK returns error
+	_, err := OpenUserDBWithDEK(userID, nil)
+	if err == nil {
+		t.Fatal("OpenUserDBWithDEK with nil DEK must return error")
 	}
 
-	// Property: Returns a copy (mutating doesn't affect internal state)
-	originalFirstByte := dek[0]
-	dek[0] = 0xFF
+	// Property: OpenUserDBWithDEK with empty DEK returns error
+	_, err = OpenUserDBWithDEK(userID, []byte{})
+	if err == nil {
+		t.Fatal("OpenUserDBWithDEK with empty DEK must return error")
+	}
 
-	dek2 := GetHardcodedDEK()
-	if dek2[0] != originalFirstByte {
-		t.Fatal("GetHardcodedDEK returns a reference instead of a copy")
+	// Property: OpenUserDBWithDEK with wrong-length DEK returns error
+	shortDEK := rapid.SliceOfN(rapid.Byte(), 1, 31).Draw(t, "shortDEK")
+	_, err = OpenUserDBWithDEK(userID, shortDEK)
+	if err == nil {
+		t.Fatalf("OpenUserDBWithDEK with %d-byte DEK must return error", len(shortDEK))
+	}
+
+	// Property: OpenUserDBWithDEK with valid 32-byte DEK succeeds
+	validDEK := testDEK()
+	udb, err := OpenUserDBWithDEK(userID, validDEK)
+	if err != nil {
+		t.Fatalf("OpenUserDBWithDEK with valid DEK failed: %v", err)
+	}
+	if udb == nil {
+		t.Fatal("OpenUserDBWithDEK with valid DEK returned nil")
 	}
 }
 
-func TestGetHardcodedDEK_Properties(t *testing.T) {
-	rapid.Check(t, testGetHardcodedDEK_Properties)
+func TestNoHardcodedDEK_Fallback_Properties(t *testing.T) {
+	rapid.Check(t, testNoHardcodedDEK_Fallback_Properties)
 }
 
-func FuzzGetHardcodedDEK_Properties(f *testing.F) {
+func FuzzNoHardcodedDEK_Fallback_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
-	f.Fuzz(rapid.MakeFuzz(testGetHardcodedDEK_Properties))
+	f.Fuzz(rapid.MakeFuzz(testNoHardcodedDEK_Fallback_Properties))
 }
 
 // =============================================================================
@@ -760,6 +784,7 @@ func testUserDB_Encryption_Roundtrip_Properties(t *rapid.T) {
 }
 
 func TestUserDB_Encryption_Roundtrip_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_Encryption_Roundtrip_Properties)
 }
 
@@ -838,6 +863,7 @@ func testSessionsDB_CRUD_Properties(t *rapid.T) {
 }
 
 func TestSessionsDB_CRUD_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSessionsDB_CRUD_Properties)
 }
 
@@ -911,6 +937,7 @@ func testUserDB_FTS5_ArbitraryQuery_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_ArbitraryQuery_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_ArbitraryQuery_Properties)
 }
 
@@ -956,6 +983,7 @@ func testUserDB_FTS5_ArbitraryQueryCount_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_ArbitraryQueryCount_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_ArbitraryQueryCount_Properties)
 }
 
@@ -1036,6 +1064,7 @@ func testUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_ArbitrarySnippetQuery_Properties)
 }
 
@@ -1107,14 +1136,15 @@ func testDataDirectory_Wiring_Properties(t *rapid.T) {
 		t.Fatalf("Expected 0 sessions in fresh DB, got %d", sessCount)
 	}
 
-	// --- Property 2: OpenUserDB creates user .db files in the custom DataDirectory ---
+	// --- Property 2: OpenUserDBWithDEK creates user .db files in the custom DataDirectory ---
+	dek := testDEK()
 	userID := testutil.ValidUserID().Draw(t, "userID")
-	userDB, err := OpenUserDB(userID)
+	userDB, err := OpenUserDBWithDEK(userID, dek)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed with custom DataDirectory %q: %v", customPath, err)
+		t.Fatalf("OpenUserDBWithDEK failed with custom DataDirectory %q: %v", customPath, err)
 	}
 	if userDB == nil {
-		t.Fatal("OpenUserDB returned nil")
+		t.Fatal("OpenUserDBWithDEK returned nil")
 	}
 
 	expectedUserDBPath := filepath.Join(customPath, userID+".db")
@@ -1153,9 +1183,9 @@ func testDataDirectory_Wiring_Properties(t *rapid.T) {
 		t.Fatalf("Expected 0 sessions after reset, got %d", sessCount2)
 	}
 
-	userDB2, err := OpenUserDB(userID)
+	userDB2, err := OpenUserDBWithDEK(userID, dek)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed after reset: %v", err)
+		t.Fatalf("OpenUserDBWithDEK failed after reset: %v", err)
 	}
 	noteCount2, err := userDB2.Queries().CountNotes(ctx)
 	if err != nil {
@@ -1195,6 +1225,7 @@ func testSanitizeFTS5Word_Lowercase_Properties(t *rapid.T) {
 }
 
 func TestSanitizeFTS5Word_Lowercase_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSanitizeFTS5Word_Lowercase_Properties)
 }
 
@@ -1221,6 +1252,7 @@ func testSanitizeFTS5Word_SafeChars_Properties(t *rapid.T) {
 }
 
 func TestSanitizeFTS5Word_SafeChars_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSanitizeFTS5Word_SafeChars_Properties)
 }
 
@@ -1245,6 +1277,7 @@ func testSanitizeFTS5Word_Idempotent_Properties(t *rapid.T) {
 }
 
 func TestSanitizeFTS5Word_Idempotent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSanitizeFTS5Word_Idempotent_Properties)
 }
 
@@ -1281,6 +1314,7 @@ func testTokenizeHumanSearch_ContentPreserved_Properties(t *rapid.T) {
 }
 
 func TestTokenizeHumanSearch_ContentPreserved_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testTokenizeHumanSearch_ContentPreserved_Properties)
 }
 
@@ -1313,6 +1347,7 @@ func testTokenizeHumanSearch_QuotedPhrases_Properties(t *rapid.T) {
 }
 
 func TestTokenizeHumanSearch_QuotedPhrases_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testTokenizeHumanSearch_QuotedPhrases_Properties)
 }
 
@@ -1343,6 +1378,7 @@ func testTokenizeHumanSearch_TokenCount_Properties(t *rapid.T) {
 }
 
 func TestTokenizeHumanSearch_TokenCount_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testTokenizeHumanSearch_TokenCount_Properties)
 }
 
@@ -1380,6 +1416,7 @@ func testEscapeFTS5Query_NoLeadingTrailingOR_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NoLeadingTrailingOR_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NoLeadingTrailingOR_Properties)
 }
 
@@ -1409,6 +1446,7 @@ func testEscapeFTS5Query_NoConsecutiveOR_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NoConsecutiveOR_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NoConsecutiveOR_Properties)
 }
 
@@ -1453,6 +1491,7 @@ func testEscapeFTS5Query_NOTRequiresPositive_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NOTRequiresPositive_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NOTRequiresPositive_Properties)
 }
 
@@ -1491,6 +1530,7 @@ func testEscapeFTS5Query_BareWordsHavePrefix_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_BareWordsHavePrefix_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_BareWordsHavePrefix_Properties)
 }
 
@@ -1525,6 +1565,7 @@ func testEscapeFTS5Query_EmptyInput_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_EmptyInput_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_EmptyInput_Properties)
 }
 
@@ -1548,6 +1589,7 @@ func testEscapeFTS5Query_NullBytesStripped_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NullBytesStripped_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NullBytesStripped_Properties)
 }
 
@@ -1607,6 +1649,7 @@ func testEscapeFTS5Query_ValidFTS5Syntax_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_ValidFTS5Syntax_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_ValidFTS5Syntax_Properties)
 }
 
@@ -1664,6 +1707,7 @@ func testEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NoUnescapedSpecialChars_Properties)
 }
 
@@ -1713,12 +1757,12 @@ func FuzzMigrateUserDB_Idempotent_Properties(f *testing.F) {
 }
 
 // =============================================================================
-// Property: OpenUserDB on a pre-existing DB with any random subset of
+// Property: OpenUserDBWithDEK on a pre-existing DB with any random subset of
 // migration columns produces a DB where ALL migration columns are accessible.
 //
 // Each column that can be added by migration is independently drawn as
 // present/absent in the old schema. The property: regardless of what was
-// already in the old DB, after OpenUserDB every migration column is queryable.
+// already in the old DB, after OpenUserDBWithDEK every migration column is queryable.
 //
 // migrationColumns lists the notes columns added by UserDBMigrations.
 // Extend this list whenever a new migration column is added.
@@ -1815,8 +1859,9 @@ func testMigrateUserDB_PreExistingDB_Properties(t *rapid.T) {
     created_at INTEGER NOT NULL`)
 
 	// Seed an encrypted file DB with both old-schema tables.
+	dek := testDEK()
 	dbPath := filepath.Join(DataDirectory, userID+".db")
-	dekHex := hex.EncodeToString(hardcodedDEK)
+	dekHex := hex.EncodeToString(dek)
 	dsn := fmt.Sprintf("%s?_pragma_key=x'%s'&_pragma_cipher_page_size=4096&_fts5_tokenizer=porter", dbPath, dekHex)
 	dsn = appendSQLiteParams(dsn, sqliteCommonParams())
 
@@ -1836,9 +1881,9 @@ func testMigrateUserDB_PreExistingDB_Properties(t *rapid.T) {
 
 	// Open via the normal path (UserDBSchema exec + MigrateUserDB).
 	// Property: must always succeed regardless of which migration columns were missing.
-	db, err := OpenUserDB(userID)
+	db, err := OpenUserDBWithDEK(userID, dek)
 	if err != nil {
-		t.Fatalf("OpenUserDB failed (presentInOld=%v): %v", presentInOld, err)
+		t.Fatalf("OpenUserDBWithDEK failed (presentInOld=%v): %v", presentInOld, err)
 	}
 
 	// Property: every migration column is queryable after open.

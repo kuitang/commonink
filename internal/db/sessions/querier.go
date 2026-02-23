@@ -13,7 +13,7 @@ type Querier interface {
 	CountSessions(ctx context.Context) (int64, error)
 	CountSessionsByUserID(ctx context.Context, userID string) (int64, error)
 	// OAuth consent queries for the shared sessions database
-	CreateConsent(ctx context.Context, arg CreateConsentParams) (OauthConsent, error)
+	CreateConsent(ctx context.Context, arg CreateConsentParams) error
 	// Magic tokens operations
 	CreateMagicToken(ctx context.Context, arg CreateMagicTokenParams) error
 	// OAuth clients operations
@@ -79,7 +79,7 @@ type Querier interface {
 	GetValidSession(ctx context.Context, sessionID string) (Session, error)
 	ListConsentsForUser(ctx context.Context, userID string) ([]OauthConsent, error)
 	ListOAuthClients(ctx context.Context) ([]OauthClient, error)
-	UpdateConsentScopes(ctx context.Context, arg UpdateConsentScopesParams) (OauthConsent, error)
+	UpdateConsentScopes(ctx context.Context, arg UpdateConsentScopesParams) error
 	UpdateOAuthClient(ctx context.Context, arg UpdateOAuthClientParams) error
 	UpdateUserKey(ctx context.Context, arg UpdateUserKeyParams) error
 	UpsertMagicToken(ctx context.Context, arg UpsertMagicTokenParams) error

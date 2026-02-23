@@ -8,6 +8,7 @@ import (
 
 // TestSessionID_HighEntropy tests that session IDs have high entropy.
 func TestSessionID_HighEntropy(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		id1, err := generateSessionID()
 		if err != nil {
@@ -34,6 +35,7 @@ func TestSessionID_HighEntropy(t *testing.T) {
 
 // TestSessionID_Length tests that session IDs have correct length.
 func TestSessionID_Length(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		id, err := generateSessionID()
 		if err != nil {

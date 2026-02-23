@@ -316,6 +316,11 @@ func startServer(t *testing.T) (*serverFixture, func(), error) {
 		fmt.Sprintf("OAUTH_HMAC_SECRET=%s", testOAuthHMACKey),
 		fmt.Sprintf("OAUTH_SIGNING_KEY=%s", testOAuthSignKey),
 		fmt.Sprintf("MOCK_EMAIL_OUTBOX_DIR=%s", outboxDir),
+		// Disable IP rate limiting so rapid iterations don't get 429'd.
+		"RATE_LIMIT_FREE_RPS=10000",
+		"RATE_LIMIT_FREE_BURST=100000",
+		"RATE_LIMIT_PAID_RPS=10000",
+		"RATE_LIMIT_PAID_BURST=100000",
 	)
 
 	stdout, _ := cmd.StdoutPipe()
@@ -535,9 +540,13 @@ func TestLifecycle_MagicLink_EdgeCases_Properties(t *testing.T) {
 		client := newClient(srv.baseURL)
 		emailCursor := srv.outbox.Cursor()
 
-		resp, _ := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {email}})
-		if resp != nil {
-			resp.Body.Close()
+		resp, err := client.PostForm(srv.baseURL+"/auth/magic", url.Values{"email": {email}})
+		if err != nil {
+			rt.Fatalf("Request failed for %q: %v", email, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther {
+			rt.Fatalf("Expected 303 for edge case %q, got %d", email, resp.StatusCode)
 		}
 
 		link, _, err := srv.outbox.WaitForEmailSince(email, emailCursor, waitCtx, srv.logs)

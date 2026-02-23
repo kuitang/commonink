@@ -30,8 +30,11 @@ func (v NoteVisibility) IsAttributed() bool {
 	return v == VisibilityPublicAttributed
 }
 
-// Error sentinels for str_replace operations
+// Error sentinels for notes operations
 var (
+	// ErrNoteNotFound is returned when a note does not exist.
+	ErrNoteNotFound = errors.New("note not found")
+
 	// ErrNoMatch is returned when old_string is not found in note content
 	ErrNoMatch = errors.New("string to replace not found in note")
 

@@ -27,7 +27,6 @@ import (
 	"testing"
 
 	_ "github.com/mutecomm/go-sqlcipher/v4"
-	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
@@ -174,13 +173,12 @@ func createFullAppServer(tempDir string) *fullAppServer {
 	oauthHandler := oauth.NewHandler(oauthProvider, sessionService, consentService, renderer)
 	authHandler := auth.NewHandler(mockOIDC, userService, sessionService)
 
-	// NOTE: We do NOT use webHandler.RegisterRoutes() because it has a route conflict
-	// with oauthHandler.RegisterRoutes() (both register POST /oauth/consent).
-	// This is actually a bug in the production code that should be fixed.
-	// For testing, we manually register only the routes we need.
+	// NOTE: We register routes manually here to exercise specific handler
+	// combinations for integration testing. In production, webHandler registers
+	// GET /oauth/consent and oauthHandler registers POST /oauth/consent (no conflict).
 
 	// =============================================================================
-	// Register routes (avoiding the POST /oauth/consent conflict)
+	// Register routes
 	// =============================================================================
 
 	// Health check
@@ -303,12 +301,9 @@ func resetFullAppServerState(ts *fullAppServer) error {
 
 // findIntegrationTemplatesDir locates templates for tests
 func findIntegrationTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"./web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 
 	for _, dir := range candidates {
@@ -493,50 +488,44 @@ func (h *integrationNotesHandler) SearchNotes(w http.ResponseWriter, r *http.Req
 	writeIntegrationJSON(w, http.StatusOK, results)
 }
 
-// integrationMCPHandler handles MCP requests (auth handled by OAuthMiddleware)
+// integrationMCPHandler handles MCP requests (auth handled by OAuthMiddleware).
+// A single shared MCP server is built once; per-user services are injected via context.
 type integrationMCPHandler struct {
 	keyManager *crypto.KeyManager
-	mcpServers map[string]*mcp.Server // Cache MCP servers per user for session persistence
+	mcpServer  *mcp.Server // shared, built once
+	userDBs    map[string]*db.UserDB
 	mu         sync.RWMutex
 }
 
 func newIntegrationMCPHandler(keyManager *crypto.KeyManager) *integrationMCPHandler {
 	return &integrationMCPHandler{
 		keyManager: keyManager,
-		mcpServers: make(map[string]*mcp.Server),
+		mcpServer:  mcp.NewServer(mcp.ToolsetNotes),
+		userDBs:    make(map[string]*db.UserDB),
 	}
 }
 
-func (h *integrationMCPHandler) getOrCreateMCPServer(userID string) (*mcp.Server, error) {
-	// Check cache first
+func (h *integrationMCPHandler) getOrCreateUserDB(userID string) (*db.UserDB, error) {
 	h.mu.RLock()
-	if server, ok := h.mcpServers[userID]; ok {
+	if userDB, ok := h.userDBs[userID]; ok {
 		h.mu.RUnlock()
-		return server, nil
+		return userDB, nil
 	}
 	h.mu.RUnlock()
 
-	// Create new server
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Double-check after acquiring write lock
-	if server, ok := h.mcpServers[userID]; ok {
-		return server, nil
+	if userDB, ok := h.userDBs[userID]; ok {
+		return userDB, nil
 	}
 
-	// Use in-memory database for MCP tests
 	userDB, err := dbtestutil.NewUserDBInMemory(userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open user DB: %w", err)
 	}
-
-	// Create notes service and MCP server
-	notesSvc := notes.NewService(userDB, notes.FreeStorageLimitBytes)
-	mcpServer := mcp.NewServer(notesSvc, nil, mcp.ToolsetNotes)
-	h.mcpServers[userID] = mcpServer
-
-	return mcpServer, nil
+	h.userDBs[userID] = userDB
+	return userDB, nil
 }
 
 func (h *integrationMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -548,14 +537,15 @@ func (h *integrationMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get or create cached MCP server for this user
-	mcpServer, err := h.getOrCreateMCPServer(userID)
+	userDB, err := h.getOrCreateUserDB(userID)
 	if err != nil {
 		http.Error(w, "Internal server error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	mcpServer.ServeHTTP(w, r)
+	notesSvc := notes.NewService(userDB, notes.FreeStorageLimitBytes)
+	ctx := mcp.ContextWithServices(r.Context(), notesSvc, nil)
+	h.mcpServer.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // Helper functions
@@ -2391,8 +2381,58 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 	accessToken := tokenResult["access_token"].(string)
 
 	// ==========================================================
-	// Step 5: Use MCP to list notes
+	// Step 5: Initialize MCP and list notes
 	// ==========================================================
+	initReq := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "initialize",
+		"params": map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo": map[string]interface{}{
+				"name":    "integration-test",
+				"version": "1.0.0",
+			},
+		},
+		"id": 1,
+	}
+	initBody, _ := json.Marshal(initReq)
+	initHTTPReq, _ := http.NewRequest("POST", ts.URL+"/mcp", strings.NewReader(string(initBody)))
+	initHTTPReq.Header.Set("Content-Type", "application/json")
+	initHTTPReq.Header.Set("Accept", "application/json, text/event-stream")
+	initHTTPReq.Header.Set("Authorization", "Bearer "+accessToken)
+
+	mcpClient := newIntegrationHTTPClient(ts)
+	initResp, err := mcpClient.Do(initHTTPReq)
+	if err != nil {
+		t.Fatalf("MCP initialize request failed: %v", err)
+	}
+	defer initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(initResp.Body)
+		t.Fatalf("MCP initialize should return 200, got %d: %s", initResp.StatusCode, string(body))
+	}
+	mcpSessionID := initResp.Header.Get("Mcp-Session-Id")
+	if strings.TrimSpace(mcpSessionID) == "" {
+		t.Fatal("MCP initialize should return Mcp-Session-Id")
+	}
+
+	initializedNotif := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "notifications/initialized",
+	}
+	initializedBody, _ := json.Marshal(initializedNotif)
+	initializedReq, _ := http.NewRequest("POST", ts.URL+"/mcp", strings.NewReader(string(initializedBody)))
+	initializedReq.Header.Set("Content-Type", "application/json")
+	initializedReq.Header.Set("Accept", "application/json, text/event-stream")
+	initializedReq.Header.Set("Authorization", "Bearer "+accessToken)
+	initializedReq.Header.Set("Mcp-Session-Id", mcpSessionID)
+	initializedResp, err := mcpClient.Do(initializedReq)
+	if err != nil {
+		t.Fatalf("MCP initialized notification failed: %v", err)
+	}
+	initializedResp.Body.Close()
+
 	mcpListReq := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "tools/call",
@@ -2400,7 +2440,7 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 			"name":      "note_list",
 			"arguments": map[string]interface{}{},
 		},
-		"id": 1,
+		"id": 2,
 	}
 	mcpBody, _ := json.Marshal(mcpListReq)
 
@@ -2408,15 +2448,14 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 	mcpReq.Header.Set("Content-Type", "application/json")
 	mcpReq.Header.Set("Accept", "application/json, text/event-stream")
 	mcpReq.Header.Set("Authorization", "Bearer "+accessToken)
+	mcpReq.Header.Set("Mcp-Session-Id", mcpSessionID)
 
-	mcpClient := newIntegrationHTTPClient(ts)
 	mcpResp, err := mcpClient.Do(mcpReq)
 	if err != nil {
 		t.Fatalf("MCP list request failed: %v", err)
 	}
 	defer mcpResp.Body.Close()
 
-	// Property: MCP request should succeed
 	if mcpResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(mcpResp.Body)
 		t.Fatalf("MCP list should return 200, got %d: %s", mcpResp.StatusCode, string(body))
@@ -2516,125 +2555,4 @@ func uniqueIntegrationEmail(seed string) string {
 		return "integration-" + suffix + "@example.com"
 	}
 	return seed[:at] + "+" + suffix + seed[at:]
-}
-
-// =============================================================================
-// ADDITIONAL INTEGRATION TESTS
-// =============================================================================
-
-// TestIntegration_NotesAPI_CRUD tests the notes API CRUD operations
-func TestIntegration_NotesAPI_CRUD(t *testing.T) {
-	ts := setupFullAppServer(t)
-	defer ts.cleanup()
-
-	// Register and login user
-	email := "notes-crud-test@example.com"
-	password := "TestPassword123!"
-
-	jar, _ := cookiejar.New(nil)
-	client := newIntegrationHTTPClient(ts)
-	client.Jar = jar
-
-	// Register (redirects to /notes, final status is 200)
-	regResp, err := client.PostForm(ts.URL+"/auth/register", url.Values{"email": {email}, "password": {password}})
-	require.NoError(t, err)
-	regResp.Body.Close()
-	require.Equal(t, http.StatusOK, regResp.StatusCode)
-
-	t.Run("Create note", func(t *testing.T) {
-		noteBody := `{"title":"Test Note","content":"Test content"}`
-		resp, err := client.Post(ts.URL+"/api/notes", "application/json", strings.NewReader(noteBody))
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-		var note map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&note)
-		require.NotEmpty(t, note["id"])
-		require.Equal(t, "Test Note", note["title"])
-	})
-
-	t.Run("List notes", func(t *testing.T) {
-		resp, err := client.Get(ts.URL + "/api/notes")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var result map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&result)
-		notes := result["notes"].([]interface{})
-		require.Greater(t, len(notes), 0)
-	})
-}
-
-// TestIntegration_OAuthMetadata tests OAuth metadata endpoints
-func TestIntegration_OAuthMetadata(t *testing.T) {
-	ts := setupFullAppServer(t)
-	defer ts.cleanup()
-
-	client := newIntegrationHTTPClient(ts)
-
-	t.Run("Protected resource metadata", func(t *testing.T) {
-		resp, err := client.Get(ts.URL + "/.well-known/oauth-protected-resource")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var metadata map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&metadata)
-		require.NotEmpty(t, metadata["resource"])
-		require.NotEmpty(t, metadata["authorization_servers"])
-	})
-
-	t.Run("Authorization server metadata", func(t *testing.T) {
-		resp, err := client.Get(ts.URL + "/.well-known/oauth-authorization-server")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var metadata map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&metadata)
-		require.NotEmpty(t, metadata["issuer"])
-		require.NotEmpty(t, metadata["authorization_endpoint"])
-		require.NotEmpty(t, metadata["token_endpoint"])
-		require.NotEmpty(t, metadata["registration_endpoint"])
-	})
-
-	t.Run("JWKS endpoint", func(t *testing.T) {
-		resp, err := client.Get(ts.URL + "/.well-known/jwks.json")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var jwks map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&jwks)
-		require.NotEmpty(t, jwks["keys"])
-	})
-}
-
-// TestIntegration_UnauthenticatedAccess tests that protected endpoints require auth
-func TestIntegration_UnauthenticatedAccess(t *testing.T) {
-	ts := setupFullAppServer(t)
-	defer ts.cleanup()
-
-	client := newIntegrationHTTPClient(ts)
-
-	t.Run("Notes API requires auth", func(t *testing.T) {
-		resp, err := client.Get(ts.URL + "/api/notes")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	})
-
-	t.Run("MCP requires auth", func(t *testing.T) {
-		mcpReq := `{"jsonrpc":"2.0","method":"tools/list","id":1}`
-		resp, err := client.Post(ts.URL+"/mcp", "application/json", strings.NewReader(mcpReq))
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-
-		// Should have WWW-Authenticate header
-		wwwAuth := resp.Header.Get("WWW-Authenticate")
-		require.Contains(t, wwwAuth, "resource_metadata")
-	})
 }

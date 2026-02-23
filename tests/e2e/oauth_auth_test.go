@@ -264,12 +264,9 @@ func resetOAuthTestServerState(ts *oauthTestServer) error {
 
 // findTemplatesDir locates the templates directory for tests
 func findTemplatesDir() string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		"../../web/templates",
-		"../../../web/templates",
-		"web/templates",
-		"./web/templates",
-		"/home/kuitang/git/agent-notes/web/templates",
+		filepath.Join(repoRoot, "web", "templates"),
 	}
 
 	for _, dir := range candidates {
@@ -625,8 +622,13 @@ func (c *OAuthConformanceTest) Step6_VerifyTokenWorks() {
 
 	req, err := http.NewRequest("POST", c.serverURL+"/mcp", strings.NewReader(`{
 		"jsonrpc": "2.0",
-		"method": "tools/list",
-		"id": 1
+		"method": "initialize",
+		"id": 1,
+		"params": {
+			"protocolVersion": "2025-03-26",
+			"capabilities": {},
+			"clientInfo": {"name":"oauth-conformance","version":"1.0.0"}
+		}
 	}`))
 	require.NoError(c.t, err)
 

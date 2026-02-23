@@ -4,11 +4,48 @@ package ratelimit
 import (
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // DefaultRetryAfterSeconds is the default value for the Retry-After header
 // when a rate limit is exceeded.
 const DefaultRetryAfterSeconds = 1
+
+// IPRateLimitMiddleware creates HTTP middleware that enforces IP-based rate limits
+// for unauthenticated endpoints (login, register, DCR, token exchange).
+func IPRateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Use remote IP as the rate limit key
+			ip := r.RemoteAddr
+			if idx := strings.LastIndex(ip, ":"); idx != -1 {
+				ip = ip[:idx]
+			}
+			if ip == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Use the free tier limiter for all unauthenticated requests
+			rateLimiter := limiter.GetLimiter("ip:"+ip, false)
+			if !rateLimiter.Allow() {
+				w.Header().Set("Retry-After", strconv.Itoa(DefaultRetryAfterSeconds))
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte("Too Many Requests"))
+				return
+			}
+
+			remaining := int(rateLimiter.Tokens())
+			if remaining < 0 {
+				remaining = 0
+			}
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // RateLimitMiddleware creates HTTP middleware that enforces rate limits.
 //

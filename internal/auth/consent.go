@@ -2,13 +2,16 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kuitang/agent-notes/internal/db"
+	"github.com/kuitang/agent-notes/internal/db/sessions"
 )
 
 // Consent errors
@@ -52,12 +55,6 @@ func NewConsentService(sessionsDB *db.SessionsDB) *ConsentService {
 //   - *Consent: A consent object with the missing scopes that need to be granted
 //   - error: ErrNoConsentNeeded if already consented, or other errors
 func (s *ConsentService) GetPendingConsent(ctx context.Context, userID, clientID string, requestedScopes []string) (*Consent, error) {
-	// TODO: Replace with actual DB query once sessions_consent.sql is implemented
-	// Example query: SELECT scopes FROM oauth_consents WHERE user_id = ? AND client_id = ?
-	//
-	// For now, check the in-memory/placeholder logic:
-	// The actual implementation will query the oauth_consents table
-
 	existingConsent, err := s.getConsentFromDB(ctx, userID, clientID)
 	if err != nil {
 		if errors.Is(err, ErrConsentNotFound) {
@@ -96,19 +93,6 @@ func (s *ConsentService) GetPendingConsent(ctx context.Context, userID, clientID
 // Returns:
 //   - error: Any error encountered during the operation
 func (s *ConsentService) RecordConsent(ctx context.Context, userID, clientID string, scopes []string) error {
-	// TODO: Replace with actual DB query once sessions_consent.sql is implemented
-	// Example queries:
-	// 1. Try to get existing consent
-	// 2. If exists, merge scopes and update
-	// 3. If not exists, insert new consent
-	//
-	// SQL for upsert:
-	// INSERT INTO oauth_consents (user_id, client_id, scopes, granted_at)
-	// VALUES (?, ?, ?, ?)
-	// ON CONFLICT(user_id, client_id) DO UPDATE SET
-	//   scopes = ?,
-	//   granted_at = ?
-
 	if len(scopes) == 0 {
 		return fmt.Errorf("scopes cannot be empty")
 	}
@@ -146,9 +130,6 @@ func (s *ConsentService) RecordConsent(ctx context.Context, userID, clientID str
 //   - bool: true if user has consented to all requested scopes
 //   - error: Any error encountered during the operation
 func (s *ConsentService) HasConsent(ctx context.Context, userID, clientID string, scopes []string) (bool, error) {
-	// TODO: Replace with actual DB query once sessions_consent.sql is implemented
-	// Example query: SELECT scopes FROM oauth_consents WHERE user_id = ? AND client_id = ?
-
 	existingConsent, err := s.getConsentFromDB(ctx, userID, clientID)
 	if err != nil {
 		if errors.Is(err, ErrConsentNotFound) {
@@ -173,12 +154,6 @@ func (s *ConsentService) HasConsent(ctx context.Context, userID, clientID string
 // Returns:
 //   - error: Any error encountered during the operation
 func (s *ConsentService) RevokeConsent(ctx context.Context, userID, clientID string) error {
-	// TODO: Replace with actual DB query once sessions_consent.sql is implemented
-	// Example query: DELETE FROM oauth_consents WHERE user_id = ? AND client_id = ?
-	//
-	// Additionally, should also revoke all active tokens for this user/client:
-	// DELETE FROM oauth_tokens WHERE user_id = ? AND client_id = ?
-
 	// Delete consent from database
 	err := s.deleteConsentFromDB(ctx, userID, clientID)
 	if err != nil {
@@ -204,69 +179,86 @@ func (s *ConsentService) RevokeConsent(ctx context.Context, userID, clientID str
 //   - []Consent: List of all consents granted by the user
 //   - error: Any error encountered during the operation
 func (s *ConsentService) ListConsentsForUser(ctx context.Context, userID string) ([]Consent, error) {
-	// TODO: Replace with actual DB query once sessions_consent.sql is implemented
-	// Example query: SELECT client_id, scopes, granted_at FROM oauth_consents WHERE user_id = ?
-
 	return s.listConsentsFromDB(ctx, userID)
 }
 
 // ============================================================================
-// Database layer placeholders
-// These methods will be replaced with actual sqlc-generated queries
-// once sessions_consent.sql is implemented in Layer 2
+// Database layer — wired to sqlc-generated queries
 // ============================================================================
 
 // getConsentFromDB retrieves a consent record from the database.
-// TODO: Replace with actual sqlc query: s.db.Queries().GetOAuthConsent(ctx, params)
 func (s *ConsentService) getConsentFromDB(ctx context.Context, userID, clientID string) (*Consent, error) {
-	// TODO: Implement with actual DB query
-	// query := `SELECT user_id, client_id, scopes, granted_at FROM oauth_consents WHERE user_id = ? AND client_id = ?`
-	//
-	// For now, return not found as placeholder
-	// This forces consumers to handle the "no consent" case
-	return nil, ErrConsentNotFound
+	result, err := s.db.Queries().GetConsent(ctx, sessions.GetConsentParams{
+		UserID:   userID,
+		ClientID: clientID,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrConsentNotFound
+		}
+		return nil, fmt.Errorf("get consent: %w", err)
+	}
+	return &Consent{
+		UserID:    result.UserID,
+		ClientID:  result.ClientID,
+		Scopes:    StringToScopes(result.Scopes),
+		GrantedAt: time.Unix(result.GrantedAt, 0).UTC(),
+	}, nil
 }
 
 // upsertConsentInDB stores or updates a consent record in the database.
-// TODO: Replace with actual sqlc query: s.db.Queries().UpsertOAuthConsent(ctx, params)
+// It tries INSERT first; on UNIQUE constraint conflict, falls back to UPDATE.
 func (s *ConsentService) upsertConsentInDB(ctx context.Context, userID, clientID string, scopes []string) error {
-	// TODO: Implement with actual DB query
-	// query := `
-	//   INSERT INTO oauth_consents (user_id, client_id, scopes, granted_at)
-	//   VALUES (?, ?, ?, ?)
-	//   ON CONFLICT(user_id, client_id) DO UPDATE SET
-	//     scopes = excluded.scopes,
-	//     granted_at = excluded.granted_at
-	// `
-	//
-	// For now, log and return nil as placeholder
-	_ = userID
-	_ = clientID
-	_ = scopes
+	scopeStr := ScopesToString(scopes)
+	now := time.Now().UTC().Unix()
+
+	// Try insert first
+	err := s.db.Queries().CreateConsent(ctx, sessions.CreateConsentParams{
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		ClientID:  clientID,
+		Scopes:    scopeStr,
+		GrantedAt: now,
+	})
+	if err != nil {
+		// If UNIQUE constraint violation, update existing record
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return s.db.Queries().UpdateConsentScopes(ctx, sessions.UpdateConsentScopesParams{
+				Scopes:    scopeStr,
+				GrantedAt: now,
+				UserID:    userID,
+				ClientID:  clientID,
+			})
+		}
+		return err
+	}
 	return nil
 }
 
 // deleteConsentFromDB removes a consent record from the database.
-// TODO: Replace with actual sqlc query: s.db.Queries().DeleteOAuthConsent(ctx, params)
 func (s *ConsentService) deleteConsentFromDB(ctx context.Context, userID, clientID string) error {
-	// TODO: Implement with actual DB query
-	// query := `DELETE FROM oauth_consents WHERE user_id = ? AND client_id = ?`
-	//
-	// For now, return nil as placeholder
-	_ = userID
-	_ = clientID
-	return nil
+	return s.db.Queries().DeleteConsent(ctx, sessions.DeleteConsentParams{
+		UserID:   userID,
+		ClientID: clientID,
+	})
 }
 
 // listConsentsFromDB retrieves all consents for a user from the database.
-// TODO: Replace with actual sqlc query: s.db.Queries().ListOAuthConsentsByUser(ctx, userID)
 func (s *ConsentService) listConsentsFromDB(ctx context.Context, userID string) ([]Consent, error) {
-	// TODO: Implement with actual DB query
-	// query := `SELECT user_id, client_id, scopes, granted_at FROM oauth_consents WHERE user_id = ?`
-	//
-	// For now, return empty list as placeholder
-	_ = userID
-	return []Consent{}, nil
+	results, err := s.db.Queries().ListConsentsForUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list consents: %w", err)
+	}
+	consents := make([]Consent, 0, len(results))
+	for _, r := range results {
+		consents = append(consents, Consent{
+			UserID:    r.UserID,
+			ClientID:  r.ClientID,
+			Scopes:    StringToScopes(r.Scopes),
+			GrantedAt: time.Unix(r.GrantedAt, 0).UTC(),
+		})
+	}
+	return consents, nil
 }
 
 // ============================================================================

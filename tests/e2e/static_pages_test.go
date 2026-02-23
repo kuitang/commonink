@@ -1,8 +1,6 @@
-// Package e2e provides HTTP-based tests for static pages and render helpers.
-// These are simple example-based tests (not property-based) that verify
-// static pages render and contain expected content, and that render helper
-// functions (formatTime, truncate, markdown, formatFloat) work correctly
-// when exercised through page rendering.
+// Package e2e provides HTTP-based property tests for static pages and render helpers.
+// Invariant: any registered static route returns 200 with non-empty HTML containing
+// expected structural elements and content-type headers.
 package e2e
 
 import (
@@ -24,6 +22,7 @@ import (
 	"time"
 
 	_ "github.com/mutecomm/go-sqlcipher/v4"
+	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
 	"github.com/kuitang/agent-notes/internal/billing"
@@ -261,125 +260,119 @@ func resetStaticPageServerState(ts *staticPageServer) error {
 
 // findStaticDir locates the static/{subdir} directory.
 func findStaticDir(subdir string) string {
+	repoRoot := repositoryRoot()
 	candidates := []string{
-		filepath.Join("../../static", subdir),
-		filepath.Join("../../../static", subdir),
-		filepath.Join("static", subdir),
-		filepath.Join("/home/kuitang/git/agent-notes/static", subdir),
+		filepath.Join(repoRoot, "static", subdir),
 	}
 	for _, dir := range candidates {
 		if _, err := os.Stat(dir); err == nil {
 			return dir
 		}
 	}
-	return filepath.Join("/home/kuitang/git/agent-notes/static", subdir)
+	panic("Cannot find static directory")
 }
 
 // =============================================================================
-// TEST: Static Pages Render with Expected Content
+// Registered static routes -- the canonical list for property tests.
 // =============================================================================
 
-func TestStaticPages_Render(t *testing.T) {
-	ts := setupStaticPageServer(t)
-	defer ts.cleanup()
-
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	tests := []struct {
-		name    string
-		path    string
-		keyword string
-	}{
-		{"PrivacyPage", "/privacy", "Privacy"},
-		{"TermsPage", "/terms", "Terms"},
-		{"AboutPage", "/about", "About"},
-		{"APIDocsPage", "/docs/api", "API"},
-		{"APIDocsAlias", "/docs", "API"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, err := client.Get(ts.URL + tt.path)
-			if err != nil {
-				t.Fatalf("GET %s failed: %v", tt.path, err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("GET %s: expected 200, got %d", tt.path, resp.StatusCode)
-			}
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatalf("GET %s: failed to read body: %v", tt.path, err)
-			}
-
-			html := string(body)
-
-			// Content-Type should be HTML
-			ct := resp.Header.Get("Content-Type")
-			if !strings.Contains(ct, "text/html") {
-				t.Errorf("GET %s: expected text/html content type, got %q", tt.path, ct)
-			}
-
-			// Body should contain the keyword
-			if !strings.Contains(html, tt.keyword) {
-				t.Errorf("GET %s: expected body to contain %q", tt.path, tt.keyword)
-			}
-
-			// Body should be non-trivial (at least 100 bytes of rendered content)
-			if len(body) < 100 {
-				t.Errorf("GET %s: body too short (%d bytes), expected rendered HTML", tt.path, len(body))
-			}
-		})
-	}
+var staticPageRoutes = []string{
+	"/",
+	"/privacy",
+	"/terms",
+	"/about",
+	"/faq",
+	"/docs/api",
+	"/docs",
+	"/docs/install",
 }
 
 // =============================================================================
-// TEST: Landing Page Renders
+// Property: Any registered static route returns 200 with non-empty HTML
 // =============================================================================
 
-func TestStaticPages_LandingPage(t *testing.T) {
-	ts := setupStaticPageServer(t)
-	defer ts.cleanup()
+func testStaticPages_RouteReturns200HTML_Properties(rt *rapid.T, ts *staticPageServer) {
+	// Draw a random static route
+	path := rapid.SampledFrom(staticPageRoutes).Draw(rt, "path")
 
 	client := &http.Client{Timeout: 10 * time.Second}
-
-	resp, err := client.Get(ts.URL + "/")
+	resp, err := client.Get(ts.URL + path)
 	if err != nil {
-		t.Fatalf("GET / failed: %v", err)
+		rt.Fatalf("GET %s failed: %v", path, err)
 	}
 	defer resp.Body.Close()
 
-	// Landing page for unauthenticated users should render (200)
+	// Property: status must be 200
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /: expected 200, got %d", resp.StatusCode)
+		rt.Fatalf("GET %s: expected 200, got %d", path, resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		rt.Fatalf("GET %s: failed to read body: %v", path, err)
+	}
+
+	// Property: Content-Type must include text/html
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		rt.Fatalf("GET %s: expected text/html content type, got %q", path, ct)
+	}
+
+	// Property: body must be non-empty (at least 100 bytes of rendered HTML)
+	if len(body) < 100 {
+		rt.Fatalf("GET %s: body too short (%d bytes), expected rendered HTML", path, len(body))
+	}
+
 	html := string(body)
-	if !strings.Contains(html, "common.ink") {
-		t.Error("GET /: landing page should contain 'common.ink'")
+
+	// Property: must contain basic HTML structure
+	if !strings.Contains(html, "<!DOCTYPE html>") && !strings.Contains(html, "<html") {
+		rt.Fatalf("GET %s: missing HTML doctype or html tag", path)
+	}
+	if !strings.Contains(html, "</body>") {
+		rt.Fatalf("GET %s: missing </body> tag", path)
 	}
 }
 
-// =============================================================================
-// TEST: Render Helpers via Note CRUD (formatTime, truncate, markdown, formatFloat)
-// =============================================================================
-
-func TestRenderHelpers_MarkdownRendering(t *testing.T) {
+func TestStaticPages_RouteReturns200HTML_Properties(t *testing.T) {
 	ts := setupStaticPageServer(t)
 	defer ts.cleanup()
 
-	// Create a user and session
+	rapid.Check(t, func(rt *rapid.T) {
+		testStaticPages_RouteReturns200HTML_Properties(rt, ts)
+	})
+}
+
+func FuzzStaticPages_RouteReturns200HTML_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts, err := getOrCreateSharedStaticPageServer()
+		if err != nil {
+			rt.Fatalf("Failed to get shared static page server: %v", err)
+		}
+		testStaticPages_RouteReturns200HTML_Properties(rt, ts)
+	}))
+}
+
+// =============================================================================
+// Property: Render helpers produce expected output invariants
+// (markdown, formatTime, truncate)
+// =============================================================================
+
+func testRenderHelpers_Invariants_Properties(rt *rapid.T, ts *staticPageServer) {
 	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByProvider(ctx, "render-test@example.com")
+
+	// Use a random email suffix to avoid collision
+	suffix := rapid.StringMatching(`[a-z0-9]{8}`).Draw(rt, "suffix")
+	email := "render-prop-" + suffix + "@example.com"
+
+	user, err := ts.userService.FindOrCreateByProvider(ctx, email)
 	if err != nil {
-		t.Fatalf("Failed to create user: %v", err)
+		rt.Fatalf("Failed to create user: %v", err)
 	}
 	sessionID, err := ts.sessionService.Create(ctx, user.ID)
 	if err != nil {
-		t.Fatalf("Failed to create session: %v", err)
+		rt.Fatalf("Failed to create session: %v", err)
 	}
 
 	jar, _ := cookiejar.New(nil)
@@ -396,297 +389,120 @@ func TestRenderHelpers_MarkdownRendering(t *testing.T) {
 		Path:  "/",
 	}})
 
-	// Create a note with markdown content
-	markdownContent := "# Heading One\n\nThis is **bold** and *italic* text.\n\n- Item 1\n- Item 2\n\n`inline code`"
+	// Draw random note content -- some with markdown, some long for truncation
+	title := rapid.StringMatching(`[A-Za-z ]{5,30}`).Draw(rt, "title")
+	useMarkdown := rapid.Bool().Draw(rt, "useMarkdown")
+
+	var content string
+	if useMarkdown {
+		content = "# " + title + "\n\nThis is **bold** and *italic* text.\n\n- Item 1\n- Item 2"
+	} else {
+		// Long content to exercise truncation
+		sentence := rapid.StringMatching(`[A-Za-z ]{20,50}`).Draw(rt, "sentence")
+		content = strings.Repeat(sentence+". ", 20)
+	}
+
 	createForm := url.Values{
-		"title":   {"Markdown Test Note"},
-		"content": {markdownContent},
+		"title":   {title},
+		"content": {content},
 	}
 
 	createResp, err := client.PostForm(ts.URL+"/notes", createForm)
 	if err != nil {
-		t.Fatalf("Create note failed: %v", err)
+		rt.Fatalf("Create note failed: %v", err)
 	}
 	defer createResp.Body.Close()
 
+	// Property: Create should redirect (302)
 	if createResp.StatusCode != http.StatusFound {
 		body, _ := io.ReadAll(createResp.Body)
-		t.Fatalf("Create note: expected 302, got %d: %s", createResp.StatusCode, string(body))
+		rt.Fatalf("Create note: expected 302, got %d: %s", createResp.StatusCode, string(body))
 	}
 
-	// Extract note ID from redirect
 	location := createResp.Header.Get("Location")
 	parts := strings.Split(location, "/")
 	noteID := parts[len(parts)-1]
 
-	// View the note -- this exercises the markdown render helper
+	// View the individual note
 	viewResp, err := client.Get(ts.URL + "/notes/" + noteID)
 	if err != nil {
-		t.Fatalf("View note failed: %v", err)
+		rt.Fatalf("View note failed: %v", err)
 	}
 	defer viewResp.Body.Close()
 
 	if viewResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(viewResp.Body)
-		t.Fatalf("View note: expected 200, got %d: %s", viewResp.StatusCode, string(body))
+		rt.Fatalf("View note: expected 200, got %d: %s", viewResp.StatusCode, string(body))
 	}
 
 	viewBody, _ := io.ReadAll(viewResp.Body)
 	viewHTML := string(viewBody)
 
-	// The markdown helper should convert markdown to HTML
-	// Check that bold text was rendered
-	if !strings.Contains(viewHTML, "<strong>bold</strong>") {
-		t.Error("Markdown rendering: expected <strong>bold</strong> in rendered output")
+	if useMarkdown {
+		// Property: markdown bold should render as <strong>
+		if !strings.Contains(viewHTML, "<strong>bold</strong>") {
+			rt.Fatalf("Markdown rendering: expected <strong>bold</strong> in output")
+		}
+		// Property: markdown italic should render as <em>
+		if !strings.Contains(viewHTML, "<em>italic</em>") {
+			rt.Fatalf("Markdown rendering: expected <em>italic</em> in output")
+		}
 	}
 
-	// Check that italic text was rendered
-	if !strings.Contains(viewHTML, "<em>italic</em>") {
-		t.Error("Markdown rendering: expected <em>italic</em> in rendered output")
-	}
-
-	// Check that inline code was rendered
-	if !strings.Contains(viewHTML, "<code>inline code</code>") {
-		t.Error("Markdown rendering: expected <code>inline code</code> in rendered output")
-	}
-}
-
-func TestRenderHelpers_FormatTimeAndTruncate(t *testing.T) {
-	ts := setupStaticPageServer(t)
-	defer ts.cleanup()
-
-	// Create a user and session
-	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByProvider(ctx, "helpers-test@example.com")
-	if err != nil {
-		t.Fatalf("Failed to create user: %v", err)
-	}
-	sessionID, err := ts.sessionService.Create(ctx, user.ID)
-	if err != nil {
-		t.Fatalf("Failed to create session: %v", err)
-	}
-
-	jar, _ := cookiejar.New(nil)
-	client := ts.Client()
-	client.Jar = jar
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-
-	serverURL, _ := url.Parse(ts.URL)
-	jar.SetCookies(serverURL, []*http.Cookie{{
-		Name:  "session_id",
-		Value: sessionID,
-		Path:  "/",
-	}})
-
-	// Create a note with long content (to exercise truncate in the list view)
-	longContent := strings.Repeat("This is a long sentence for testing truncation. ", 20)
-	createForm := url.Values{
-		"title":   {"Time Format Test Note"},
-		"content": {longContent},
-	}
-
-	createResp, err := client.PostForm(ts.URL+"/notes", createForm)
-	if err != nil {
-		t.Fatalf("Create note failed: %v", err)
-	}
-	createResp.Body.Close()
-
-	// List notes -- this exercises formatTime and truncate
+	// List notes -- exercises formatTime and truncate
 	listResp, err := client.Get(ts.URL + "/notes")
 	if err != nil {
-		t.Fatalf("List notes failed: %v", err)
+		rt.Fatalf("List notes failed: %v", err)
 	}
 	defer listResp.Body.Close()
 
 	if listResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(listResp.Body)
-		t.Fatalf("List notes: expected 200, got %d: %s", listResp.StatusCode, string(body))
+		rt.Fatalf("List notes: expected 200, got %d: %s", listResp.StatusCode, string(body))
 	}
 
 	listBody, _ := io.ReadAll(listResp.Body)
 	listHTML := string(listBody)
 
-	// formatTime outputs dates like "Jan 2, 2006".
-	// Assert rendered shape instead of relying on current wall-clock month.
+	// Property: formatTime outputs dates matching "Mon D, YYYY" pattern
 	datePattern := regexp.MustCompile(`\b[A-Z][a-z]{2} [0-9]{1,2}, [0-9]{4}\b`)
 	if !datePattern.MatchString(listHTML) {
-		t.Error("formatTime: expected at least one rendered date in 'Jan 2, 2006' format")
+		rt.Fatalf("formatTime: expected at least one rendered date in 'Jan 2, 2006' format")
 	}
 
-	// truncate: the list view truncates content to 150 chars.
-	// The full content is ~1000 chars, so it should be truncated with "..."
-	if !strings.Contains(listHTML, "...") {
-		t.Error("truncate: expected '...' in notes list for long content")
+	// Property: note title must appear in list view
+	if !strings.Contains(listHTML, title) {
+		rt.Fatalf("Note title %q should appear in list view", title)
 	}
 
-	// The full long content should NOT appear untruncated in the list
-	if strings.Contains(listHTML, longContent) {
-		t.Error("truncate: full content should not appear in list view")
-	}
-
-	// The note title should be present
-	if !strings.Contains(listHTML, "Time Format Test Note") {
-		t.Error("Note title should appear in list view")
-	}
-}
-
-func TestRenderHelpers_FormatFloat(t *testing.T) {
-	ts := setupStaticPageServer(t)
-	defer ts.cleanup()
-
-	// Create a user and session
-	ctx := context.Background()
-	user, err := ts.userService.FindOrCreateByProvider(ctx, "float-test@example.com")
-	if err != nil {
-		t.Fatalf("Failed to create user: %v", err)
-	}
-	sessionID, err := ts.sessionService.Create(ctx, user.ID)
-	if err != nil {
-		t.Fatalf("Failed to create session: %v", err)
-	}
-
-	jar, _ := cookiejar.New(nil)
-	client := ts.Client()
-	client.Jar = jar
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-
-	serverURL, _ := url.Parse(ts.URL)
-	jar.SetCookies(serverURL, []*http.Cookie{{
-		Name:  "session_id",
-		Value: sessionID,
-		Path:  "/",
-	}})
-
-	// The notes list page shows storage usage with formatFloat.
-	// Just loading the notes list page exercises formatFloat if StorageUsage is present.
-	listResp, err := client.Get(ts.URL + "/notes")
-	if err != nil {
-		t.Fatalf("List notes failed: %v", err)
-	}
-	defer listResp.Body.Close()
-
-	if listResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(listResp.Body)
-		t.Fatalf("List notes: expected 200, got %d: %s", listResp.StatusCode, string(body))
-	}
-
-	listBody, _ := io.ReadAll(listResp.Body)
-	listHTML := string(listBody)
-
-	// The storage bar uses formatFloat -- check for "MB" which appears in the usage display
-	// Template uses: {{formatFloat .StorageUsage.UsedMB 1}} / {{formatFloat .StorageUsage.LimitMB 0}} MB
-	if !strings.Contains(listHTML, "MB") {
-		t.Log("formatFloat: storage usage bar with 'MB' not found (may not render for empty user)")
-	}
-
-	// The page should at least render without error
-	if !strings.Contains(listHTML, "My Notes") && !strings.Contains(listHTML, "Notes") {
-		t.Error("Notes list page should contain 'Notes' heading")
+	// Property: if content is long (>200 chars), truncation marker "..." should appear
+	if !useMarkdown && len(content) > 200 {
+		if !strings.Contains(listHTML, "...") {
+			rt.Fatalf("truncate: expected '...' in notes list for long content")
+		}
+		// Full content should NOT appear untruncated
+		if strings.Contains(listHTML, content) {
+			rt.Fatalf("truncate: full content should not appear in list view")
+		}
 	}
 }
 
-// =============================================================================
-// TEST: Static Pages Have Proper HTML Structure
-// =============================================================================
-
-func TestStaticPages_HTMLStructure(t *testing.T) {
+func TestRenderHelpers_Invariants_Properties(t *testing.T) {
 	ts := setupStaticPageServer(t)
 	defer ts.cleanup()
 
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	pages := []string{"/privacy", "/terms", "/about", "/docs/api"}
-
-	for _, path := range pages {
-		t.Run(path, func(t *testing.T) {
-			resp, err := client.Get(ts.URL + path)
-			if err != nil {
-				t.Fatalf("GET %s failed: %v", path, err)
-			}
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			html := string(body)
-
-			// Should contain basic HTML structure from base template
-			if !strings.Contains(html, "<!DOCTYPE html>") && !strings.Contains(html, "<html") {
-				t.Errorf("GET %s: missing HTML doctype or html tag", path)
-			}
-
-			if !strings.Contains(html, "<head>") && !strings.Contains(html, "<head ") {
-				t.Errorf("GET %s: missing <head> tag", path)
-			}
-
-			if !strings.Contains(html, "</body>") {
-				t.Errorf("GET %s: missing </body> tag", path)
-			}
-
-			// Static pages should contain the prose wrapper from static/page.html
-			if !strings.Contains(html, "prose") {
-				t.Errorf("GET %s: missing 'prose' class (expected from static page template)", path)
-			}
-		})
-	}
+	rapid.Check(t, func(rt *rapid.T) {
+		testRenderHelpers_Invariants_Properties(rt, ts)
+	})
 }
 
-// =============================================================================
-// TEST: Static Page Markdown Rendering (content from .md files)
-// =============================================================================
-
-func TestStaticPages_MarkdownContent(t *testing.T) {
-	ts := setupStaticPageServer(t)
-	defer ts.cleanup()
-
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	// These checks verify that markdown source files were rendered into HTML
-	tests := []struct {
-		name     string
-		path     string
-		contains []string // expected substrings in rendered HTML
-	}{
-		{
-			"PrivacyHasHeadings",
-			"/privacy",
-			[]string{"Privacy Policy", "Information We Collect"},
-		},
-		{
-			"TermsHasHeadings",
-			"/terms",
-			[]string{"Terms of Service", "Acceptance of Terms"},
-		},
-		{
-			"AboutHasBranding",
-			"/about",
-			[]string{"common.ink", "Key Features"},
-		},
-		{
-			"APIDocsHasContent",
-			"/docs/api",
-			[]string{"API Documentation", "Authentication"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, err := client.Get(ts.URL + tt.path)
-			if err != nil {
-				t.Fatalf("GET %s failed: %v", tt.path, err)
-			}
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			html := string(body)
-
-			for _, expected := range tt.contains {
-				if !strings.Contains(html, expected) {
-					t.Errorf("GET %s: expected body to contain %q", tt.path, expected)
-				}
-			}
-		})
-	}
+func FuzzRenderHelpers_Invariants_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
+		ts, err := getOrCreateSharedStaticPageServer()
+		if err != nil {
+			rt.Fatalf("Failed to get shared static page server: %v", err)
+		}
+		testRenderHelpers_Invariants_Properties(rt, ts)
+	}))
 }

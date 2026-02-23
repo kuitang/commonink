@@ -27,7 +27,6 @@ jobs:
       - name: Run CI test suite (no external conformance)
         env:
           GO_TEST_PACKAGE_PARALLEL: "1"
-          SPRITE_TOKEN: ${{ secrets.SPRITE_TOKEN_STAGING }}
         run: make ci
 
   deploy-preview:

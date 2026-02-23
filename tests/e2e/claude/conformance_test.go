@@ -1004,105 +1004,37 @@ func assertClaudeAppURLLive(t *testing.T, mcpClient *testutil.MCPClient, appPref
 		"for i in 1 2 3 4 5 6; do curl -fsS -o /dev/null -w 'HTTP %%{http_code}\\n' %q && exit 0; sleep 2; done; exit 1",
 		publicURL,
 	)
-	bashResp, err := mcpClient.CallTool("app_bash", map[string]interface{}{
+	execResp, err := mcpClient.CallTool("app_exec", map[string]interface{}{
 		"app":             appName,
-		"command":         curlCmd,
+		"command":         []string{"bash", "-lc", curlCmd},
 		"timeout_seconds": 90,
 	})
 	if err != nil {
-		t.Fatalf("app_bash curl check failed: %v", err)
+		t.Fatalf("app_exec curl check failed: %v", err)
 	}
-	bashText, err := testutil.ParseToolResult(bashResp)
+	execText, err := testutil.ParseToolResult(execResp)
 	if err != nil {
-		t.Fatalf("failed to parse app_bash result: %v", err)
+		t.Fatalf("failed to parse app_exec result: %v", err)
 	}
-	if testutil.IsToolError(bashResp) {
-		t.Fatalf("app_bash returned tool error: %s", bashText)
+	if testutil.IsToolError(execResp) {
+		t.Fatalf("app_exec returned tool error: %s", execText)
 	}
 
-	var bashResult struct {
+	var execResult struct {
 		Stdout   string `json:"stdout"`
 		Stderr   string `json:"stderr"`
 		ExitCode int    `json:"exit_code"`
 	}
-	if err := json.Unmarshal([]byte(bashText), &bashResult); err != nil {
-		t.Fatalf("failed to decode app_bash JSON payload: %v\npayload=%s", err, bashText)
+	if err := json.Unmarshal([]byte(execText), &execResult); err != nil {
+		t.Fatalf("failed to decode app_exec JSON payload: %v\npayload=%s", err, execText)
 	}
-	if bashResult.ExitCode != 0 {
+	if execResult.ExitCode != 0 {
 		t.Fatalf("sprite URL curl failed for app=%s url=%s exit=%d stdout=%q stderr=%q",
-			appName, publicURL, bashResult.ExitCode, bashResult.Stdout, bashResult.Stderr)
+			appName, publicURL, execResult.ExitCode, execResult.Stdout, execResult.Stderr)
 	}
-	if !strings.Contains(bashResult.Stdout, "HTTP ") {
+	if !strings.Contains(execResult.Stdout, "HTTP ") {
 		t.Fatalf("sprite URL curl output missing HTTP status for app=%s url=%s stdout=%q stderr=%q",
-			appName, publicURL, bashResult.Stdout, bashResult.Stderr)
+			appName, publicURL, execResult.Stdout, execResult.Stderr)
 	}
-	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(bashResult.Stdout))
-}
-
-func TestClaude_AppTools_Targeted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping in short mode")
-	}
-	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
-		t.Skip("SPRITE_TOKEN not set")
-	}
-
-	srv := testutil.GetServer(t)
-	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "ClaudeAppTargeted")
-	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
-	assertClaudePromptExists(t, mcpClient)
-	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
-
-	base := fmt.Sprintf("cl-target-%d", time.Now().UnixNano()%1000000)
-	nameA := base + "-a"
-	nameB := base + "-b"
-	prompt := fmt.Sprintf(
-		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_bash with command 'echo tool-check'; 4) app_delete for the created app.",
-		nameA, nameB,
-	)
-
-	resp, toolCalls := runOneShotClaude(t, mcpConfig, prompt)
-	t.Logf("Response: %s", resp)
-	t.Logf("Tool calls: %d", len(toolCalls))
-
-	for _, expected := range []string{"app_create", "app_list", "app_bash", "app_delete"} {
-		if !hasClaudeToolCall(toolCalls, expected) {
-			t.Fatalf("Expected Claude to call %s, calls=%+v", expected, toolCalls)
-		}
-	}
-}
-
-func TestClaude_AppWorkflow_OneShot(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping in short mode")
-	}
-	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
-		t.Skip("SPRITE_TOKEN not set")
-	}
-
-	srv := testutil.GetServer(t)
-	creds := testutil.PerformOAuthFlow(t, srv.BaseURL, "ClaudeAppWorkflow")
-	mcpClient := testutil.NewMCPClient(srv.BaseURL, creds.AccessToken)
-	assertClaudePromptExists(t, mcpClient)
-	mcpConfig := getAuthenticatedMCPConfig(t, creds.AccessToken)
-
-	base := fmt.Sprintf("cl-workflow-%d", time.Now().UnixNano()%1000000)
-	nameA := base + "-a"
-	nameB := base + "-b"
-	prompt := fmt.Sprintf(
-		"make me a todo list app. Use app_create with candidate names ['%s','%s'] before writing code.",
-		nameA, nameB,
-	)
-
-	resp, toolCalls := runOneShotClaude(t, mcpConfig, prompt)
-	t.Logf("Response: %s", resp)
-	t.Logf("Tool calls: %d", len(toolCalls))
-
-	for _, expected := range []string{"app_create", "app_write", "app_bash"} {
-		if !hasClaudeToolCall(toolCalls, expected) {
-			t.Fatalf("Expected Claude to call %s, calls=%+v", expected, toolCalls)
-		}
-	}
-
-	assertClaudeAppURLLive(t, mcpClient, base)
+	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(execResult.Stdout))
 }

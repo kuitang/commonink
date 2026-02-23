@@ -1,91 +1,183 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/kuitang/agent-notes/internal/apps"
+	"github.com/kuitang/agent-notes/internal/errs"
 	"github.com/kuitang/agent-notes/internal/notes"
+	"github.com/kuitang/agent-notes/internal/obs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	ffclient "github.com/thomaspoignant/go-feature-flag"
+	"github.com/thomaspoignant/go-feature-flag/ffcontext"
 )
 
-// Handler implements MCP tool call handling.
-type Handler struct {
-	notesSvc *notes.Service
-	appsSvc  *apps.Service
+const (
+	maxAppWriteFilesInput      = 64
+	maxAppWritePathBytesInput  = 1024
+	maxAppWriteFileBytesInput  = 1 << 20
+	maxAppWriteTotalBytesInput = 8 << 20
+	maxAppExecArgvBytesInput   = 1 << 20 // 1 MiB — heredocs carry file content in argv now
+)
+
+// mcpContextKey is a type for MCP-specific context keys.
+type mcpContextKey string
+
+const (
+	notesServiceKey mcpContextKey = "notesSvc"
+	appsServiceKey  mcpContextKey = "appsSvc"
+)
+
+// ContextWithServices returns a context with the per-user notes and apps services injected.
+// Tool handlers retrieve these via notesFromContext/appsFromContext.
+func ContextWithServices(ctx context.Context, notesSvc *notes.Service, appsSvc *apps.Service) context.Context {
+	ctx = context.WithValue(ctx, notesServiceKey, notesSvc)
+	ctx = context.WithValue(ctx, appsServiceKey, appsSvc)
+	return ctx
 }
 
-// NewHandler creates a new MCP handler with notes/apps services.
-func NewHandler(notesSvc *notes.Service, appsSvc *apps.Service) *Handler {
-	return &Handler{
-		notesSvc: notesSvc,
-		appsSvc:  appsSvc,
-	}
+func notesFromContext(ctx context.Context) *notes.Service {
+	svc, _ := ctx.Value(notesServiceKey).(*notes.Service)
+	return svc
+}
+
+func appsFromContext(ctx context.Context) *apps.Service {
+	svc, _ := ctx.Value(appsServiceKey).(*apps.Service)
+	return svc
+}
+
+// Handler implements MCP tool call handling.
+// Services are resolved from context per-request, not stored as fields.
+type Handler struct{}
+
+// NewHandler creates a new MCP handler.
+// Per-user services are injected via ContextWithServices and resolved from context per-request.
+func NewHandler() *Handler {
+	return &Handler{}
+}
+
+type toolText string
+
+type toolErrorPayload struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // createToolHandler returns a tool handler function for the given tool name.
 func (h *Handler) createToolHandler(name string) func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
-		result, err := h.HandleToolCall(ctx, name, args)
-		if err != nil {
-			log.Printf("[ERROR] MCP tool %s failed: %v", name, err)
-		} else if result != nil && result.IsError {
-			log.Printf("[ERROR] MCP tool %s returned error result: %s", name, toolErrorSummary(result))
+	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (result *mcp.CallToolResult, extra any, err error) {
+		start := time.Now()
+		logger := obs.From(ctx).With("pkg", "internal/mcp")
+
+		reqBytes := len(marshalAny(args))
+		errorCode := ""
+		ok := false
+
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				coded := errs.New(errs.Internal, "internal tool panic")
+				result = newToolResultError(coded)
+				errorCode = string(errs.CodeOf(coded))
+			}
+			if result == nil {
+				coded := errs.New(errs.Internal, "internal tool failure")
+				result = newToolResultError(coded)
+				errorCode = string(errs.CodeOf(coded))
+			}
+			respBytes := len(marshalAny(result))
+			ok = !result.IsError
+			attrs := []any{
+				"tool_name", name,
+				"dur_ms", float64(time.Since(start).Microseconds()) / 1000.0,
+				"ok", ok,
+				"req_bytes", reqBytes,
+				"resp_bytes", respBytes,
+			}
+			if errorCode != "" {
+				attrs = append(attrs, "error_code", errorCode)
+			}
+			logger.Debug("mcp_tool", attrs...)
+		}()
+
+		payload, callErr := h.HandleToolCall(ctx, name, args)
+		if callErr != nil {
+			errorCode = string(errs.CodeOf(callErr))
+			result = newToolResultError(callErr)
+			return result, nil, nil
 		}
-		return result, nil, err
+
+		switch typed := payload.(type) {
+		case toolText:
+			result = newToolResultText(string(typed))
+		default:
+			result = newToolResultText(marshalToolJSON(typed))
+		}
+		return result, nil, nil
 	}
 }
 
 // HandleToolCall routes tool calls to appropriate handlers.
-func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments map[string]any) (*mcp.CallToolResult, error) {
+func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments map[string]any) (any, error) {
+	if name == "app_write" || name == "app_read" {
+		bashOnly, _ := ffclient.BoolVariation("BASH_ONLY", ffcontext.NewEvaluationContext("mcp-handlers"), true)
+		if bashOnly {
+			return nil, errs.New(errs.FailedPrecondition, fmt.Sprintf("%s is temporarily disabled while BASH_ONLY is enabled; use app_exec with tee + stdin instead", name))
+		}
+	}
+
 	switch name {
 	case "note_view":
-		return h.handleNoteView(arguments)
+		return h.handleNoteView(ctx, arguments)
 	case "note_create":
-		return h.handleNoteCreate(arguments)
+		return h.handleNoteCreate(ctx, arguments)
 	case "note_update":
-		return h.handleNoteUpdate(arguments)
+		return h.handleNoteUpdate(ctx, arguments)
 	case "note_search":
-		return h.handleNoteSearch(arguments)
+		return h.handleNoteSearch(ctx, arguments)
 	case "note_list":
-		return h.handleNoteList(arguments)
+		return h.handleNoteList(ctx, arguments)
 	case "note_delete":
-		return h.handleNoteDelete(arguments)
+		return h.handleNoteDelete(ctx, arguments)
 	case "note_edit":
-		return h.handleNoteEdit(arguments)
+		return h.handleNoteEdit(ctx, arguments)
 	case "app_create":
 		return h.handleAppCreate(ctx, arguments)
 	case "app_write":
 		return h.handleAppWrite(ctx, arguments)
 	case "app_read":
 		return h.handleAppRead(ctx, arguments)
-	case "app_bash":
-		return h.handleAppBash(ctx, arguments)
+	case "app_exec":
+		return h.handleAppExec(ctx, arguments)
 	case "app_list":
 		return h.handleAppList(ctx)
 	case "app_delete":
 		return h.handleAppDelete(ctx, arguments)
 	default:
-		return newToolResultError(fmt.Sprintf("unknown tool: %s", name)), nil
+		return nil, errs.New(errs.NotFound, fmt.Sprintf("unknown tool: %s", name))
 	}
 }
 
-func (h *Handler) requireNotes() error {
-	if h.notesSvc == nil {
-		return errors.New("notes tools are unavailable on this MCP endpoint")
+func requireNotes(ctx context.Context) (*notes.Service, error) {
+	svc := notesFromContext(ctx)
+	if svc == nil {
+		return nil, errs.New(errs.FailedPrecondition, "notes tools are unavailable on this MCP endpoint")
 	}
-	return nil
+	return svc, nil
 }
 
-func (h *Handler) requireApps() error {
-	if h.appsSvc == nil {
-		return errors.New("app tools are unavailable on this MCP endpoint")
+func requireApps(ctx context.Context) (*apps.Service, error) {
+	svc := appsFromContext(ctx)
+	if svc == nil {
+		return nil, errs.New(errs.FailedPrecondition, "app tools are unavailable on this MCP endpoint")
 	}
-	return nil
+	return svc, nil
 }
 
 // newToolResultText creates a successful tool result with text content.
@@ -97,35 +189,17 @@ func newToolResultText(text string) *mcp.CallToolResult {
 	}
 }
 
-// newToolResultError creates a tool result indicating an error.
-func newToolResultError(message string) *mcp.CallToolResult {
+func newToolResultError(err error) *mcp.CallToolResult {
+	payload := toolErrorPayload{
+		Code:    string(errs.CodeOf(err)),
+		Message: errs.MessageOf(err),
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: message},
+			&mcp.TextContent{Text: marshalToolJSON(payload)},
 		},
 		IsError: true,
 	}
-}
-
-func toolErrorSummary(result *mcp.CallToolResult) string {
-	if result == nil {
-		return ""
-	}
-	for _, content := range result.Content {
-		text, ok := content.(*mcp.TextContent)
-		if !ok {
-			continue
-		}
-		message := strings.TrimSpace(text.Text)
-		if message == "" {
-			continue
-		}
-		if len(message) > 512 {
-			return message[:512] + "... [truncated]"
-		}
-		return message
-	}
-	return "tool returned isError=true without text content"
 }
 
 func marshalToolJSON(value any) string {
@@ -136,32 +210,97 @@ func marshalToolJSON(value any) string {
 	return string(data)
 }
 
-func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
-
-	id, ok := args["id"].(string)
-	if !ok {
-		return newToolResultError("id must be a string"), nil
-	}
-
-	note, err := h.notesSvc.Read(id)
+func marshalAny(value any) []byte {
+	data, err := json.Marshal(value)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to read note: %v", err)), nil
+		return nil
+	}
+	return data
+}
+
+func decodeToolArgs(args map[string]any, dst any) error {
+	if args == nil {
+		args = map[string]any{}
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return errs.Wrap(errs.InvalidArgument, "invalid tool arguments", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return errs.New(errs.InvalidArgument, fmt.Sprintf("invalid tool arguments: %v", err))
+	}
+	return nil
+}
+
+func classifyNotesError(err error, action string) error {
+	switch {
+	case err == nil:
+		return nil
+	case errs.CodeOf(err) != errs.Internal:
+		return err
+	case errors.Is(err, notes.ErrNoteNotFound):
+		return errs.Wrap(errs.NotFound, err.Error(), err)
+	case errors.Is(err, notes.ErrPriorHashRequired),
+		errors.Is(err, notes.ErrInvalidPriorHash),
+		errors.Is(err, notes.ErrRevisionConflict),
+		errors.Is(err, notes.ErrNoMatch),
+		errors.Is(err, notes.ErrAmbiguousMatch),
+		errors.Is(err, notes.ErrStorageLimitExceeded):
+		return errs.Wrap(errs.FailedPrecondition, err.Error(), err)
+	default:
+		return errs.Wrap(errs.Internal, fmt.Sprintf("failed to %s: %v", action, err), err)
+	}
+}
+
+func classifyAppsError(err error, action string) error {
+	switch {
+	case err == nil:
+		return nil
+	case errs.CodeOf(err) != errs.Internal:
+		return err
+	case errors.Is(err, apps.ErrAppNotFound):
+		return errs.Wrap(errs.NotFound, err.Error(), err)
+	default:
+		return errs.Wrap(errs.Internal, fmt.Sprintf("failed to %s: %v", action, err), err)
+	}
+}
+
+type noteViewArgs struct {
+	ID        string `json:"id"`
+	LineRange []int  `json:"line_range,omitempty"`
+}
+
+func (h *Handler) handleNoteView(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var input noteViewArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.ID) == "" {
+		return nil, errs.New(errs.InvalidArgument, "id is required")
+	}
+
+	note, err := notesSvc.Read(input.ID)
+	if err != nil {
+		return nil, classifyNotesError(err, "read note")
 	}
 	if note.RevisionHash == "" {
-		return newToolResultError("failed to read note revision_hash"), nil
+		return nil, errs.New(errs.Internal, "failed to read note revision_hash")
 	}
 
 	start, end := 0, -1
-	if lr, ok := args["line_range"].([]any); ok && len(lr) == 2 {
-		if s, ok := lr[0].(float64); ok {
-			start = int(s)
+	if len(input.LineRange) != 0 {
+		if len(input.LineRange) != 2 {
+			return nil, errs.New(errs.InvalidArgument, "line_range must contain exactly 2 integers")
 		}
-		if e, ok := lr[1].(float64); ok {
-			end = int(e)
-		}
+		start = input.LineRange[0]
+		end = input.LineRange[1]
 	}
 
 	formatted, totalLines := notes.FormatWithLineNumbers(note.Content, start, end)
@@ -175,40 +314,45 @@ func (h *Handler) handleNoteView(args map[string]any) (*mcp.CallToolResult, erro
 		UpdatedAt:    note.UpdatedAt,
 		RevisionHash: note.RevisionHash,
 	}
-	if start > 0 || end > 0 {
+	if len(input.LineRange) == 2 {
 		result.LineRange = [2]int{start, end}
 	}
-
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }
 
-func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
+type noteCreateArgs struct {
+	Title   string  `json:"title"`
+	Content *string `json:"content,omitempty"`
+}
+
+func (h *Handler) handleNoteCreate(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	title, ok := args["title"].(string)
-	if !ok {
-		return newToolResultError("title must be a string"), nil
+	var input noteCreateArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.Title) == "" {
+		return nil, errs.New(errs.InvalidArgument, "title is required")
 	}
 
 	content := ""
-	if c, ok := args["content"].(string); ok {
-		content = c
+	if input.Content != nil {
+		content = *input.Content
 	}
 
-	note, err := h.notesSvc.Create(notes.CreateNoteParams{
-		Title:   title,
+	note, err := notesSvc.Create(notes.CreateNoteParams{
+		Title:   input.Title,
 		Content: content,
 	})
 	if err != nil {
-		if errors.Is(err, notes.ErrStorageLimitExceeded) {
-			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
-		}
-		return newToolResultError(fmt.Sprintf("failed to create note: %v", err)), nil
+		return nil, classifyNotesError(err, "create note")
 	}
 	if note.RevisionHash == "" {
-		return newToolResultError("failed to read created note revision_hash"), nil
+		return nil, errs.New(errs.Internal, "failed to read created note revision_hash")
 	}
 
 	result := notes.NoteCreateResult{
@@ -219,50 +363,45 @@ func (h *Handler) handleNoteCreate(args map[string]any) (*mcp.CallToolResult, er
 		CreatedAt:    note.CreatedAt,
 		RevisionHash: note.RevisionHash,
 	}
-
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }
 
-func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
+type noteUpdateArgs struct {
+	ID        string  `json:"id"`
+	Title     *string `json:"title,omitempty"`
+	Content   *string `json:"content,omitempty"`
+	PriorHash string  `json:"prior_hash"`
+}
 
-	id, ok := args["id"].(string)
-	if !ok {
-		return newToolResultError("id must be a string"), nil
-	}
-
-	params := notes.UpdateNoteParams{}
-	if title, ok := args["title"].(string); ok {
-		params.Title = &title
-	}
-	if content, ok := args["content"].(string); ok {
-		params.Content = &content
-	}
-
-	priorHashRaw, exists := args["prior_hash"]
-	if !exists {
-		return newToolResultError("prior_hash is required; call note_view first and pass revision_hash"), nil
-	}
-	priorHash, ok := priorHashRaw.(string)
-	if !ok {
-		return newToolResultError("prior_hash must be a string"), nil
-	}
-	params.PriorHash = &priorHash
-
-	note, err := h.notesSvc.Update(id, params)
+func (h *Handler) handleNoteUpdate(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
 	if err != nil {
-		if errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
-			return newToolResultError(err.Error()), nil
-		}
-		if errors.Is(err, notes.ErrStorageLimitExceeded) {
-			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
-		}
-		return newToolResultError(fmt.Sprintf("failed to update note: %v", err)), nil
+		return nil, err
+	}
+
+	var input noteUpdateArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.ID) == "" {
+		return nil, errs.New(errs.InvalidArgument, "id is required")
+	}
+	if strings.TrimSpace(input.PriorHash) == "" {
+		return nil, errs.New(errs.FailedPrecondition, "prior_hash is required; call note_view first and pass revision_hash")
+	}
+
+	params := notes.UpdateNoteParams{
+		Title:     input.Title,
+		Content:   input.Content,
+		PriorHash: &input.PriorHash,
+	}
+
+	note, err := notesSvc.Update(input.ID, params)
+	if err != nil {
+		return nil, classifyNotesError(err, "update note")
 	}
 	if note.RevisionHash == "" {
-		return newToolResultError("failed to read updated note revision_hash"), nil
+		return nil, errs.New(errs.Internal, "failed to read updated note revision_hash")
 	}
 
 	result := notes.NoteUpdateResult{
@@ -273,45 +412,62 @@ func (h *Handler) handleNoteUpdate(args map[string]any) (*mcp.CallToolResult, er
 		UpdatedAt:    note.UpdatedAt,
 		RevisionHash: note.RevisionHash,
 	}
-
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }
 
-func (h *Handler) handleNoteSearch(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
+type noteSearchArgs struct {
+	Query string `json:"query"`
+}
 
-	query, ok := args["query"].(string)
-	if !ok {
-		return newToolResultError("query must be a string"), nil
-	}
-
-	results, err := h.notesSvc.SearchWithSnippets(query)
+func (h *Handler) handleNoteSearch(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to search notes: %v", err)), nil
+		return nil, err
 	}
 
-	return newToolResultText(marshalToolJSON(results)), nil
+	var input noteSearchArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.Query) == "" {
+		return nil, errs.New(errs.InvalidArgument, "query is required")
+	}
+
+	results, err := notesSvc.SearchWithSnippets(input.Query)
+	if err != nil {
+		return nil, classifyNotesError(err, "search notes")
+	}
+	return results, nil
 }
 
-func (h *Handler) handleNoteList(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
+type noteListArgs struct {
+	Limit  *int `json:"limit,omitempty"`
+	Offset *int `json:"offset,omitempty"`
+}
+
+func (h *Handler) handleNoteList(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var input noteListArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
 	}
 
 	limit := 50
 	offset := 0
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
+	if input.Limit != nil {
+		limit = *input.Limit
 	}
-	if o, ok := args["offset"].(float64); ok {
-		offset = int(o)
+	if input.Offset != nil {
+		offset = *input.Offset
 	}
 
-	results, err := h.notesSvc.List(limit, offset)
+	results, err := notesSvc.List(limit, offset)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to list notes: %v", err)), nil
+		return nil, classifyNotesError(err, "list notes")
 	}
 
 	items := make([]notes.NoteListItem, 0, len(results.Notes))
@@ -338,76 +494,69 @@ func (h *Handler) handleNoteList(args map[string]any) (*mcp.CallToolResult, erro
 		Limit:      results.Limit,
 		Offset:     results.Offset,
 	}
-
-	return newToolResultText(marshalToolJSON(response)), nil
+	return response, nil
 }
 
-func (h *Handler) handleNoteDelete(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
-
-	id, ok := args["id"].(string)
-	if !ok {
-		return newToolResultError("id must be a string"), nil
-	}
-	if err := h.notesSvc.Delete(id); err != nil {
-		return newToolResultError(fmt.Sprintf("failed to delete note: %v", err)), nil
-	}
-
-	return newToolResultText(fmt.Sprintf("Note %s moved to trash. It will be permanently deleted after 30 days.", id)), nil
+type noteDeleteArgs struct {
+	ID string `json:"id"`
 }
 
-func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireNotes(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
-
-	id, ok := args["id"].(string)
-	if !ok {
-		return newToolResultError("id must be a string"), nil
-	}
-	oldStr, ok := args["old_string"].(string)
-	if !ok {
-		return newToolResultError("old_string must be a string"), nil
-	}
-	newStr, ok := args["new_string"].(string)
-	if !ok {
-		return newToolResultError("new_string must be a string"), nil
-	}
-
-	replaceAll := false
-	if replaceAllRaw, exists := args["replace_all"]; exists {
-		parsed, ok := replaceAllRaw.(bool)
-		if !ok {
-			return newToolResultError("replace_all must be a boolean"), nil
-		}
-		replaceAll = parsed
-	}
-
-	priorHashRaw, exists := args["prior_hash"]
-	if !exists {
-		return newToolResultError("prior_hash is required; call note_view first and pass revision_hash"), nil
-	}
-	parsed, ok := priorHashRaw.(string)
-	if !ok {
-		return newToolResultError("prior_hash must be a string"), nil
-	}
-	priorHash := &parsed
-
-	note, meta, err := h.notesSvc.StrReplace(id, oldStr, newStr, replaceAll, priorHash)
+func (h *Handler) handleNoteDelete(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
 	if err != nil {
-		if errors.Is(err, notes.ErrNoMatch) || errors.Is(err, notes.ErrAmbiguousMatch) ||
-			errors.Is(err, notes.ErrPriorHashRequired) || errors.Is(err, notes.ErrInvalidPriorHash) || errors.Is(err, notes.ErrRevisionConflict) {
-			return newToolResultError(err.Error()), nil
-		}
-		if errors.Is(err, notes.ErrStorageLimitExceeded) {
-			return newToolResultError(fmt.Sprintf("storage limit exceeded: %v", err)), nil
-		}
-		return newToolResultError(fmt.Sprintf("failed to edit note: %v", err)), nil
+		return nil, err
+	}
+
+	var input noteDeleteArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.ID) == "" {
+		return nil, errs.New(errs.InvalidArgument, "id is required")
+	}
+
+	if err := notesSvc.Delete(input.ID); err != nil {
+		return nil, classifyNotesError(err, "delete note")
+	}
+
+	return toolText(fmt.Sprintf("Note %s moved to trash. It will be permanently deleted after 30 days.", input.ID)), nil
+}
+
+type noteEditArgs struct {
+	ID         string `json:"id"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
+	PriorHash  string `json:"prior_hash"`
+}
+
+func (h *Handler) handleNoteEdit(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var input noteEditArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.ID) == "" {
+		return nil, errs.New(errs.InvalidArgument, "id is required")
+	}
+	if input.OldString == "" {
+		return nil, errs.New(errs.InvalidArgument, "old_string is required")
+	}
+	if strings.TrimSpace(input.PriorHash) == "" {
+		return nil, errs.New(errs.FailedPrecondition, "prior_hash is required; call note_view first and pass revision_hash")
+	}
+
+	priorHash := input.PriorHash
+	note, meta, err := notesSvc.StrReplace(input.ID, input.OldString, input.NewString, input.ReplaceAll, &priorHash)
+	if err != nil {
+		return nil, classifyNotesError(err, "edit note")
 	}
 	if note.RevisionHash == "" {
-		return newToolResultError("failed to read edited note revision_hash"), nil
+		return nil, errs.New(errs.Internal, "failed to read edited note revision_hash")
 	}
 
 	totalLines := notes.CountLines(note.Content)
@@ -423,123 +572,205 @@ func (h *Handler) handleNoteEdit(args map[string]any) (*mcp.CallToolResult, erro
 		UpdatedAt:        note.UpdatedAt,
 		RevisionHash:     note.RevisionHash,
 	}
-
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }
 
-func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
+type appCreateArgs struct {
+	Names []string `json:"names"`
+}
 
-	namesRaw, ok := args["names"].([]any)
-	if !ok || len(namesRaw) == 0 {
-		return newToolResultError("names must be a non-empty array of strings"), nil
-	}
-	names := make([]string, 0, len(namesRaw))
-	for _, item := range namesRaw {
-		name, ok := item.(string)
-		if !ok {
-			return newToolResultError("names must be a non-empty array of strings"), nil
-		}
-		names = append(names, name)
-	}
-
-	result, err := h.appsSvc.Create(ctx, names)
+func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (any, error) {
+	appsSvc, err := requireApps(ctx)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to create app: %v", err)), nil
+		return nil, err
 	}
-	payload := marshalToolJSON(result)
+
+	var input appCreateArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if len(input.Names) == 0 {
+		return nil, errs.New(errs.InvalidArgument, "names must be a non-empty array of strings")
+	}
+
+	result, err := appsSvc.Create(ctx, input.Names)
+	if err != nil {
+		return nil, classifyAppsError(err, "create app")
+	}
 	if !result.Created {
-		return newToolResultError(payload), nil
+		return nil, errs.New(errs.FailedPrecondition, marshalToolJSON(result))
 	}
-	return newToolResultText(payload), nil
+	return result, nil
 }
 
-func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
-		return newToolResultError(err.Error()), nil
-	}
+type appWriteFileArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
 
-	appName, ok := args["app"].(string)
-	if !ok {
-		return newToolResultError("app must be a string"), nil
-	}
-	filePath, ok := args["path"].(string)
-	if !ok {
-		return newToolResultError("path must be a string"), nil
-	}
-	content, ok := args["content"].(string)
-	if !ok {
-		return newToolResultError("content must be a string"), nil
-	}
+type appWriteArgs struct {
+	App   string             `json:"app"`
+	Files []appWriteFileArgs `json:"files"`
+}
 
-	result, err := h.appsSvc.WriteFile(ctx, appName, filePath, content)
+func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (any, error) {
+	appsSvc, err := requireApps(ctx)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to write file: %v", err)), nil
-	}
-	return newToolResultText(marshalToolJSON(result)), nil
-}
-
-func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
-		return newToolResultError(err.Error()), nil
+		return nil, err
 	}
 
-	appName, ok := args["app"].(string)
-	if !ok {
-		return newToolResultError("app must be a string"), nil
+	var input appWriteArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
 	}
-	filePath, ok := args["path"].(string)
-	if !ok {
-		return newToolResultError("path must be a string"), nil
+	if strings.TrimSpace(input.App) == "" {
+		return nil, errs.New(errs.InvalidArgument, "app is required")
+	}
+	if len(input.Files) == 0 {
+		return nil, errs.New(errs.InvalidArgument, "files must not be empty")
+	}
+	if len(input.Files) > maxAppWriteFilesInput {
+		return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files must contain <= %d items", maxAppWriteFilesInput))
 	}
 
-	result, err := h.appsSvc.ReadFile(ctx, appName, filePath)
+	files := make([]apps.AppWriteFileInput, 0, len(input.Files))
+	totalBytes := 0
+	for i, file := range input.Files {
+		if strings.TrimSpace(file.Path) == "" {
+			return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files[%d].path is required", i))
+		}
+		if len(file.Path) > maxAppWritePathBytesInput {
+			return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files[%d].path must be <= %d bytes", i, maxAppWritePathBytesInput))
+		}
+		contentBytes := len(file.Content)
+		if contentBytes > maxAppWriteFileBytesInput {
+			return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files[%d].content must be <= %d bytes", i, maxAppWriteFileBytesInput))
+		}
+		totalBytes += contentBytes
+		if totalBytes > maxAppWriteTotalBytesInput {
+			return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("total file content must be <= %d bytes", maxAppWriteTotalBytesInput))
+		}
+		files = append(files, apps.AppWriteFileInput{
+			Path:    file.Path,
+			Content: file.Content,
+		})
+	}
+
+	result, err := appsSvc.WriteFiles(ctx, input.App, files)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
+		return nil, classifyAppsError(err, "write files")
 	}
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }
 
-func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
-		return newToolResultError(err.Error()), nil
+type appReadFileArgs struct {
+	Path string `json:"path"`
+}
+
+type appReadArgs struct {
+	App   string            `json:"app"`
+	Files []appReadFileArgs `json:"files"`
+}
+
+func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (any, error) {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	appName, ok := args["app"].(string)
-	if !ok {
-		return newToolResultError("app must be a string"), nil
+	var input appReadArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
 	}
-	command, ok := args["command"].(string)
-	if !ok {
-		return newToolResultError("command must be a string"), nil
+	if strings.TrimSpace(input.App) == "" {
+		return nil, errs.New(errs.InvalidArgument, "app is required")
+	}
+	if len(input.Files) == 0 {
+		return nil, errs.New(errs.InvalidArgument, "files must not be empty")
+	}
+	if len(input.Files) > maxAppWriteFilesInput {
+		return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files must contain <= %d items", maxAppWriteFilesInput))
+	}
+
+	paths := make([]string, 0, len(input.Files))
+	for i, file := range input.Files {
+		if strings.TrimSpace(file.Path) == "" {
+			return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files[%d].path is required", i))
+		}
+		if len(file.Path) > maxAppWritePathBytesInput {
+			return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("files[%d].path must be <= %d bytes", i, maxAppWritePathBytesInput))
+		}
+		paths = append(paths, file.Path)
+	}
+
+	result, err := appsSvc.ReadFiles(ctx, input.App, paths)
+	if err != nil {
+		return nil, classifyAppsError(err, "read files")
+	}
+	return result, nil
+}
+
+type appExecArgs struct {
+	App            string       `json:"app"`
+	Command        []string     `json:"command"`
+	TimeoutSeconds *json.Number `json:"timeout_seconds,omitempty"`
+}
+
+func (h *Handler) handleAppExec(ctx context.Context, args map[string]any) (any, error) {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var input appExecArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(input.App) == "" {
+		return nil, errs.New(errs.InvalidArgument, "app is required")
+	}
+	if len(input.Command) == 0 {
+		return nil, errs.New(errs.InvalidArgument, "command must be a non-empty array")
+	}
+	argvTotalBytes := 0
+	for _, arg := range input.Command {
+		argvTotalBytes += len(arg)
+	}
+	if argvTotalBytes > maxAppExecArgvBytesInput {
+		return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("total argv size must be <= %d bytes", maxAppExecArgvBytesInput))
 	}
 
 	timeoutSeconds := 0
-	if raw, exists := args["timeout_seconds"]; exists {
-		parsed, ok := raw.(float64)
-		if !ok {
-			return newToolResultError("timeout_seconds must be an integer"), nil
+	if input.TimeoutSeconds != nil {
+		parsed, parseErr := input.TimeoutSeconds.Int64()
+		if parseErr != nil {
+			return nil, errs.New(errs.InvalidArgument, "timeout_seconds must be an integer")
+		}
+		if parsed < 0 {
+			return nil, errs.New(errs.InvalidArgument, "timeout_seconds must be >= 0")
+		}
+		if parsed > math.MaxInt32 {
+			return nil, errs.New(errs.InvalidArgument, "timeout_seconds is too large")
 		}
 		timeoutSeconds = int(parsed)
 	}
 
-	result, err := h.appsSvc.RunBash(ctx, appName, command, timeoutSeconds)
+	result, err := appsSvc.RunExec(ctx, input.App, input.Command, timeoutSeconds)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to run command: %v", err)), nil
+		return nil, classifyAppsError(err, "run command")
 	}
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }
 
-func (h *Handler) handleAppList(ctx context.Context) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
-		return newToolResultError(err.Error()), nil
+func (h *Handler) handleAppList(ctx context.Context) (any, error) {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	items, err := h.appsSvc.List(ctx)
+	items, err := appsSvc.List(ctx)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to list apps: %v", err)), nil
+		return nil, classifyAppsError(err, "list apps")
 	}
 	response := struct {
 		Apps       []apps.AppMetadata `json:"apps"`
@@ -548,22 +779,30 @@ func (h *Handler) handleAppList(ctx context.Context) (*mcp.CallToolResult, error
 		Apps:       items,
 		TotalCount: len(items),
 	}
-
-	return newToolResultText(marshalToolJSON(response)), nil
+	return response, nil
 }
 
-func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
-	if err := h.requireApps(); err != nil {
-		return newToolResultError(err.Error()), nil
+type appDeleteArgs struct {
+	App string `json:"app"`
+}
+
+func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (any, error) {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	appName, ok := args["app"].(string)
-	if !ok {
-		return newToolResultError("app must be a string"), nil
+	var input appDeleteArgs
+	if err := decodeToolArgs(args, &input); err != nil {
+		return nil, err
 	}
-	result, err := h.appsSvc.Delete(ctx, appName)
+	if strings.TrimSpace(input.App) == "" {
+		return nil, errs.New(errs.InvalidArgument, "app is required")
+	}
+
+	result, err := appsSvc.Delete(ctx, input.App)
 	if err != nil {
-		return newToolResultError(fmt.Sprintf("failed to delete app: %v", err)), nil
+		return nil, classifyAppsError(err, "delete app")
 	}
-	return newToolResultText(marshalToolJSON(result)), nil
+	return result, nil
 }

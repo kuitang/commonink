@@ -370,6 +370,17 @@ func (h *Handler) HandleConsentSubmit(w http.ResponseWriter, r *http.Request) {
 		Resource:            authReqValues.Get("resource"),
 	}
 
+	// Re-validate redirect_uri against registered client URIs
+	client, err := h.provider.GetClient(r.Context(), req.ClientID)
+	if err != nil {
+		http.Error(w, "Invalid client", http.StatusBadRequest)
+		return
+	}
+	if err := h.provider.ValidateClientRedirectURI(client, req.RedirectURI); err != nil {
+		http.Error(w, "Invalid redirect URI for client", http.StatusBadRequest)
+		return
+	}
+
 	// Clear the auth request cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "oauth_auth_req",
@@ -600,7 +611,8 @@ func (h *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 
 	// Delete the authorization code (one-time use)
 	if err := h.provider.DeleteAuthorizationCode(r.Context(), req.Code); err != nil {
-		// Log error but continue - code will expire anyway
+		h.writeTokenError(w, http.StatusInternalServerError, "server_error", "Failed to revoke authorization code")
+		return
 	}
 
 	// Create tokens
@@ -821,7 +833,7 @@ func (s *ConsentDBService) RecordConsent(ctx context.Context, userID, clientID s
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No existing consent - create new
-		_, err = s.queries.CreateConsent(ctx, sessions.CreateConsentParams{
+		err = s.queries.CreateConsent(ctx, sessions.CreateConsentParams{
 			ID:        uuid.New().String(),
 			UserID:    userID,
 			ClientID:  clientID,
@@ -836,7 +848,7 @@ func (s *ConsentDBService) RecordConsent(ctx context.Context, userID, clientID s
 	mergedScopes := mergeScopes(existingScopes, scopes)
 	mergedScopeString := auth.ScopesToString(mergedScopes)
 
-	_, err = s.queries.UpdateConsentScopes(ctx, sessions.UpdateConsentScopesParams{
+	err = s.queries.UpdateConsentScopes(ctx, sessions.UpdateConsentScopesParams{
 		UserID:    userID,
 		ClientID:  clientID,
 		Scopes:    mergedScopeString,

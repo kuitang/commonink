@@ -50,7 +50,7 @@ Code: `internal/web/handlers.go`, `internal/notes/public.go`, `internal/notes/re
 - `POST /mcp` for all tools
 - `POST /mcp/notes` for notes-only toolset
 - `POST /mcp/apps` for apps-only toolset
-6. For app workflows, client uses `app_create` (candidate names), `app_write`, and `app_bash`.
+6. For app workflows, client uses `app_create` (candidate names) and `app_bash` (including bash heredocs for file writes while `BASH_ONLY` is enabled).
 
 Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/handlers.go`, `internal/mcp/server.go`, `internal/mcp/handlers.go`.
 
@@ -70,7 +70,7 @@ Code: `internal/oauth/provider.go`, `internal/oauth/dcr.go`, `internal/oauth/han
 - Apps (management): `GET /api/apps`, `GET /api/apps/{name}`, `DELETE /api/apps/{name}`
 - Apps filesystem: `GET /api/apps/{name}/files`, `GET /api/apps/{name}/files/{path...}`
 - Apps logs: `GET /api/apps/{name}/logs` (optional `?lines=<n>`, capped server-side)
-- Deployment remains MCP-only: `app_create`, `app_write`, `app_bash`
+- Deployment remains MCP-only: `app_create`, `app_bash`
 
 ### OAuth Provider
 - Metadata: `/.well-known/*`

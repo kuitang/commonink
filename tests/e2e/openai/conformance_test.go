@@ -32,7 +32,7 @@ import (
 
 const (
 	// Model to use - MUST be gpt-5-mini per CLAUDE.md requirements
-	OpenAIModel = "gpt-5-mini"
+	OpenAIModel         = "gpt-5-mini"
 	appSystemPromptName = "account_workflow"
 )
 
@@ -677,7 +677,7 @@ func TestOpenAI_ToolDiscovery(t *testing.T) {
 	// Verify expected tools exist
 	expectedTools := []string{
 		"note_create", "note_view", "note_update", "note_delete", "note_list", "note_search", "note_edit",
-		"app_create", "app_write", "app_read", "app_bash", "app_list", "app_delete",
+		"app_create", "app_exec", "app_list", "app_delete",
 	}
 	for _, expected := range expectedTools {
 		found := false
@@ -779,113 +779,37 @@ func assertOpenAIAppURLLive(t *testing.T, env *testEnv, appPrefix string) {
 		"for i in 1 2 3 4 5 6; do curl -fsS -o /dev/null -w 'HTTP %%{http_code}\\n' %q && exit 0; sleep 2; done; exit 1",
 		publicURL,
 	)
-	bashResp, err := env.mcpClient.CallTool("app_bash", map[string]interface{}{
+	execResp, err := env.mcpClient.CallTool("app_exec", map[string]interface{}{
 		"app":             appName,
-		"command":         curlCmd,
+		"command":         []string{"bash", "-lc", curlCmd},
 		"timeout_seconds": 90,
 	})
 	if err != nil {
-		t.Fatalf("app_bash curl check failed: %v", err)
+		t.Fatalf("app_exec curl check failed: %v", err)
 	}
-	bashText, err := testutil.ParseToolResult(bashResp)
+	execText, err := testutil.ParseToolResult(execResp)
 	if err != nil {
-		t.Fatalf("failed to parse app_bash result: %v", err)
+		t.Fatalf("failed to parse app_exec result: %v", err)
 	}
-	if testutil.IsToolError(bashResp) {
-		t.Fatalf("app_bash returned tool error: %s", bashText)
+	if testutil.IsToolError(execResp) {
+		t.Fatalf("app_exec returned tool error: %s", execText)
 	}
 
-	var bashResult struct {
+	var execResult struct {
 		Stdout   string `json:"stdout"`
 		Stderr   string `json:"stderr"`
 		ExitCode int    `json:"exit_code"`
 	}
-	if err := json.Unmarshal([]byte(bashText), &bashResult); err != nil {
-		t.Fatalf("failed to decode app_bash JSON payload: %v\npayload=%s", err, bashText)
+	if err := json.Unmarshal([]byte(execText), &execResult); err != nil {
+		t.Fatalf("failed to decode app_exec JSON payload: %v\npayload=%s", err, execText)
 	}
-	if bashResult.ExitCode != 0 {
+	if execResult.ExitCode != 0 {
 		t.Fatalf("sprite URL curl failed for app=%s url=%s exit=%d stdout=%q stderr=%q",
-			appName, publicURL, bashResult.ExitCode, bashResult.Stdout, bashResult.Stderr)
+			appName, publicURL, execResult.ExitCode, execResult.Stdout, execResult.Stderr)
 	}
-	if !strings.Contains(bashResult.Stdout, "HTTP ") {
+	if !strings.Contains(execResult.Stdout, "HTTP ") {
 		t.Fatalf("sprite URL curl output missing HTTP status for app=%s url=%s stdout=%q stderr=%q",
-			appName, publicURL, bashResult.Stdout, bashResult.Stderr)
+			appName, publicURL, execResult.Stdout, execResult.Stderr)
 	}
-	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(bashResult.Stdout))
-}
-
-func TestOpenAI_AppTools_Targeted(t *testing.T) {
-	t.Parallel()
-
-	if testing.Short() {
-		t.Skip("Skipping OpenAI test in short mode")
-	}
-	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
-		t.Skip("SPRITE_TOKEN not set")
-	}
-
-	env := setupTestEnv(t)
-	assertOpenAIPromptExists(t, env)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	base := fmt.Sprintf("oa-target-%d", time.Now().UnixNano()%1000000)
-	nameA := base + "-a"
-	nameB := base + "-b"
-	prompt := fmt.Sprintf(
-		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_bash with command 'echo tool-check'; 4) app_delete for the created app.",
-		nameA, nameB,
-	)
-
-	resp, toolCalls, _, err := env.runConversation(ctx, t, prompt, "")
-	if err != nil {
-		t.Fatalf("Targeted app tool test failed: %v", err)
-	}
-	t.Logf("Response: %s", resp)
-	t.Logf("Tool calls: %d", len(toolCalls))
-
-	for _, expected := range []string{"app_create", "app_list", "app_bash", "app_delete"} {
-		if !hasOpenAIToolCall(toolCalls, expected) {
-			t.Fatalf("Expected OpenAI to call %s, calls=%+v", expected, toolCalls)
-		}
-	}
-}
-
-func TestOpenAI_AppWorkflow_Integration(t *testing.T) {
-	t.Parallel()
-
-	if testing.Short() {
-		t.Skip("Skipping OpenAI test in short mode")
-	}
-	if strings.TrimSpace(os.Getenv("SPRITE_TOKEN")) == "" {
-		t.Skip("SPRITE_TOKEN not set")
-	}
-
-	env := setupTestEnv(t)
-	assertOpenAIPromptExists(t, env)
-	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
-	defer cancel()
-
-	base := fmt.Sprintf("oa-workflow-%d", time.Now().UnixNano()%1000000)
-	nameA := base + "-a"
-	nameB := base + "-b"
-	prompt := fmt.Sprintf(
-		"make me a todo list app. Use app_create with candidate names ['%s','%s'] before writing code.",
-		nameA, nameB,
-	)
-
-	resp, toolCalls, _, err := env.runConversation(ctx, t, prompt, "")
-	if err != nil {
-		t.Fatalf("App workflow failed: %v", err)
-	}
-	t.Logf("Response: %s", resp)
-	t.Logf("Tool calls: %d", len(toolCalls))
-
-	for _, expected := range []string{"app_create", "app_write", "app_bash"} {
-		if !hasOpenAIToolCall(toolCalls, expected) {
-			t.Fatalf("Expected OpenAI to call %s, calls=%+v", expected, toolCalls)
-		}
-	}
-
-	assertOpenAIAppURLLive(t, env, base)
+	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(execResult.Stdout))
 }

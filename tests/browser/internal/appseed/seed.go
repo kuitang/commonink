@@ -3,6 +3,7 @@ package appseed
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -37,6 +38,15 @@ HTTPServer(("0.0.0.0", 8080), H).serve_forever()
 func callTool(t testing.TB, baseURL, sessionID, tool string, args map[string]any) json.RawMessage {
 	t.Helper()
 
+	result, err := callToolResult(baseURL, sessionID, tool, args)
+	if err != nil {
+		t.Fatalf("callTool %s: %v", tool, err)
+	}
+	return result
+}
+
+func callToolResult(baseURL, sessionID, tool string, args map[string]any) (json.RawMessage, error) {
+
 	reqBody := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "tools/call",
@@ -48,12 +58,12 @@ func callTool(t testing.TB, baseURL, sessionID, tool string, args map[string]any
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		t.Fatalf("callTool: failed to marshal request: %v", err)
+		return nil, fmt.Errorf("%s: failed to marshal request: %w", tool, err)
 	}
 
 	req, err := http.NewRequest("POST", strings.TrimRight(baseURL, "/")+"/mcp", bytes.NewReader(bodyBytes))
 	if err != nil {
-		t.Fatalf("callTool: failed to create request: %v", err)
+		return nil, fmt.Errorf("%s: failed to create request: %w", tool, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -64,17 +74,17 @@ func callTool(t testing.TB, baseURL, sessionID, tool string, args map[string]any
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("callTool %s: request failed: %v", tool, err)
+		return nil, fmt.Errorf("%s: request failed: %w", tool, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("callTool %s: failed to read response: %v", tool, err)
+		return nil, fmt.Errorf("%s: failed to read response: %w", tool, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("callTool %s: unexpected status %d: %s", tool, resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("%s: unexpected status %d: %s", tool, resp.StatusCode, string(respBody))
 	}
 
 	var rpcResp struct {
@@ -90,20 +100,50 @@ func callTool(t testing.TB, baseURL, sessionID, tool string, args map[string]any
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		t.Fatalf("callTool %s: failed to parse response: %v\nBody: %s", tool, err, string(respBody))
+		return nil, fmt.Errorf("%s: failed to parse response: %w body=%s", tool, err, string(respBody))
 	}
 	if rpcResp.Error != nil {
-		t.Fatalf("callTool %s: RPC error %d: %s", tool, rpcResp.Error.Code, rpcResp.Error.Message)
+		return nil, fmt.Errorf("%s: RPC error %d: %s", tool, rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 	if len(rpcResp.Result.Content) == 0 {
-		return json.RawMessage("{}")
+		return json.RawMessage("{}"), nil
 	}
 
 	var textStr string
 	if err := json.Unmarshal(rpcResp.Result.Content[0].Text, &textStr); err != nil {
-		return rpcResp.Result.Content[0].Text
+		return rpcResp.Result.Content[0].Text, nil
 	}
-	return json.RawMessage(textStr)
+	return json.RawMessage(textStr), nil
+}
+
+func isTransientSpriteToolError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "failed to connect") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "resource not found")
+}
+
+func callToolWithRetry(t testing.TB, baseURL, sessionID, tool string, args map[string]any, deadline time.Time, pollInterval time.Duration) json.RawMessage {
+	t.Helper()
+
+	var lastErr error
+	for time.Now().Before(deadline) {
+		result, err := callToolResult(baseURL, sessionID, tool, args)
+		if err == nil {
+			return result
+		}
+		lastErr = err
+		if !isTransientSpriteToolError(err) {
+			t.Fatalf("callToolWithRetry %s: non-transient error: %v", tool, err)
+		}
+		time.Sleep(pollInterval)
+	}
+	if lastErr != nil {
+		t.Fatalf("callToolWithRetry %s: timed out after transient errors: %v", tool, lastErr)
+	}
+	t.Fatalf("callToolWithRetry %s: timed out", tool)
+	return nil
 }
 
 // SeedApp creates a sprite-based app via MCP tools and waits for it to become reachable.
@@ -127,60 +167,102 @@ func SeedApp(t testing.TB, baseURL, sessionID, appName string) string {
 		})
 	})
 
-	callTool(t, baseURL, sessionID, "app_write", map[string]any{
+	pollInterval := 250 * time.Millisecond
+	setupDeadline := time.Now().Add(30 * time.Second)
+
+	callToolWithRetry(t, baseURL, sessionID, "app_exec", map[string]any{
 		"app":     appName,
-		"path":    "server.py",
-		"content": seedAppPythonServer,
-	})
-	createAppResp := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
-		"app": appName,
-		"command": `if [ ! -f /home/sprite/server.py ]; then
-  echo "server.py missing at /home/sprite/server.py"
-  exit 1
-fi
-sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080`,
-	})
+		"command": []string{"tee", "server.py"},
+		"stdin":   seedAppPythonServer,
+	}, setupDeadline, pollInterval)
+
+	fileReady := false
+	lastFileCheck := ""
+	for time.Now().Before(setupDeadline) {
+		checkResp, err := callToolResult(baseURL, sessionID, "app_exec", map[string]any{
+			"app":     appName,
+			"command": []string{"bash", "-lc", "if [ -f /home/sprite/server.py ]; then echo present; exit 0; fi; echo missing; exit 1"},
+		})
+		if err != nil {
+			if isTransientSpriteToolError(err) {
+				lastFileCheck = err.Error()
+				time.Sleep(pollInterval)
+				continue
+			}
+			t.Fatalf("SeedApp: file check failed: %v", err)
+		}
+
+		var checkResult struct {
+			ExitCode int    `json:"exit_code"`
+			Stdout   string `json:"stdout"`
+			Stderr   string `json:"stderr"`
+		}
+		if err := json.Unmarshal(checkResp, &checkResult); err != nil {
+			t.Fatalf("SeedApp: failed to parse file check result: %v", err)
+		}
+		lastFileCheck = fmt.Sprintf("exit=%d stdout=%q stderr=%q", checkResult.ExitCode, checkResult.Stdout, checkResult.Stderr)
+		if checkResult.ExitCode == 0 {
+			fileReady = true
+			break
+		}
+		time.Sleep(pollInterval)
+	}
+	if !fileReady {
+		t.Fatalf("SeedApp: server.py never became visible in app workspace for %s (last check: %s)", appName, lastFileCheck)
+	}
+
+	createAppResp := callToolWithRetry(t, baseURL, sessionID, "app_exec", map[string]any{
+		"app":     appName,
+		"command": []string{"bash", "-lc", "if [ ! -f /home/sprite/server.py ]; then echo 'server.py missing at /home/sprite/server.py'; exit 1; fi; sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080"},
+	}, setupDeadline, pollInterval)
 	var createAppResult struct {
 		ExitCode int    `json:"exit_code"`
 		Stdout   string `json:"stdout"`
 		Stderr   string `json:"stderr"`
 	}
 	if err := json.Unmarshal(createAppResp, &createAppResult); err != nil {
-		t.Fatalf("SeedApp: failed to parse app_bash create command result: %v", err)
+		t.Fatalf("SeedApp: failed to parse app_exec create command result: %v", err)
 	}
 	if createAppResult.ExitCode != 0 {
 		t.Fatalf("SeedApp: failed to create local service for app %s: exit=%d stdout=%q stderr=%q", appName, createAppResult.ExitCode, createAppResult.Stdout, createAppResult.Stderr)
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
-	pollInterval := 250 * time.Millisecond
 	localReady := false
 	lastLocalResult := ""
 	for time.Now().Before(deadline) {
-		result := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
+		result, err := callToolResult(baseURL, sessionID, "app_exec", map[string]any{
 			"app":     appName,
-			"command": "curl -sf http://localhost:8080",
+			"command": []string{"bash", "-lc", "curl -sf http://localhost:8080"},
 		})
+		if err != nil {
+			if isTransientSpriteToolError(err) {
+				lastLocalResult = err.Error()
+				time.Sleep(pollInterval)
+				continue
+			}
+			t.Fatalf("SeedApp: local service check failed: %v", err)
+		}
 		lastLocalResult = string(result)
 
-		var bashResult struct {
+		var execResult struct {
 			ExitCode int    `json:"exit_code"`
 			Stdout   string `json:"stdout"`
 		}
-		if err := json.Unmarshal(result, &bashResult); err == nil && bashResult.ExitCode == 0 && bashResult.Stdout != "" {
+		if err := json.Unmarshal(result, &execResult); err == nil && execResult.ExitCode == 0 && execResult.Stdout != "" {
 			localReady = true
 			break
 		}
 		time.Sleep(pollInterval)
 	}
 	if !localReady {
-		servicesList := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
+		servicesList := callTool(t, baseURL, sessionID, "app_exec", map[string]any{
 			"app":     appName,
-			"command": "sprite-env services list",
+			"command": []string{"bash", "-lc", "sprite-env services list"},
 		})
-		logs := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
+		logs := callTool(t, baseURL, sessionID, "app_exec", map[string]any{
 			"app":     appName,
-			"command": "tail -n 200 /.sprite/logs/services/*.log 2>/dev/null || true",
+			"command": []string{"bash", "-lc", "tail -n 200 /.sprite/logs/services/*.log 2>/dev/null || true"},
 		})
 		t.Fatalf("SeedApp: local service never became reachable for app %s (last curl=%s services=%s logs=%s)", appName, lastLocalResult, string(servicesList), string(logs))
 	}
@@ -207,6 +289,9 @@ sprite-env services create web --cmd python3 --args /home/sprite/server.py --htt
 					return publicURL
 				}
 			}
+		} else {
+			lastStatus = http.StatusBadGateway
+			lastBody = "request error: " + err.Error()
 		}
 		time.Sleep(pollInterval)
 	}

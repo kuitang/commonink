@@ -82,3 +82,21 @@ func OIDCSubjectGenerator() *rapid.Generator[string] {
 func OIDCNameGenerator() *rapid.Generator[string] {
 	return rapid.StringMatching(`[A-Za-z][A-Za-z ]{2,30}`)
 }
+
+// =============================================================================
+// Shared Fixture Constants
+// =============================================================================
+
+// SharedFixtureSessionTables is the canonical list of session DB tables that
+// must be cleared when resetting a shared test fixture. Used by both e2e and
+// browser test packages to avoid duplicating the table list.
+var SharedFixtureSessionTables = []string{
+	"sessions",
+	"magic_tokens",
+	"user_keys",
+	"oauth_clients",
+	"oauth_tokens",
+	"oauth_codes",
+	"oauth_consents",
+	"short_urls",
+}

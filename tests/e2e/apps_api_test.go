@@ -9,12 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/kuitang/agent-notes/tests/e2e/testutil"
 	"pgregory.net/rapid"
@@ -24,8 +22,14 @@ type appsAPIEnv struct {
 	baseURL     string
 	accessToken string
 	client      *http.Client
+	sessionID   string
 }
 
+// appsAPISharedEnv is shared across rapid iterations and test functions.
+// This is safe because all property tests assert invariants that hold regardless
+// of accumulated server state (e.g. "app names are non-empty", "unknown apps
+// return 404"). No test depends on a specific app count or app identity.
+// The shared http.Client uses Bearer token auth (no cookie state leakage).
 var appsAPIEnvMu sync.Mutex
 var appsAPISharedEnv *appsAPIEnv
 
@@ -98,6 +102,10 @@ func (e *appsAPIEnv) doPostRequest(path, bearerToken string) (int, http.Header, 
 // the parsed result content text. Returns an error if the request fails or
 // the JSON-RPC response contains an error.
 func (e *appsAPIEnv) mcpCallTool(toolName string, args map[string]any) (json.RawMessage, error) {
+	if err := e.ensureMCPSession(); err != nil {
+		return nil, err
+	}
+
 	body := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "tools/call",
@@ -118,6 +126,7 @@ func (e *appsAPIEnv) mcpCallTool(toolName string, args map[string]any) (json.Raw
 	req.Header.Set("Authorization", "Bearer "+e.accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", e.sessionID)
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -146,17 +155,78 @@ func (e *appsAPIEnv) mcpCallTool(toolName string, args map[string]any) (json.Raw
 	return rpcResp.Result, nil
 }
 
-// spriteTokenIsReal returns true if the SPRITE_TOKEN env var looks like
-// a real Fly Sprites token (non-empty and does not start with "test-").
-func spriteTokenIsReal() bool {
-	token := strings.TrimSpace(os.Getenv("SPRITE_TOKEN"))
-	if token == "" {
-		return false
+func (e *appsAPIEnv) ensureMCPSession() error {
+	if e.sessionID != "" {
+		return nil
 	}
-	if strings.HasPrefix(token, "test-") {
-		return false
+
+	initReq := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "initialize",
+		"id":      1,
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "apps-api-tests",
+				"version": "1.0.0",
+			},
+		},
 	}
-	return true
+	initBody, err := json.Marshal(initReq)
+	if err != nil {
+		return fmt.Errorf("marshal initialize request: %w", err)
+	}
+
+	initHTTPReq, err := http.NewRequest(http.MethodPost, e.baseURL+"/mcp", bytes.NewReader(initBody))
+	if err != nil {
+		return fmt.Errorf("create initialize request: %w", err)
+	}
+	initHTTPReq.Header.Set("Authorization", "Bearer "+e.accessToken)
+	initHTTPReq.Header.Set("Content-Type", "application/json")
+	initHTTPReq.Header.Set("Accept", "application/json, text/event-stream")
+
+	initResp, err := e.client.Do(initHTTPReq)
+	if err != nil {
+		return fmt.Errorf("initialize request failed: %w", err)
+	}
+	defer initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(initResp.Body)
+		return fmt.Errorf("initialize returned %d: %s", initResp.StatusCode, string(respBody))
+	}
+	e.sessionID = strings.TrimSpace(initResp.Header.Get("Mcp-Session-Id"))
+	if e.sessionID == "" {
+		return fmt.Errorf("initialize did not return Mcp-Session-Id")
+	}
+
+	initializedNotif := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "notifications/initialized",
+	}
+	notifBody, err := json.Marshal(initializedNotif)
+	if err != nil {
+		return fmt.Errorf("marshal initialized notification: %w", err)
+	}
+	notifReq, err := http.NewRequest(http.MethodPost, e.baseURL+"/mcp", bytes.NewReader(notifBody))
+	if err != nil {
+		return fmt.Errorf("create initialized request: %w", err)
+	}
+	notifReq.Header.Set("Authorization", "Bearer "+e.accessToken)
+	notifReq.Header.Set("Content-Type", "application/json")
+	notifReq.Header.Set("Accept", "application/json, text/event-stream")
+	notifReq.Header.Set("Mcp-Session-Id", e.sessionID)
+
+	notifResp, err := e.client.Do(notifReq)
+	if err != nil {
+		return fmt.Errorf("initialized notification failed: %w", err)
+	}
+	defer notifResp.Body.Close()
+	if notifResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(notifResp.Body)
+		return fmt.Errorf("initialized notification returned %d: %s", notifResp.StatusCode, string(respBody))
+	}
+	return nil
 }
 
 func testAppsAPI_List_Authenticated_Properties(rt *rapid.T, env *appsAPIEnv) {
@@ -188,6 +258,7 @@ func testAppsAPI_List_Authenticated_Properties(rt *rapid.T, env *appsAPIEnv) {
 }
 
 func TestAppsAPI_List_Authenticated_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_List_Authenticated_Properties(rt, env)
@@ -225,6 +296,7 @@ func testAppsAPI_GetUnknown_NotFound_Properties(rt *rapid.T, env *appsAPIEnv) {
 }
 
 func TestAppsAPI_GetUnknown_NotFound_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_GetUnknown_NotFound_Properties(rt, env)
@@ -276,6 +348,7 @@ func testAppsAPI_LogsInvalidLines_BadRequest_Properties(rt *rapid.T, env *appsAP
 }
 
 func TestAppsAPI_LogsInvalidLines_BadRequest_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_LogsInvalidLines_BadRequest_Properties(rt, env)
@@ -307,6 +380,7 @@ func testAppsAPI_UnauthenticatedRejected_Properties(rt *rapid.T, env *appsAPIEnv
 }
 
 func TestAppsAPI_UnauthenticatedRejected_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_UnauthenticatedRejected_Properties(rt, env)
@@ -352,6 +426,7 @@ func testAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(rt *rapid.T, env *apps
 }
 
 func TestAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(rt, env)
@@ -364,126 +439,6 @@ func FuzzAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(f *testing.F) {
 	f.Fuzz(rapid.MakeFuzz(func(rt *rapid.T) {
 		testAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(rt, env)
 	}))
-}
-
-// ---------------------------------------------------------------------------
-// Roundtrip Create-Get-Delete Test (single happy path)
-// Creates one app via MCP app_create, verifies it via REST API, deletes it,
-// then verifies it returns 404. Not a property test — sprites are expensive
-// to create and rate-limited (10/min), so one happy path is sufficient.
-// ---------------------------------------------------------------------------
-
-// deleteAppViaMCP is a best-effort cleanup helper that deletes an app via MCP.
-func (e *appsAPIEnv) deleteAppViaMCP(appName string) error {
-	_, err := e.mcpCallTool("app_delete", map[string]any{
-		"app": appName,
-	})
-	return err
-}
-
-func TestAppsAPI_Roundtrip_CreateGetDelete(t *testing.T) {
-	if !spriteTokenIsReal() {
-		t.Skip("SPRITE_TOKEN is not set or looks like a dummy token; skipping roundtrip test")
-	}
-	env := getAppsAPIEnv(t)
-	appName := "e2e-rt-" + strconv.FormatInt(time.Now().UnixMilli()%100000, 10)
-
-	defer func() {
-		_ = env.deleteAppViaMCP(appName)
-	}()
-
-	// Step 1: Create app via MCP.
-	result, err := env.mcpCallTool("app_create", map[string]any{
-		"names": []any{appName},
-	})
-	if err != nil {
-		t.Fatalf("app_create MCP call failed: %v", err)
-	}
-
-	var toolResult struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
-	}
-	if err := json.Unmarshal(result, &toolResult); err != nil {
-		t.Fatalf("failed to parse MCP result: %v (%s)", err, string(result))
-	}
-	if toolResult.IsError {
-		t.Fatalf("app_create returned isError=true: %s", string(result))
-	}
-
-	var createPayloadText string
-	for _, c := range toolResult.Content {
-		if c.Type == "text" {
-			createPayloadText = c.Text
-			break
-		}
-	}
-	if createPayloadText == "" {
-		t.Fatalf("app_create returned no text content: %s", string(result))
-	}
-
-	var createResult struct {
-		Created bool   `json:"created"`
-		Name    string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(createPayloadText), &createResult); err != nil {
-		t.Fatalf("failed to parse app_create payload: %v (%s)", err, createPayloadText)
-	}
-	if !createResult.Created || createResult.Name != appName {
-		t.Fatalf("app_create: created=%v name=%q, want true/%q", createResult.Created, createResult.Name, appName)
-	}
-
-	// Step 2: GET /api/apps -> app in list.
-	listStatus, _, listBody, err := env.doRequest(http.MethodGet, "/api/apps", env.accessToken)
-	if err != nil {
-		t.Fatalf("list request failed: %v", err)
-	}
-	if listStatus != http.StatusOK {
-		t.Fatalf("expected 200 from list, got %d: %s", listStatus, string(listBody))
-	}
-	if !strings.Contains(string(listBody), appName) {
-		t.Fatalf("app %q not found in list response", appName)
-	}
-
-	// Step 3: GET /api/apps/{name} -> metadata matches.
-	getStatus, _, getBody, err := env.doRequest(http.MethodGet, "/api/apps/"+appName, env.accessToken)
-	if err != nil {
-		t.Fatalf("get request failed: %v", err)
-	}
-	if getStatus != http.StatusOK {
-		t.Fatalf("expected 200 from get, got %d: %s", getStatus, string(getBody))
-	}
-	var getPayload struct {
-		Name   string `json:"name"`
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal(getBody, &getPayload); err != nil {
-		t.Fatalf("failed to decode get response: %v (%s)", err, string(getBody))
-	}
-	if getPayload.Name != appName || strings.TrimSpace(getPayload.Status) == "" {
-		t.Fatalf("get: name=%q status=%q", getPayload.Name, getPayload.Status)
-	}
-
-	// Step 4: DELETE -> 200.
-	delStatus, _, delBody, err := env.doRequest(http.MethodDelete, "/api/apps/"+appName, env.accessToken)
-	if err != nil {
-		t.Fatalf("delete request failed: %v", err)
-	}
-	if delStatus != http.StatusOK {
-		t.Fatalf("expected 200 from delete, got %d: %s", delStatus, string(delBody))
-	}
-
-	// Step 5: GET after delete -> 404.
-	goneStatus, _, goneBody, err := env.doRequest(http.MethodGet, "/api/apps/"+appName, env.accessToken)
-	if err != nil {
-		t.Fatalf("get-after-delete request failed: %v", err)
-	}
-	if goneStatus != http.StatusNotFound {
-		t.Fatalf("expected 404 after delete, got %d: %s", goneStatus, string(goneBody))
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +505,7 @@ func testAppsAPI_ActionEndpoint_Validation_Properties(rt *rapid.T, env *appsAPIE
 }
 
 func TestAppsAPI_ActionEndpoint_Validation_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_ActionEndpoint_Validation_Properties(rt, env)

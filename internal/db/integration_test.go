@@ -9,179 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kuitang/agent-notes/internal/db/sessions"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
-
-// TestMilestone1Setup verifies the complete database setup for Milestone 1
-// with the hardcoded test user
-func TestMilestone1Setup(t *testing.T) {
-	setupTestDir(t)
-	ctx := context.Background()
-
-	// Milestone 1 uses hardcoded user ID
-	const testUserID = "test-user-001"
-
-	// Initialize schemas for test user
-	err := InitSchemas(testUserID)
-	if err != nil {
-		t.Fatalf("Failed to initialize schemas: %v", err)
-	}
-
-	// Verify sessions database
-	sessDB, err := OpenSessionsDB()
-	if err != nil {
-		t.Fatalf("Failed to open sessions database: %v", err)
-	}
-
-	// Insert a test session using sqlc
-	now := time.Now().UTC().Unix()
-	expires := now + 86400 // 24 hours
-	sessionID := "test-session-123"
-
-	err = sessDB.Queries().CreateSession(ctx, sessions.CreateSessionParams{
-		SessionID: sessionID,
-		UserID:    testUserID,
-		ExpiresAt: expires,
-		CreatedAt: now,
-	})
-	if err != nil {
-		t.Fatalf("Failed to insert session: %v", err)
-	}
-
-	// Verify session was inserted using sqlc
-	sess, err := sessDB.Queries().GetSession(ctx, sessionID)
-	if err != nil {
-		t.Fatalf("Failed to query session: %v", err)
-	}
-
-	if sess.UserID != testUserID {
-		t.Errorf("Expected user_id %q, got %q", testUserID, sess.UserID)
-	}
-
-	// Verify user database
-	userDB, err := OpenUserDB(testUserID)
-	if err != nil {
-		t.Fatalf("Failed to open user database: %v", err)
-	}
-
-	// Insert test account using sqlc
-	err = userDB.Queries().CreateAccount(ctx, userdb.CreateAccountParams{
-		UserID:             testUserID,
-		Email:              "[email protected]",
-		CreatedAt:          now,
-		SubscriptionStatus: sql.NullString{String: "free", Valid: true},
-	})
-	if err != nil {
-		t.Fatalf("Failed to insert account: %v", err)
-	}
-
-	// Insert test notes using sqlc
-	notes := []struct {
-		id      string
-		title   string
-		content string
-	}{
-		{"note-1", "First Note", "This is the first test note."},
-		{"note-2", "Second Note", "This is the second test note with more content."},
-		{"note-3", "Important", "Remember to test full-text search functionality."},
-	}
-
-	for _, note := range notes {
-		err = userDB.Queries().CreateNote(ctx, userdb.CreateNoteParams{
-			ID:        note.id,
-			Title:     note.title,
-			Content:   note.content,
-			IsPublic:  sql.NullInt64{Int64: 0, Valid: true},
-			CreatedAt: now,
-			UpdatedAt: now,
-		})
-		if err != nil {
-			t.Fatalf("Failed to insert note %s: %v", note.id, err)
-		}
-	}
-
-	// Verify notes were inserted using sqlc
-	count, err := userDB.Queries().CountNotes(ctx)
-	if err != nil {
-		t.Fatalf("Failed to count notes: %v", err)
-	}
-
-	if count != int64(len(notes)) {
-		t.Errorf("Expected %d notes, got %d", len(notes), count)
-	}
-
-	// Test full-text search using the FTS method
-	results, err := userDB.SearchNotes(ctx, "search", 10, 0)
-	if err != nil {
-		t.Fatalf("Failed to perform FTS search: %v", err)
-	}
-
-	if len(results) != 1 {
-		t.Fatalf("Expected 1 search result, got %d", len(results))
-	}
-
-	if results[0].Title != "Important" {
-		t.Errorf("Expected to find note with title 'Important', got %q", results[0].Title)
-	}
-
-	// Test note retrieval by ID using sqlc
-	note, err := userDB.Queries().GetNote(ctx, "note-1")
-	if err != nil {
-		t.Fatalf("Failed to retrieve note: %v", err)
-	}
-
-	if note.Title != "First Note" {
-		t.Errorf("Expected title 'First Note', got %q", note.Title)
-	}
-
-	// Test note update using sqlc
-	newContent := "This is the updated first note."
-	err = userDB.Queries().UpdateNoteContent(ctx, userdb.UpdateNoteContentParams{
-		Content:   newContent,
-		UpdatedAt: now + 1,
-		ID:        "note-1",
-	})
-	if err != nil {
-		t.Fatalf("Failed to update note: %v", err)
-	}
-
-	// Verify update using sqlc
-	note, err = userDB.Queries().GetNote(ctx, "note-1")
-	if err != nil {
-		t.Fatalf("Failed to retrieve updated note: %v", err)
-	}
-
-	if note.Content != newContent {
-		t.Errorf("Expected content %q, got %q", newContent, note.Content)
-	}
-
-	// Test note deletion using sqlc (soft delete)
-	err = userDB.Queries().DeleteNote(ctx, userdb.DeleteNoteParams{
-		DeletedAt: sql.NullInt64{Int64: now + 2, Valid: true},
-		ID:        "note-2",
-	})
-	if err != nil {
-		t.Fatalf("Failed to delete note: %v", err)
-	}
-
-	// Verify deletion using sqlc
-	count, err = userDB.Queries().CountNotes(ctx)
-	if err != nil {
-		t.Fatalf("Failed to count notes after deletion: %v", err)
-	}
-
-	expectedCount := int64(len(notes) - 1)
-	if count != expectedCount {
-		t.Errorf("Expected %d notes after deletion, got %d", expectedCount, count)
-	}
-
-	// Clean up
-	err = CloseAll()
-	if err != nil {
-		t.Errorf("Failed to close databases: %v", err)
-	}
-}
 
 // TestDatabaseEncryption verifies that the user database is actually encrypted
 func TestDatabaseEncryption(t *testing.T) {
@@ -191,7 +20,7 @@ func TestDatabaseEncryption(t *testing.T) {
 	const testUserID = "test-user-encrypted"
 
 	// Create encrypted database
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, testDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -241,18 +70,20 @@ func TestDatabaseEncryption(t *testing.T) {
 // Milestone 1 Regression Tests (merged from milestone1_test.go)
 // =============================================================================
 
-// TestMilestone1Constants verifies the hardcoded constants for Milestone 1
-func TestMilestone1Constants(t *testing.T) {
-	// Verify DEK is 32 bytes (256 bits)
-	dek := GetHardcodedDEK()
+// TestTestDEK_Properties verifies the test DEK helper returns correct length
+func TestTestDEK_Properties(t *testing.T) {
+	// Verify test DEK is 32 bytes (256 bits)
+	dek := testDEK()
 	if len(dek) != 32 {
-		t.Errorf("DEK must be 32 bytes for AES-256, got %d", len(dek))
+		t.Errorf("testDEK must be 32 bytes for AES-256, got %d", len(dek))
 	}
 
-	// Verify test user ID constant
-	const expectedUserID = "test-user-001"
-	if expectedUserID == "" {
-		t.Error("TestUserID cannot be empty")
+	// Verify deterministic: calling twice gives same result
+	dek2 := testDEK()
+	for i := range dek {
+		if dek[i] != dek2[i] {
+			t.Fatal("testDEK is not deterministic")
+		}
 	}
 }
 
@@ -263,14 +94,14 @@ func TestMilestone1QuickStart(t *testing.T) {
 
 	const testUserID = "test-user-001"
 
-	// Step 1: Initialize database for test user
-	err := InitSchemas(testUserID)
+	// Step 1: Open sessions database
+	_, err := OpenSessionsDB()
 	if err != nil {
-		t.Fatalf("Failed to initialize: %v", err)
+		t.Fatalf("Failed to initialize sessions DB: %v", err)
 	}
 
-	// Step 2: Get user database
-	userDB, err := OpenUserDB(testUserID)
+	// Step 2: Get user database with explicit DEK
+	userDB, err := OpenUserDBWithDEK(testUserID, testDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -351,12 +182,12 @@ func TestMilestone1FTS5Search(t *testing.T) {
 	const testUserID = "test-user-001"
 
 	// Initialize
-	err := InitSchemas(testUserID)
+	_, err := OpenSessionsDB()
 	if err != nil {
-		t.Fatalf("Failed to initialize: %v", err)
+		t.Fatalf("Failed to initialize sessions DB: %v", err)
 	}
 
-	userDB, err := OpenUserDB(testUserID)
+	userDB, err := OpenUserDBWithDEK(testUserID, testDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}
@@ -437,8 +268,8 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 
 	const testUserID = "test-user-concurrent"
 
-	// Initialize database
-	userDB, err := OpenUserDB(testUserID)
+	// Initialize database with explicit DEK
+	userDB, err := OpenUserDBWithDEK(testUserID, testDEK())
 	if err != nil {
 		t.Fatalf("Failed to open user database: %v", err)
 	}

@@ -753,6 +753,12 @@ type MCPError struct {
 
 // Call makes an MCP JSON-RPC call
 func (c *MCPClient) Call(method string, params interface{}) (*MCPResponse, error) {
+	if method != "initialize" && method != "notifications/initialized" && c.sessionID == "" {
+		if err := c.Initialize(); err != nil {
+			return nil, err
+		}
+	}
+
 	c.requestID++
 
 	reqBody := map[string]interface{}{
@@ -799,7 +805,6 @@ func (c *MCPClient) Call(method string, params interface{}) (*MCPResponse, error
 }
 
 // CallTool calls an MCP tool
-// Note: With stateless MCP servers, no initialization is needed.
 func (c *MCPClient) CallTool(name string, arguments map[string]interface{}) (*MCPResponse, error) {
 	return c.Call("tools/call", map[string]interface{}{
 		"name":      name,
@@ -860,7 +865,6 @@ func (c *MCPClient) Initialize() error {
 }
 
 // ListTools lists available MCP tools
-// Note: With stateless MCP servers, no initialization is needed.
 func (c *MCPClient) ListTools() (*MCPResponse, error) {
 	return c.Call("tools/list", nil)
 }

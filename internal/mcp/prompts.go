@@ -59,8 +59,8 @@ func promptText(toolset Toolset) string {
 	case ToolsetNotes:
 		return "The user has one account that stores notes and apps. First decide if the request is about notes or apps. This endpoint is notes-only, so use note_* tools for note work and direct app work to app tools on the apps endpoint."
 	case ToolsetApps:
-		return "The user has one account that stores notes and apps. First decide if the request is about notes or apps. This endpoint is apps-only, so use app_* tools. For apps, install dependencies and deploy/run services with app_bash, and keep the service on port 8080."
+		return "The user has one account that stores notes and apps. First decide if the request is about notes or apps. This endpoint is apps-only, so use app_* tools. For apps, install dependencies and deploy/run services with app_exec, and keep the service on port 8080."
 	default:
-		return "The user has one account that stores notes and apps. First decide if the request is about notes or apps. Use note_* tools for notes. Use app_* tools for apps; for apps, install dependencies and deploy/run services with app_bash on port 8080."
+		return "The user has one account that stores notes and apps. First decide if the request is about notes or apps. Use note_* tools for notes. Use app_* tools for apps; for apps, install dependencies and deploy/run services with app_exec on port 8080."
 	}
 }
