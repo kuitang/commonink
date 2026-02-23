@@ -71,8 +71,10 @@ resend_api_key.txt
 
 # Server logs
 server.log
-server
+
+# Compiled binaries (root only)
+/server
+/agent-notes
 
 # Screenshots (Playwright verification)
 screenshots/
-agent-notes
