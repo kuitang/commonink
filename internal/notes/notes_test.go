@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kuitang/agent-notes/internal/errs"
 	dbtestutil "github.com/kuitang/agent-notes/internal/testdb"
 	"pgregory.net/rapid"
 )
@@ -128,6 +129,7 @@ func testCreate_Roundtrip_Properties(t *rapid.T) {
 }
 
 func TestCreate_Roundtrip_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCreate_Roundtrip_Properties)
 }
 
@@ -156,6 +158,7 @@ func testCreate_RequiresTitle_Properties(t *rapid.T) {
 }
 
 func TestCreate_RequiresTitle_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCreate_RequiresTitle_Properties)
 }
 
@@ -187,6 +190,7 @@ func testCreate_AllowsEmptyContent_Properties(t *rapid.T) {
 }
 
 func TestCreate_AllowsEmptyContent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCreate_AllowsEmptyContent_Properties)
 }
 
@@ -212,6 +216,7 @@ func testRead_NonExistent_Properties(t *rapid.T) {
 }
 
 func TestRead_NonExistent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRead_NonExistent_Properties)
 }
 
@@ -235,6 +240,7 @@ func testRead_EmptyID_Properties(t *rapid.T) {
 }
 
 func TestRead_EmptyID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testRead_EmptyID_Properties)
 }
 
@@ -306,6 +312,7 @@ func testUpdate_FieldsModified_Properties(t *rapid.T) {
 }
 
 func TestUpdate_FieldsModified_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUpdate_FieldsModified_Properties)
 }
 
@@ -334,6 +341,7 @@ func testUpdate_NonExistent_Properties(t *rapid.T) {
 }
 
 func TestUpdate_NonExistent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUpdate_NonExistent_Properties)
 }
 
@@ -361,6 +369,7 @@ func testUpdate_EmptyID_Properties(t *rapid.T) {
 }
 
 func TestUpdate_EmptyID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUpdate_EmptyID_Properties)
 }
 
@@ -419,6 +428,7 @@ func testUpdate_PriorHash_Properties(t *rapid.T) {
 }
 
 func TestUpdate_PriorHash_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testUpdate_PriorHash_Properties)
 }
 
@@ -460,6 +470,7 @@ func testDelete_RemovesNote_Properties(t *rapid.T) {
 }
 
 func TestDelete_RemovesNote_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testDelete_RemovesNote_Properties)
 }
 
@@ -485,6 +496,7 @@ func testDelete_NonExistent_Properties(t *rapid.T) {
 }
 
 func TestDelete_NonExistent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testDelete_NonExistent_Properties)
 }
 
@@ -508,6 +520,7 @@ func testDelete_EmptyID_Properties(t *rapid.T) {
 }
 
 func TestDelete_EmptyID_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testDelete_EmptyID_Properties)
 }
 
@@ -570,6 +583,7 @@ func testList_Pagination_Properties(t *rapid.T) {
 }
 
 func TestList_Pagination_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testList_Pagination_Properties)
 }
 
@@ -600,6 +614,7 @@ func testList_MaxLimit_Properties(t *rapid.T) {
 }
 
 func TestList_MaxLimit_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testList_MaxLimit_Properties)
 }
 
@@ -630,6 +645,7 @@ func testList_DefaultLimit_Properties(t *rapid.T) {
 }
 
 func TestList_DefaultLimit_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testList_DefaultLimit_Properties)
 }
 
@@ -693,6 +709,7 @@ func testSearch_FindsByContent_Properties(t *rapid.T) {
 }
 
 func TestSearch_FindsByContent_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSearch_FindsByContent_Properties)
 }
 
@@ -716,6 +733,7 @@ func testSearch_EmptyQuery_Properties(t *rapid.T) {
 }
 
 func TestSearch_EmptyQuery_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSearch_EmptyQuery_Properties)
 }
 
@@ -760,6 +778,7 @@ func testSearch_NoMatches_Properties(t *rapid.T) {
 }
 
 func TestSearch_NoMatches_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testSearch_NoMatches_Properties)
 }
 
@@ -833,6 +852,7 @@ func testCRUD_Workflow_Consistency_Properties(t *rapid.T) {
 }
 
 func TestCRUD_Workflow_Consistency_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testCRUD_Workflow_Consistency_Properties)
 }
 
@@ -903,6 +923,7 @@ func testMultipleNotes_Independence_Properties(t *rapid.T) {
 }
 
 func TestMultipleNotes_Independence_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testMultipleNotes_Independence_Properties)
 }
 
@@ -939,6 +960,7 @@ func testDelete_SoftDelete_ReadFails_Properties(t *rapid.T) {
 }
 
 func TestDelete_SoftDelete_ReadFails_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testDelete_SoftDelete_ReadFails_Properties)
 }
 
@@ -983,6 +1005,7 @@ func testDelete_SoftDelete_ListExcludes_Properties(t *rapid.T) {
 }
 
 func TestDelete_SoftDelete_ListExcludes_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testDelete_SoftDelete_ListExcludes_Properties)
 }
 
@@ -1027,6 +1050,7 @@ func testStrReplace_ExactMatch_Properties(t *rapid.T) {
 }
 
 func TestStrReplace_ExactMatch_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStrReplace_ExactMatch_Properties)
 }
 
@@ -1061,6 +1085,7 @@ func testStrReplace_NoMatch_Properties(t *rapid.T) {
 }
 
 func TestStrReplace_NoMatch_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStrReplace_NoMatch_Properties)
 }
 
@@ -1098,6 +1123,7 @@ func testStrReplace_AmbiguousMatch_Properties(t *rapid.T) {
 }
 
 func TestStrReplace_AmbiguousMatch_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStrReplace_AmbiguousMatch_Properties)
 }
 
@@ -1152,6 +1178,7 @@ func testStrReplace_ReplaceAll_Properties(t *rapid.T) {
 }
 
 func TestStrReplace_ReplaceAll_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStrReplace_ReplaceAll_Properties)
 }
 
@@ -1193,10 +1220,125 @@ func testStrReplace_PriorHash_Properties(t *rapid.T) {
 }
 
 func TestStrReplace_PriorHash_Properties(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, testStrReplace_PriorHash_Properties)
 }
 
 func FuzzStrReplace_PriorHash_Properties(f *testing.F) {
 	f.Add([]byte{0x00})
 	f.Fuzz(rapid.MakeFuzz(testStrReplace_PriorHash_Properties))
+}
+
+// =============================================================================
+// Property: Read returns typed NotFound error for non-existent note IDs
+// =============================================================================
+
+func testRead_NotFound_TypedError_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
+
+	_, err := svc.Read(nonExistentID)
+
+	// Property: error is not nil
+	if err == nil {
+		t.Fatal("Expected error for non-existent note")
+	}
+
+	// Property: errs.CodeOf returns NotFound
+	if errs.CodeOf(err) != errs.NotFound {
+		t.Fatalf("Expected errs.NotFound code, got %q for error: %v", errs.CodeOf(err), err)
+	}
+
+	// Property: errors.Is matches ErrNoteNotFound sentinel
+	if !errors.Is(err, ErrNoteNotFound) {
+		t.Fatalf("Expected errors.Is(err, ErrNoteNotFound) to be true, got false for error: %v", err)
+	}
+}
+
+func TestRead_NotFound_TypedError_Properties(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, testRead_NotFound_TypedError_Properties)
+}
+
+func FuzzRead_NotFound_TypedError_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testRead_NotFound_TypedError_Properties))
+}
+
+// =============================================================================
+// Property: Update returns typed NotFound error for non-existent note IDs
+// =============================================================================
+
+func testUpdate_NotFound_TypedError_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
+	newTitle := titleGenerator().Draw(t, "newTitle")
+
+	_, err := svc.Update(nonExistentID, UpdateNoteParams{
+		Title: &newTitle,
+	})
+
+	// Property: error is not nil
+	if err == nil {
+		t.Fatal("Expected error for non-existent note")
+	}
+
+	// Property: errs.CodeOf returns NotFound
+	if errs.CodeOf(err) != errs.NotFound {
+		t.Fatalf("Expected errs.NotFound code, got %q for error: %v", errs.CodeOf(err), err)
+	}
+
+	// Property: errors.Is matches ErrNoteNotFound sentinel
+	if !errors.Is(err, ErrNoteNotFound) {
+		t.Fatalf("Expected errors.Is(err, ErrNoteNotFound) to be true, got false for error: %v", err)
+	}
+}
+
+func TestUpdate_NotFound_TypedError_Properties(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, testUpdate_NotFound_TypedError_Properties)
+}
+
+func FuzzUpdate_NotFound_TypedError_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testUpdate_NotFound_TypedError_Properties))
+}
+
+// =============================================================================
+// Property: Delete returns typed NotFound error for non-existent note IDs
+// =============================================================================
+
+func testDelete_NotFound_TypedError_Properties(t *rapid.T) {
+	svc := setupNotesServiceRapid(t)
+
+	nonExistentID := rapid.StringMatching(`[a-z0-9]{8,16}`).Draw(t, "nonExistentID")
+
+	err := svc.Delete(nonExistentID)
+
+	// Property: error is not nil
+	if err == nil {
+		t.Fatal("Expected error for non-existent note")
+	}
+
+	// Property: errs.CodeOf returns NotFound
+	if errs.CodeOf(err) != errs.NotFound {
+		t.Fatalf("Expected errs.NotFound code, got %q for error: %v", errs.CodeOf(err), err)
+	}
+
+	// Property: errors.Is matches ErrNoteNotFound sentinel
+	if !errors.Is(err, ErrNoteNotFound) {
+		t.Fatalf("Expected errors.Is(err, ErrNoteNotFound) to be true, got false for error: %v", err)
+	}
+}
+
+func TestDelete_NotFound_TypedError_Properties(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, testDelete_NotFound_TypedError_Properties)
+}
+
+func FuzzDelete_NotFound_TypedError_Properties(f *testing.F) {
+	f.Add([]byte{0x00})
+	f.Fuzz(rapid.MakeFuzz(testDelete_NotFound_TypedError_Properties))
 }

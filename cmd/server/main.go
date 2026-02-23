@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,8 @@ import (
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
+	ffclient "github.com/thomaspoignant/go-feature-flag"
+	fileretriever "github.com/thomaspoignant/go-feature-flag/retriever/fileretriever"
 )
 
 const (
@@ -63,6 +66,7 @@ const (
 var (
 	connectionIDCounter atomic.Uint64
 	connectionIDs       sync.Map
+	validServiceName    = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 )
 
 func newConnectionID() string {
@@ -169,6 +173,21 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
 		os.Exit(1)
+	}
+
+	flagFilePath := strings.TrimSpace(os.Getenv("FEATURE_FLAG_FILE"))
+	if flagFilePath == "" {
+		flagFilePath = "./config/flags.goff.yaml"
+	}
+	if err := ffclient.Init(ffclient.Config{
+		Retriever: &fileretriever.Retriever{
+			Path: flagFilePath,
+		},
+	}); err != nil {
+		log.Printf("Feature flags initialization failed (FEATURE_FLAG_FILE=%s): %v", flagFilePath, err)
+	} else {
+		defer ffclient.Close()
+		log.Printf("Feature flags initialized from %s", flagFilePath)
 	}
 
 	// Step 3: Print startup summary
@@ -318,6 +337,20 @@ func main() {
 		resolvedSpriteToken,
 	)
 
+	// Rate limiting middleware - extracts user ID and paid status from request
+	getUserID := func(r *http.Request) string {
+		return auth.GetUserID(r.Context())
+	}
+	// Paid status is cached in auth context during middleware execution,
+	// eliminating a per-request DB query for rate limiting.
+	getIsPaid := func(r *http.Request) bool {
+		return auth.GetIsPaid(r.Context())
+	}
+	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
+
+	// IP-based rate limiting for unauthenticated endpoints
+	ipRateLimitMW := ratelimit.IPRateLimitMiddleware(rateLimiter)
+
 	// Create HTTP mux
 	mux := http.NewServeMux()
 
@@ -333,8 +366,11 @@ func main() {
 	log.Println("OAuth metadata routes registered at /.well-known/*")
 
 	// OAuth endpoints: DCR, authorize, token
-	mux.HandleFunc("POST /oauth/register", oauthProvider.DCR)
-	oauthHandler.RegisterRoutes(mux)
+	// DCR and token exchange are IP-rate-limited (unauthenticated)
+	mux.Handle("POST /oauth/register", ipRateLimitMW(http.HandlerFunc(oauthProvider.DCR)))
+	mux.HandleFunc("GET /oauth/authorize", oauthHandler.HandleAuthorize)
+	mux.HandleFunc("POST /oauth/consent", oauthHandler.HandleConsentSubmit)
+	mux.Handle("POST /oauth/token", ipRateLimitMW(http.HandlerFunc(oauthHandler.HandleToken)))
 	log.Println("OAuth provider routes registered at /oauth/*")
 
 	// Register web UI routes (handles /, /login, /register, /notes/*, /public/*, /oauth/consent)
@@ -356,30 +392,24 @@ func main() {
 	})
 
 	// Register auth API routes (no auth required for these)
-	authHandler.RegisterRoutes(mux)
+	// Login, register, magic link, and password reset are IP-rate-limited
+	mux.HandleFunc("GET /auth/google", authHandler.HandleGoogleLogin)
+	mux.HandleFunc("POST /auth/google", authHandler.HandleGoogleLogin)
+	mux.HandleFunc("GET /auth/google/callback", authHandler.HandleGoogleCallback)
+	mux.Handle("POST /auth/magic", ipRateLimitMW(http.HandlerFunc(authHandler.HandleMagicLinkRequest)))
+	mux.HandleFunc("GET /auth/magic/verify", authHandler.HandleMagicLinkVerify)
+	mux.Handle("POST /auth/register", ipRateLimitMW(http.HandlerFunc(authHandler.HandleRegister)))
+	mux.Handle("POST /auth/login", ipRateLimitMW(http.HandlerFunc(authHandler.HandleLogin)))
+	mux.Handle("POST /auth/password-reset", ipRateLimitMW(http.HandlerFunc(authHandler.HandlePasswordResetRequest)))
+	mux.Handle("POST /auth/password-reset-confirm", ipRateLimitMW(http.HandlerFunc(authHandler.HandlePasswordResetConfirm)))
+	mux.HandleFunc("POST /auth/logout", authHandler.HandleLogout)
+	mux.HandleFunc("GET /auth/logout", authHandler.HandleLogout)
+	mux.HandleFunc("GET /auth/whoami", authHandler.HandleWhoami)
 	if localMockOIDC != nil {
 		localMockOIDC.RegisterRoutes(mux)
 		log.Println("Local mock OIDC routes registered at /auth/mock-oidc/*")
 	}
 	log.Println("Auth API routes registered at /auth/*")
-
-	// Rate limiting middleware - extracts user ID and paid status from request
-	getUserID := func(r *http.Request) string {
-		return auth.GetUserID(r.Context())
-	}
-	getIsPaid := func(r *http.Request) bool {
-		userDB := auth.GetUserDB(r.Context())
-		if userDB == nil {
-			return false
-		}
-		userID := auth.GetUserID(r.Context())
-		account, err := userDB.Queries().GetAccount(r.Context(), userID)
-		if err != nil {
-			return false
-		}
-		return account.SubscriptionStatus.Valid && account.SubscriptionStatus.String == "active"
-	}
-	rateLimitMW := ratelimit.RateLimitMiddleware(rateLimiter, getUserID, getIsPaid)
 
 	// Create authenticated notes handler with rate limiting
 	notesHandler := &AuthenticatedNotesHandler{}
@@ -417,22 +447,31 @@ func main() {
 	log.Println("API Key routes registered at /api/keys")
 
 	// Create and mount MCP servers (requires auth + rate limiting)
+	// MCP servers are built ONCE per toolset at startup. Per-user services are
+	// injected into the request context by AuthenticatedMCPHandler.
+	mcpAllServer := mcp.NewServer(mcp.ToolsetAll)
+	mcpNotesServer := mcp.NewServer(mcp.ToolsetNotes)
+	mcpAppsServer := mcp.NewServer(mcp.ToolsetApps)
+
 	mcpAllHandler := &AuthenticatedMCPHandler{
+		Server:      mcpAllServer,
 		Toolset:     mcp.ToolsetAll,
 		SpriteToken: resolvedSpriteToken,
 	}
 	mcpNotesHandler := &AuthenticatedMCPHandler{
+		Server:      mcpNotesServer,
 		Toolset:     mcp.ToolsetNotes,
 		SpriteToken: resolvedSpriteToken,
 	}
 	mcpAppsHandler := &AuthenticatedMCPHandler{
+		Server:      mcpAppsServer,
 		Toolset:     mcp.ToolsetApps,
 		SpriteToken: resolvedSpriteToken,
 	}
 
-	mcpAllRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP)))
-	mcpNotesRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP)))
-	mcpAppsRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP)))
+	mcpAllRoute := rateLimitMW(authMiddleware.RequireBearerAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP)))
+	mcpNotesRoute := rateLimitMW(authMiddleware.RequireBearerAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP)))
+	mcpAppsRoute := rateLimitMW(authMiddleware.RequireBearerAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP)))
 
 	mountMCPRoute(mux, "/mcp", mcpAllRoute)
 	mountMCPRoute(mux, "/mcp/notes", mcpNotesRoute)
@@ -525,6 +564,11 @@ func main() {
 	log.Println("")
 	log.Println("Server ready to accept connections")
 
+	// Start MCP session sweeper (cleans up expired sessions periodically)
+	mcpSweeperCtx, mcpSweeperCancel := context.WithCancel(context.Background())
+	mcp.StartSessionSweeper(mcpSweeperCtx, 5*time.Minute)
+	log.Println("MCP session sweeper started (5m interval)")
+
 	// Channel to receive server errors
 	serverErr := make(chan error, 1)
 
@@ -550,6 +594,10 @@ func main() {
 	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 	defer cancel()
+
+	// Stop MCP session sweeper
+	log.Println("Stopping MCP session sweeper...")
+	mcpSweeperCancel()
 
 	// Stop rate limiter cleanup goroutine
 	log.Println("Stopping rate limiter...")
@@ -729,7 +777,7 @@ func (h *AuthenticatedNotesHandler) GetNote(w http.ResponseWriter, r *http.Reque
 
 	note, err := svc.Read(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errs.CodeOf(err) == errs.NotFound || errors.Is(err, notes.ErrNoteNotFound) {
 			writeError(w, http.StatusNotFound, "Note not found")
 			return
 		}
@@ -806,7 +854,7 @@ func (h *AuthenticatedNotesHandler) UpdateNote(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
-		if strings.Contains(err.Error(), "not found") {
+		if errs.CodeOf(err) == errs.NotFound || errors.Is(err, notes.ErrNoteNotFound) {
 			writeError(w, http.StatusNotFound, "Note not found")
 			return
 		}
@@ -833,7 +881,7 @@ func (h *AuthenticatedNotesHandler) DeleteNote(w http.ResponseWriter, r *http.Re
 
 	err = svc.Delete(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errs.CodeOf(err) == errs.NotFound || errors.Is(err, notes.ErrNoteNotFound) {
 			writeError(w, http.StatusNotFound, "Note not found")
 			return
 		}
@@ -1022,8 +1070,17 @@ func appErrorStatus(err error) int {
 	if err == nil {
 		return http.StatusInternalServerError
 	}
+	// First: check typed error codes from the errs package
+	code := errs.CodeOf(err)
+	if code != errs.Internal {
+		return errs.HTTPStatus(code)
+	}
+	// Second: check sentinel errors
+	if errors.Is(err, apps.ErrAppNotFound) {
+		return errs.HTTPStatus(errs.NotFound)
+	}
+	// Legacy string matching fallback (safety net for untyped errors)
 	msg := strings.ToLower(err.Error())
-	code := errs.Internal
 	switch {
 	case strings.Contains(msg, "not found"):
 		code = errs.NotFound
@@ -1407,7 +1464,7 @@ func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	listResult, err := svc.RunBash(r.Context(), name, "sprite-env services list", 30)
+	listResult, err := svc.RunExec(r.Context(), name, []string{"bash", "-lc", "sprite-env services list"}, 30)
 	if err != nil {
 		writeAppError(w, "discover service", err)
 		return
@@ -1416,6 +1473,11 @@ func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 	svcName := firstServiceName(listResult.Stdout)
 	if svcName == "" {
 		writeError(w, http.StatusBadRequest, "No service registered. Use sprite-env services create first.")
+		return
+	}
+
+	if !validServiceName.MatchString(svcName) {
+		writeError(w, http.StatusBadRequest, "Invalid service name")
 		return
 	}
 
@@ -1429,7 +1491,7 @@ func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 		cmd = fmt.Sprintf("sprite-env services stop %q && sprite-env services start %q", svcName, svcName)
 	}
 
-	result, err := svc.RunBash(r.Context(), name, cmd, 30)
+	result, err := svc.RunExec(r.Context(), name, []string{"bash", "-lc", cmd}, 30)
 	if err != nil {
 		writeAppError(w, action+" service", err)
 		return
@@ -1438,8 +1500,11 @@ func (h *AuthenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, result)
 }
 
-// AuthenticatedMCPHandler wraps MCP with auth context
+// AuthenticatedMCPHandler wraps MCP with auth context.
+// The Server field holds a single shared MCP server (with tool definitions registered once).
+// Per-user notes/apps services are injected into the request context before dispatch.
 type AuthenticatedMCPHandler struct {
+	Server      *mcp.Server // shared, built once at startup
 	Toolset     mcp.Toolset
 	SpriteToken string
 }
@@ -1473,8 +1538,9 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
 	}
 
-	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
-	mcpServer.ServeHTTP(w, r)
+	// Inject per-user services into context for tool handlers to pull from
+	ctx := mcp.ContextWithServices(r.Context(), notesSvc, appsSvc)
+	h.Server.ServeHTTP(w, r.WithContext(ctx))
 }
 
 func mountMCPRoute(mux *http.ServeMux, route string, handler http.Handler) {

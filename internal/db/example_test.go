@@ -8,21 +8,22 @@ import (
 
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/db/userdb"
+	"github.com/kuitang/agent-notes/internal/testdb"
 )
 
-// ExampleInitSchemas demonstrates how to initialize the database layer
-func ExampleInitSchemas() {
+// ExampleOpenUserDBWithDEK demonstrates how to initialize the database layer
+func ExampleOpenUserDBWithDEK() {
 	ctx := context.Background()
 
-	// Initialize database for the test user
-	err := db.InitSchemas("test-user-001")
+	// Initialize sessions database
+	_, err := db.OpenSessionsDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
 
-	// Open the user database
-	userDB, err := db.OpenUserDB("test-user-001")
+	// Open the user database with an explicit DEK
+	userDB, err := db.OpenUserDBWithDEK("test-user-001", testdb.TestDEK())
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -61,13 +62,13 @@ func ExampleInitSchemas() {
 	// Content: This is an example note.
 }
 
-// ExampleOpenUserDB demonstrates opening a user database with encryption
-func ExampleOpenUserDB() {
+// ExampleOpenUserDBWithDEK_encryption demonstrates opening a user database with encryption
+func ExampleOpenUserDBWithDEK_encryption() {
 	ctx := context.Background()
 
 	// For this example, use a unique user ID to ensure clean state
 	// In production, you would use actual user IDs from your auth system
-	userDB, err := db.OpenUserDB("example-user-unique")
+	userDB, err := db.OpenUserDBWithDEK("example-user-unique", testdb.TestDEK())
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -94,8 +95,8 @@ func ExampleOpenUserDB() {
 func ExampleUserDB_SearchNotes() {
 	ctx := context.Background()
 
-	// Initialize database
-	userDB, err := db.OpenUserDB("search-example-user")
+	// Initialize database with explicit DEK
+	userDB, err := db.OpenUserDBWithDEK("search-example-user", testdb.TestDEK())
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return

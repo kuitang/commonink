@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 // Property: when Sprite API returns a canonical sprite name different from the requested
 // app name, we must persist and use the canonical sprite name for all subsequent Sprite API calls.
 func TestCriticalRegression_CreatePersistsCanonicalSpriteAndTargetsCanonicalSprite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	desiredName := "doodle-calendar-poll"
 	canonicalName := "doodle-calendar-poll-bfnrc"
@@ -102,6 +104,7 @@ func TestCriticalRegression_CreatePersistsCanonicalSpriteAndTargetsCanonicalSpri
 // Property: if metadata sprite_name drifts from canonical Sprite identity, every Sprite-backed
 // operation must fail fast with a descriptive error instead of silently targeting the wrong Sprite.
 func TestCriticalRegression_AllSpriteOperationsFailOnSpriteBindingMismatch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	desiredName := "doodle-calendar-poll"
 	canonicalName := "doodle-calendar-poll-bfnrc"
@@ -136,8 +139,8 @@ func TestCriticalRegression_AllSpriteOperationsFailOnSpriteBindingMismatch(t *te
 	_, err = svc.ReadFiles(ctx, desiredName, []string{"server.py"})
 	assertBindingError("ReadFiles", err)
 
-	_, err = svc.RunBash(ctx, desiredName, "echo ok", 1)
-	assertBindingError("RunBash", err)
+	_, err = svc.RunExec(ctx, desiredName, []string{"echo", "ok"}, 1)
+	assertBindingError("RunExec", err)
 
 	_, err = svc.ListFiles(ctx, desiredName)
 	assertBindingError("ListFiles", err)
@@ -285,7 +288,8 @@ func (m *mockSpriteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newAppsServiceWithMockSpriteAPI(t *testing.T, desiredName, canonicalName, canonicalURL string) (*Service, *mockSpriteAPI, func()) {
 	t.Helper()
 
-	userDB, closeDB := newUserDBForAppsTests(t, "user-apps-regression")
+	userID := fmt.Sprintf("user-apps-%s-%s", t.Name(), desiredName)
+	userDB, closeDB := newUserDBForAppsTests(t, userID)
 	mock := &mockSpriteAPI{
 		desiredName:   desiredName,
 		canonicalName: canonicalName,
@@ -294,7 +298,7 @@ func newAppsServiceWithMockSpriteAPI(t *testing.T, desiredName, canonicalName, c
 	}
 	server := httptest.NewServer(mock)
 
-	svc := NewService(userDB, "user-apps-regression", "test-token")
+	svc := NewService(userDB, userID, "test-token")
 	svc.client = sprites.New("test-token", sprites.WithBaseURL(server.URL), sprites.WithDisableControl())
 
 	cleanup := func() {
@@ -307,7 +311,8 @@ func newAppsServiceWithMockSpriteAPI(t *testing.T, desiredName, canonicalName, c
 func newUserDBForAppsTests(t *testing.T, userID string) (*db.UserDB, func()) {
 	t.Helper()
 
-	dekHex := hex.EncodeToString(db.GetHardcodedDEK())
+	h := sha256.Sum256([]byte("commonink-test-dek-do-not-use-in-production"))
+	dekHex := hex.EncodeToString(h[:])
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
 	sqlDB, err := sql.Open(db.SQLiteDriverName, dsn)
 	if err != nil {

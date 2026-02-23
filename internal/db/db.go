@@ -14,16 +14,6 @@ import (
 	"github.com/kuitang/agent-notes/internal/db/userdb"
 )
 
-// Default hardcoded DEK for Milestone 1 testing.
-// This is a 32-byte (256-bit) key for SQLCipher encryption.
-// In production, this will be replaced with proper KEK/DEK derivation from a master key.
-var hardcodedDEK = []byte{
-	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-}
-
 const (
 	// DefaultDataDirectory is the default root directory for all database files
 	DefaultDataDirectory = "./data"
@@ -553,20 +543,6 @@ func OpenSessionsDB() (*SessionsDB, error) {
 	return NewSessionsDBFromSQL(sessionsDB), nil
 }
 
-// OpenUserDB opens a per-user encrypted database.
-// The database is encrypted with SQLCipher using a hardcoded DEK for Milestone 1.
-// In production, the DEK will be derived from a KEK which itself is derived from a master key.
-//
-// Parameters:
-//   - userID: The unique identifier for the user
-//
-// Returns:
-//   - *UserDB: Database wrapper with sqlc queries
-//   - error: Any error encountered during initialization
-func OpenUserDB(userID string) (*UserDB, error) {
-	return OpenUserDBWithDEK(userID, hardcodedDEK)
-}
-
 // OpenUserDBWithDEK opens a per-user encrypted database with a provided DEK.
 // This is the production version that accepts a DEK from the KeyManager.
 //
@@ -657,30 +633,6 @@ func OpenUserDBWithDEK(userID string, dek []byte) (*UserDB, error) {
 	return NewUserDBFromSQL(userID, db), nil
 }
 
-// InitSchemas ensures all database schemas are initialized.
-// This function is idempotent and safe to call multiple times.
-//
-// Parameters:
-//   - userIDs: List of user IDs to initialize user databases for
-//
-// Returns:
-//   - error: Any error encountered during initialization
-func InitSchemas(userIDs ...string) error {
-	// Initialize sessions database
-	if _, err := OpenSessionsDB(); err != nil {
-		return fmt.Errorf("failed to initialize sessions database: %w", err)
-	}
-
-	// Initialize user databases
-	for _, userID := range userIDs {
-		if _, err := OpenUserDB(userID); err != nil {
-			return fmt.Errorf("failed to initialize user database for %s: %w", userID, err)
-		}
-	}
-
-	return nil
-}
-
 // CloseAll closes all open database connections.
 // This should be called during graceful shutdown.
 //
@@ -711,15 +663,6 @@ func CloseAll() error {
 	userDBs = make(map[string]*sql.DB)
 
 	return firstErr
-}
-
-// GetHardcodedDEK returns the hardcoded DEK for testing purposes.
-// This is only for Milestone 1. In production, DEKs will be derived securely.
-func GetHardcodedDEK() []byte {
-	// Return a copy to prevent external modification
-	dek := make([]byte, len(hardcodedDEK))
-	copy(dek, hardcodedDEK)
-	return dek
 }
 
 // ResetForTesting resets all internal state for clean test isolation.

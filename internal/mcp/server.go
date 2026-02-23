@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kuitang/agent-notes/internal/apps"
-	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/obs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -30,6 +29,7 @@ const (
 	maxMCPBodyBytes           = 1_000_000
 	mcpGetNotSupportedMessage = "GET not supported for SSE on this stateless MCP endpoint"
 	mcpSessionTTL             = 24 * time.Hour
+	maxMCPSessionIDLength     = 256
 )
 
 var mcpSessionRegistry sync.Map
@@ -47,8 +47,10 @@ type toolCallParams struct {
 }
 
 // NewServer creates a new MCP server for the selected toolset.
-func NewServer(notesSvc *notes.Service, appsSvc *apps.Service, toolset Toolset) *Server {
-	handler := NewHandler(notesSvc, appsSvc)
+// Services are NOT passed here -- they are injected per-request via ContextWithServices.
+// Tool handlers pull services from context, so the Server instance is reusable across requests.
+func NewServer(toolset Toolset) *Server {
+	handler := NewHandler()
 
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{
@@ -316,7 +318,34 @@ func rememberMCPSession(sessionID string) {
 	if strings.TrimSpace(sessionID) == "" {
 		return
 	}
+	if len(sessionID) > maxMCPSessionIDLength {
+		return
+	}
 	mcpSessionRegistry.Store(sessionID, time.Now().UTC())
+}
+
+// StartSessionSweeper launches a background goroutine that periodically removes
+// expired entries from mcpSessionRegistry. It stops when ctx is cancelled.
+func StartSessionSweeper(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now()
+				mcpSessionRegistry.Range(func(key, value any) bool {
+					lastSeen, ok := value.(time.Time)
+					if !ok || now.Sub(lastSeen) > mcpSessionTTL {
+						mcpSessionRegistry.Delete(key)
+					}
+					return true
+				})
+			}
+		}
+	}()
 }
 
 func isKnownMCPSession(sessionID string) bool {

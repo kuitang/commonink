@@ -9,20 +9,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )
-
-const spriteTimeoutMS = 5000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	if testing.Short() {
@@ -50,10 +39,10 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.NavigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	heading := page.Locator("h1")
 	headingText, err := heading.TextContent()
@@ -67,7 +56,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	statusBadge := page.Locator("#status-badge")
 	err = statusBadge.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Status badge not visible: %v", err)
@@ -76,7 +65,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 	serverPyBtn := page.Locator("button.file-btn[data-path='server.py']")
 	err = serverPyBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		fileListHTML, _ := page.Locator("#file-list").InnerHTML()
@@ -93,7 +82,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		const el = document.getElementById('editor-filename');
 		return el && el.textContent.includes('server.py');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		fnText, _ := editorFilename.TextContent()
@@ -106,7 +95,7 @@ func TestBrowser_AppDetail_FileSidebar(t *testing.T) {
 		const value = (el && el.value) ? el.value : '';
 		return value.trim().length > 0 && value.indexOf('Error:') !== 0;
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		editorValue, _ := editorContent.InputValue()

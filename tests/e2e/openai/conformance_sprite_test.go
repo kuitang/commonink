@@ -33,7 +33,7 @@ func TestOpenAI_AppTools_Targeted(t *testing.T) {
 	nameA := base + "-a"
 	nameB := base + "-b"
 	prompt := fmt.Sprintf(
-		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_bash with command 'echo tool-check'; 4) app_delete for the created app.",
+		"Test app tools in order: 0) app_list and report currently active apps; 1) app_create with candidate names ['%s','%s']; 2) app_list; 3) app_exec with command ['echo','tool-check']; 4) app_delete for the created app.",
 		nameA, nameB,
 	)
 
@@ -44,7 +44,7 @@ func TestOpenAI_AppTools_Targeted(t *testing.T) {
 	t.Logf("Response: %s", resp)
 	t.Logf("Tool calls: %d", len(toolCalls))
 
-	for _, expected := range []string{"app_create", "app_list", "app_bash", "app_delete"} {
+	for _, expected := range []string{"app_create", "app_list", "app_exec", "app_delete"} {
 		if !hasOpenAIToolCall(toolCalls, expected) {
 			t.Fatalf("Expected OpenAI to call %s, calls=%+v", expected, toolCalls)
 		}
@@ -81,7 +81,7 @@ func TestOpenAI_AppWorkflow_Integration(t *testing.T) {
 	t.Logf("Response: %s", resp)
 	t.Logf("Tool calls: %d", len(toolCalls))
 
-	for _, expected := range []string{"app_create", "app_write", "app_bash"} {
+	for _, expected := range []string{"app_create", "app_exec"} {
 		if !hasOpenAIToolCall(toolCalls, expected) {
 			t.Fatalf("Expected OpenAI to call %s, calls=%+v", expected, toolCalls)
 		}

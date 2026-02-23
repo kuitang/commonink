@@ -9,20 +9,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )
-
-const spriteTimeoutMS = 5000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 func TestBrowser_AppDetail_StreamMock_LogEvent(t *testing.T) {
 	if testing.Short() {
@@ -50,8 +39,8 @@ func TestBrowser_AppDetail_StreamMock_LogEvent(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
 	streamPattern := "**/api/apps/" + appName + "/stream?*"
 	mockSSE := BuildTestSSEEventBody("log", map[string]any{
@@ -73,13 +62,13 @@ func TestBrowser_AppDetail_StreamMock_LogEvent(t *testing.T) {
 		t.Fatalf("Failed to install stream route mock: %v", err)
 	}
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.NavigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	_, err = page.WaitForFunction(`() => {
 		const el = document.getElementById('log-output');
 		return el && (el.textContent || '').includes('mock log line');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		logText, _ := page.Locator("#log-output").TextContent()

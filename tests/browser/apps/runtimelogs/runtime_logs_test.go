@@ -9,20 +9,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )
-
-const spriteTimeoutMS = 5000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	if testing.Short() {
@@ -49,12 +38,12 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create page: %v", err)
 	}
-	postPage.SetDefaultTimeout(spriteTimeoutMS)
-	postPage.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	postPage.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	postPage.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
 	_, err = postPage.Goto(publicURL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
+		Timeout:   playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to public URL: %v", err)
@@ -63,7 +52,7 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 	msgInput := postPage.Locator("input#msg")
 	err = msgInput.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Message input not visible: %v", err)
@@ -80,17 +69,17 @@ func TestBrowser_AppDetail_LogsShowPost(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.NavigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	logOutput := page.Locator("#log-output")
 	_, err = page.WaitForFunction(`() => {
 		const el = document.getElementById('log-output');
 		return el && el.textContent.includes('POST');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		logText, _ := logOutput.TextContent()

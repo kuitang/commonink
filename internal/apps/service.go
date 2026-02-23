@@ -14,13 +14,18 @@ import (
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/db"
+	"github.com/kuitang/agent-notes/internal/errs"
 	sprites "github.com/superfly/sprites-go"
 )
 
+// ErrAppNotFound is returned when an app does not exist.
+var ErrAppNotFound = errors.New("app not found")
+
 const (
-	defaultBashTimeoutSeconds = 120
-	maxBashTimeoutSeconds     = 600
-	maxBashOutputBytes        = 1 << 20
+	defaultExecTimeoutSeconds = 120
+	maxExecTimeoutSeconds     = 600
+	maxExecOutputBytes        = 1 << 20
+	maxExecArgvBytes          = 32768
 	maxAppWriteFiles          = 64
 	maxAppWritePathBytes      = 1024
 	maxAppWriteFileBytes      = 1 << 20
@@ -191,7 +196,7 @@ func (s *Service) WriteFiles(ctx context.Context, appName string, files []AppWri
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -272,7 +277,7 @@ func (s *Service) ReadFiles(ctx context.Context, appName string, paths []string)
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -298,11 +303,14 @@ func (s *Service) ReadFiles(ctx context.Context, appName string, paths []string)
 	}
 
 	fs := s.client.Sprite(meta.SpriteName).FilesystemAt("/home/sprite")
-	_, runCancel := context.WithTimeout(ctx, defaultSpriteIOTimeout)
+	timeoutCtx, runCancel := context.WithTimeout(ctx, defaultSpriteIOTimeout)
 	defer runCancel()
 	files := make([]AppWriteFileInput, 0, len(cleanPaths))
 	totalBytes := 0
 	for _, cleanPath := range cleanPaths {
+		if err := timeoutCtx.Err(); err != nil {
+			return nil, fmt.Errorf("timeout reading files after %d/%d files: %w", len(files), len(cleanPaths), err)
+		}
 		decoded, readErr := fs.ReadFile(cleanPath)
 		if readErr != nil {
 			return nil, fmt.Errorf("failed to read file %q on sprite after %d/%d files: %w", cleanPath, len(files), len(cleanPaths), readErr)
@@ -327,14 +335,24 @@ func (s *Service) ReadFiles(ctx context.Context, appName string, paths []string)
 	}, nil
 }
 
-func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutSeconds int) (*AppBashResult, error) {
+func (s *Service) RunExec(ctx context.Context, appName string, argv []string, timeoutSeconds int) (*AppExecResult, error) {
 	if err := s.requireClient(); err != nil {
 		return nil, err
+	}
+	if len(argv) == 0 {
+		return nil, errors.New("command argv must not be empty")
+	}
+	argvTotalBytes := 0
+	for _, arg := range argv {
+		argvTotalBytes += len(arg)
+	}
+	if argvTotalBytes > maxExecArgvBytes {
+		return nil, fmt.Errorf("total argv size must be <= %d bytes", maxExecArgvBytes)
 	}
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -343,19 +361,19 @@ func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutS
 	}
 
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = defaultBashTimeoutSeconds
+		timeoutSeconds = defaultExecTimeoutSeconds
 	}
-	if timeoutSeconds > maxBashTimeoutSeconds {
-		return nil, fmt.Errorf("timeout_seconds must be <= %d", maxBashTimeoutSeconds)
+	if timeoutSeconds > maxExecTimeoutSeconds {
+		return nil, fmt.Errorf("timeout_seconds must be <= %d", maxExecTimeoutSeconds)
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	cmd := s.client.Sprite(meta.SpriteName).CommandContext(runCtx, "bash", "-lc", command)
+	cmd := s.client.Sprite(meta.SpriteName).CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = "/home/sprite"
-	stdoutBuf := newCappedOutputBuffer(maxBashOutputBytes)
-	stderrBuf := newCappedOutputBuffer(maxBashOutputBytes)
+	stdoutBuf := newCappedOutputBuffer(maxExecOutputBytes)
+	stderrBuf := newCappedOutputBuffer(maxExecOutputBytes)
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
 
@@ -380,7 +398,6 @@ func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutS
 		} else {
 			return nil, fmt.Errorf("failed to run command on sprite: %w", runErr)
 		}
-	} else {
 	}
 
 	portStatus, warning, probeErr := s.detectPortAndService(ctx, meta.SpriteName)
@@ -397,10 +414,16 @@ func (s *Service) RunBash(ctx context.Context, appName, command string, timeoutS
 	if err := s.touch(ctx, meta.Name, nextStatus, meta.PublicURL); err != nil {
 		return nil, err
 	}
-	if warning != "" {
+
+	message := "Command succeeded."
+	if exitCode != 0 {
+		message = fmt.Sprintf("Command failed with exit code %d.", exitCode)
+	} else if exitCode == -1 {
+		message = "Command timed out."
 	}
 
-	return &AppBashResult{
+	return &AppExecResult{
+		Message:         message,
 		Stdout:          stdout,
 		Stderr:          stderr,
 		StdoutTruncated: stdoutBuf.Truncated(),
@@ -452,7 +475,7 @@ func (s *Service) Get(ctx context.Context, appName string) (*AppMetadata, error)
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found")
+			return nil, errs.Wrap(errs.NotFound, "app not found", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -467,7 +490,7 @@ func (s *Service) ListFiles(ctx context.Context, appName string) (*AppListFilesR
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -554,7 +577,7 @@ func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*App
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}
@@ -569,7 +592,7 @@ func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*App
 		lines = maxLogLines
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultBashTimeoutSeconds)*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(defaultExecTimeoutSeconds)*time.Second)
 	defer cancel()
 
 	cmdText := fmt.Sprintf("if command -v journalctl >/dev/null 2>&1; then journalctl -n %d --no-pager; elif [ -f '/.sprite/logs/services/web.log' ]; then tail -n %d '/.sprite/logs/services/web.log'; elif ls /.sprite/logs/services/*.log >/dev/null 2>&1; then tail -n %d /.sprite/logs/services/*.log; else echo 'no logs available on this sprite runtime'; fi", lines, lines, lines)
@@ -596,11 +619,10 @@ func (s *Service) TailLogs(ctx context.Context, appName string, lines int) (*App
 			exitCode = exitErr.ExitCode()
 		} else if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			exitCode = -1
-			stderr = fmt.Sprintf("log command timed out after %d seconds", defaultBashTimeoutSeconds)
+			stderr = fmt.Sprintf("log command timed out after %d seconds", defaultExecTimeoutSeconds)
 		} else {
 			return nil, fmt.Errorf("failed to tail logs on sprite: %w", runErr)
 		}
-	} else {
 	}
 
 	return &AppLogsResult{
@@ -620,7 +642,7 @@ func (s *Service) Delete(ctx context.Context, appName string) (*AppDeleteResult,
 	meta, err := s.getMetadata(ctx, appName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("app not found, use app_create first")
+			return nil, errs.Wrap(errs.NotFound, "app not found, use app_create first", ErrAppNotFound)
 		}
 		return nil, err
 	}

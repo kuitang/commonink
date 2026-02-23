@@ -170,27 +170,18 @@ func SeedApp(t testing.TB, baseURL, sessionID, appName string) string {
 	pollInterval := 250 * time.Millisecond
 	setupDeadline := time.Now().Add(30 * time.Second)
 
-	callToolWithRetry(t, baseURL, sessionID, "app_write", map[string]any{
-		"app": appName,
-		"files": []map[string]any{
-			{
-				"path":    "server.py",
-				"content": seedAppPythonServer,
-			},
-		},
+	callToolWithRetry(t, baseURL, sessionID, "app_exec", map[string]any{
+		"app":     appName,
+		"command": []string{"tee", "server.py"},
+		"stdin":   seedAppPythonServer,
 	}, setupDeadline, pollInterval)
 
 	fileReady := false
 	lastFileCheck := ""
 	for time.Now().Before(setupDeadline) {
-		checkResp, err := callToolResult(baseURL, sessionID, "app_bash", map[string]any{
-			"app": appName,
-			"command": `if [ -f /home/sprite/server.py ]; then
-  echo "present"
-  exit 0
-fi
-echo "missing"
-exit 1`,
+		checkResp, err := callToolResult(baseURL, sessionID, "app_exec", map[string]any{
+			"app":     appName,
+			"command": []string{"bash", "-lc", "if [ -f /home/sprite/server.py ]; then echo present; exit 0; fi; echo missing; exit 1"},
 		})
 		if err != nil {
 			if isTransientSpriteToolError(err) {
@@ -220,13 +211,9 @@ exit 1`,
 		t.Fatalf("SeedApp: server.py never became visible in app workspace for %s (last check: %s)", appName, lastFileCheck)
 	}
 
-	createAppResp := callToolWithRetry(t, baseURL, sessionID, "app_bash", map[string]any{
-		"app": appName,
-		"command": `if [ ! -f /home/sprite/server.py ]; then
-  echo "server.py missing at /home/sprite/server.py"
-  exit 1
-fi
-sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080`,
+	createAppResp := callToolWithRetry(t, baseURL, sessionID, "app_exec", map[string]any{
+		"app":     appName,
+		"command": []string{"bash", "-lc", "if [ ! -f /home/sprite/server.py ]; then echo 'server.py missing at /home/sprite/server.py'; exit 1; fi; sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080"},
 	}, setupDeadline, pollInterval)
 	var createAppResult struct {
 		ExitCode int    `json:"exit_code"`
@@ -234,7 +221,7 @@ sprite-env services create web --cmd python3 --args /home/sprite/server.py --htt
 		Stderr   string `json:"stderr"`
 	}
 	if err := json.Unmarshal(createAppResp, &createAppResult); err != nil {
-		t.Fatalf("SeedApp: failed to parse app_bash create command result: %v", err)
+		t.Fatalf("SeedApp: failed to parse app_exec create command result: %v", err)
 	}
 	if createAppResult.ExitCode != 0 {
 		t.Fatalf("SeedApp: failed to create local service for app %s: exit=%d stdout=%q stderr=%q", appName, createAppResult.ExitCode, createAppResult.Stdout, createAppResult.Stderr)
@@ -244,9 +231,9 @@ sprite-env services create web --cmd python3 --args /home/sprite/server.py --htt
 	localReady := false
 	lastLocalResult := ""
 	for time.Now().Before(deadline) {
-		result, err := callToolResult(baseURL, sessionID, "app_bash", map[string]any{
+		result, err := callToolResult(baseURL, sessionID, "app_exec", map[string]any{
 			"app":     appName,
-			"command": "curl -sf http://localhost:8080",
+			"command": []string{"bash", "-lc", "curl -sf http://localhost:8080"},
 		})
 		if err != nil {
 			if isTransientSpriteToolError(err) {
@@ -258,24 +245,24 @@ sprite-env services create web --cmd python3 --args /home/sprite/server.py --htt
 		}
 		lastLocalResult = string(result)
 
-		var bashResult struct {
+		var execResult struct {
 			ExitCode int    `json:"exit_code"`
 			Stdout   string `json:"stdout"`
 		}
-		if err := json.Unmarshal(result, &bashResult); err == nil && bashResult.ExitCode == 0 && bashResult.Stdout != "" {
+		if err := json.Unmarshal(result, &execResult); err == nil && execResult.ExitCode == 0 && execResult.Stdout != "" {
 			localReady = true
 			break
 		}
 		time.Sleep(pollInterval)
 	}
 	if !localReady {
-		servicesList := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
+		servicesList := callTool(t, baseURL, sessionID, "app_exec", map[string]any{
 			"app":     appName,
-			"command": "sprite-env services list",
+			"command": []string{"bash", "-lc", "sprite-env services list"},
 		})
-		logs := callTool(t, baseURL, sessionID, "app_bash", map[string]any{
+		logs := callTool(t, baseURL, sessionID, "app_exec", map[string]any{
 			"app":     appName,
-			"command": "tail -n 200 /.sprite/logs/services/*.log 2>/dev/null || true",
+			"command": []string{"bash", "-lc", "tail -n 200 /.sprite/logs/services/*.log 2>/dev/null || true"},
 		})
 		t.Fatalf("SeedApp: local service never became reachable for app %s (last curl=%s services=%s logs=%s)", appName, lastLocalResult, string(servicesList), string(logs))
 	}

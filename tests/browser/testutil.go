@@ -42,6 +42,8 @@ import (
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
 	"github.com/kuitang/agent-notes/internal/web"
+
+	e2etestutil "github.com/kuitang/agent-notes/tests/e2e/testutil"
 )
 
 const (
@@ -57,17 +59,6 @@ const (
 	BrowserMaxTimeoutMS = browserMaxTimeoutMS
 	BrowserMaxTimeout   = browserMaxTimeout
 )
-
-var browserSharedFixtureSessionTables = []string{
-	"sessions",
-	"magic_tokens",
-	"user_keys",
-	"oauth_clients",
-	"oauth_tokens",
-	"oauth_codes",
-	"oauth_consents",
-	"short_urls",
-}
 
 var browserFixtureMu sync.Mutex
 var browserSharedFixture *BrowserTestEnv
@@ -241,8 +232,9 @@ func createBrowserTestEnv(t *testing.T, tempDir string) *BrowserTestEnv {
 	mux.Handle("PUT /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesPutHandler))))
 	mux.Handle("DELETE /api/notes/{id}", rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(apiNotesDeleteHandler))))
 
-	// MCP handler (authenticated, all tools)
+	// MCP handler (authenticated, all tools) - shared server built once
 	mcpHandler := &authenticatedMCPHandler{
+		Server:      mcp.NewServer(mcp.ToolsetAll),
 		Toolset:     mcp.ToolsetAll,
 		SpriteToken: spriteToken,
 	}
@@ -312,7 +304,7 @@ func clearSharedBrowserSessionsDB(sessionsDB *db.SessionsDB) error {
 		_ = tx.Rollback()
 	}()
 
-	for _, table := range browserSharedFixtureSessionTables {
+	for _, table := range e2etestutil.SharedFixtureSessionTables {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}
@@ -798,7 +790,9 @@ func PublishNoteViaUI(t *testing.T, page playwright.Page) string {
 // =============================================================================
 
 // authenticatedMCPHandler wraps MCP with auth context for the browser test env.
+// The Server field holds a shared MCP server; per-user services are injected via context.
 type authenticatedMCPHandler struct {
+	Server      *mcp.Server // shared, built once
 	Toolset     mcp.Toolset
 	SpriteToken string
 }
@@ -828,8 +822,8 @@ func (h *authenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		appsSvc = apps.NewService(userDB, userID, h.SpriteToken)
 	}
 
-	mcpServer := mcp.NewServer(notesSvc, appsSvc, h.Toolset)
-	mcpServer.ServeHTTP(w, r)
+	ctx := mcp.ContextWithServices(r.Context(), notesSvc, appsSvc)
+	h.Server.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // =============================================================================
@@ -1197,7 +1191,7 @@ func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 	action := r.PathValue("action")
 
 	// Discover service name
-	listResult, err := svc.RunBash(r.Context(), name, "sprite-env services list", 30)
+	listResult, err := svc.RunExec(r.Context(), name, []string{"bash", "-lc", "sprite-env services list"}, 30)
 	if err != nil {
 		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1222,7 +1216,7 @@ func (h *authenticatedAppsHandler) HandleAction(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	result, err := svc.RunBash(r.Context(), name, cmd, 30)
+	result, err := svc.RunExec(r.Context(), name, []string{"bash", "-lc", cmd}, 30)
 	if err != nil {
 		writeTestJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

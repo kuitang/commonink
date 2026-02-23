@@ -25,6 +25,11 @@ type appsAPIEnv struct {
 	sessionID   string
 }
 
+// appsAPISharedEnv is shared across rapid iterations and test functions.
+// This is safe because all property tests assert invariants that hold regardless
+// of accumulated server state (e.g. "app names are non-empty", "unknown apps
+// return 404"). No test depends on a specific app count or app identity.
+// The shared http.Client uses Bearer token auth (no cookie state leakage).
 var appsAPIEnvMu sync.Mutex
 var appsAPISharedEnv *appsAPIEnv
 
@@ -253,6 +258,7 @@ func testAppsAPI_List_Authenticated_Properties(rt *rapid.T, env *appsAPIEnv) {
 }
 
 func TestAppsAPI_List_Authenticated_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_List_Authenticated_Properties(rt, env)
@@ -290,6 +296,7 @@ func testAppsAPI_GetUnknown_NotFound_Properties(rt *rapid.T, env *appsAPIEnv) {
 }
 
 func TestAppsAPI_GetUnknown_NotFound_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_GetUnknown_NotFound_Properties(rt, env)
@@ -341,6 +348,7 @@ func testAppsAPI_LogsInvalidLines_BadRequest_Properties(rt *rapid.T, env *appsAP
 }
 
 func TestAppsAPI_LogsInvalidLines_BadRequest_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_LogsInvalidLines_BadRequest_Properties(rt, env)
@@ -372,6 +380,7 @@ func testAppsAPI_UnauthenticatedRejected_Properties(rt *rapid.T, env *appsAPIEnv
 }
 
 func TestAppsAPI_UnauthenticatedRejected_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_UnauthenticatedRejected_Properties(rt, env)
@@ -417,6 +426,7 @@ func testAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(rt *rapid.T, env *apps
 }
 
 func TestAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_UnknownApp_Endpoints_DoNot500_Properties(rt, env)
@@ -495,6 +505,7 @@ func testAppsAPI_ActionEndpoint_Validation_Properties(rt *rapid.T, env *appsAPIE
 }
 
 func TestAppsAPI_ActionEndpoint_Validation_Properties(t *testing.T) {
+	t.Parallel()
 	env := getAppsAPIEnv(t)
 	rapid.Check(t, func(rt *rapid.T) {
 		testAppsAPI_ActionEndpoint_Validation_Properties(rt, env)

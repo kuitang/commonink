@@ -1004,37 +1004,37 @@ func assertClaudeAppURLLive(t *testing.T, mcpClient *testutil.MCPClient, appPref
 		"for i in 1 2 3 4 5 6; do curl -fsS -o /dev/null -w 'HTTP %%{http_code}\\n' %q && exit 0; sleep 2; done; exit 1",
 		publicURL,
 	)
-	bashResp, err := mcpClient.CallTool("app_bash", map[string]interface{}{
+	execResp, err := mcpClient.CallTool("app_exec", map[string]interface{}{
 		"app":             appName,
-		"command":         curlCmd,
+		"command":         []string{"bash", "-lc", curlCmd},
 		"timeout_seconds": 90,
 	})
 	if err != nil {
-		t.Fatalf("app_bash curl check failed: %v", err)
+		t.Fatalf("app_exec curl check failed: %v", err)
 	}
-	bashText, err := testutil.ParseToolResult(bashResp)
+	execText, err := testutil.ParseToolResult(execResp)
 	if err != nil {
-		t.Fatalf("failed to parse app_bash result: %v", err)
+		t.Fatalf("failed to parse app_exec result: %v", err)
 	}
-	if testutil.IsToolError(bashResp) {
-		t.Fatalf("app_bash returned tool error: %s", bashText)
+	if testutil.IsToolError(execResp) {
+		t.Fatalf("app_exec returned tool error: %s", execText)
 	}
 
-	var bashResult struct {
+	var execResult struct {
 		Stdout   string `json:"stdout"`
 		Stderr   string `json:"stderr"`
 		ExitCode int    `json:"exit_code"`
 	}
-	if err := json.Unmarshal([]byte(bashText), &bashResult); err != nil {
-		t.Fatalf("failed to decode app_bash JSON payload: %v\npayload=%s", err, bashText)
+	if err := json.Unmarshal([]byte(execText), &execResult); err != nil {
+		t.Fatalf("failed to decode app_exec JSON payload: %v\npayload=%s", err, execText)
 	}
-	if bashResult.ExitCode != 0 {
+	if execResult.ExitCode != 0 {
 		t.Fatalf("sprite URL curl failed for app=%s url=%s exit=%d stdout=%q stderr=%q",
-			appName, publicURL, bashResult.ExitCode, bashResult.Stdout, bashResult.Stderr)
+			appName, publicURL, execResult.ExitCode, execResult.Stdout, execResult.Stderr)
 	}
-	if !strings.Contains(bashResult.Stdout, "HTTP ") {
+	if !strings.Contains(execResult.Stdout, "HTTP ") {
 		t.Fatalf("sprite URL curl output missing HTTP status for app=%s url=%s stdout=%q stderr=%q",
-			appName, publicURL, bashResult.Stdout, bashResult.Stderr)
+			appName, publicURL, execResult.Stdout, execResult.Stderr)
 	}
-	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(bashResult.Stdout))
+	t.Logf("Verified sprite URL is live for app=%s url=%s output=%q", appName, publicURL, strings.TrimSpace(execResult.Stdout))
 }

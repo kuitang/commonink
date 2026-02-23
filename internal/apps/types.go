@@ -72,8 +72,9 @@ type AppReadResult struct {
 	Files []AppWriteFileInput `json:"files"`
 }
 
-// AppBashResult is the response payload for app_bash.
-type AppBashResult struct {
+// AppExecResult is the response payload for app_exec.
+type AppExecResult struct {
+	Message         string `json:"message"`
 	Stdout          string `json:"stdout"`
 	Stderr          string `json:"stderr"`
 	StdoutTruncated bool   `json:"stdout_truncated"`

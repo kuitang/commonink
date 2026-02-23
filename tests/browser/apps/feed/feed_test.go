@@ -8,20 +8,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )
-
-const spriteTimeoutMS = 5000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 	if testing.Short() {
@@ -49,16 +38,16 @@ func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
 	CreateNoteViaUI(t, page, env.BaseURL, "Feed Test Note", "Content for feed test")
-	navigateSprite(t, page, env.BaseURL, "/notes")
+	spriteutil.NavigateSprite(t, page, env.BaseURL, "/notes")
 
 	appCard := page.Locator("article.themed-card a[href*='/apps/']").First()
 	err = appCard.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("App card not visible in unified feed: %v", err)
@@ -67,7 +56,7 @@ func TestBrowser_UnifiedFeed_ShowsApp(t *testing.T) {
 	noteCard := page.Locator("article.themed-card a[href*='/notes/']").First()
 	err = noteCard.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Note card not visible in unified feed: %v", err)
@@ -93,15 +82,15 @@ func TestBrowser_UnifiedFeed_EmptyState(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
 	Navigate(t, page, env.BaseURL, "/notes")
 
 	emptyHeading := page.Locator("h3:has-text('No notes yet')")
 	err = emptyHeading.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Empty state heading not visible: %v", err)
@@ -110,7 +99,7 @@ func TestBrowser_UnifiedFeed_EmptyState(t *testing.T) {
 	createLink := page.Locator("a:has-text('Create your first note')")
 	err = createLink.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Create first note link not visible in empty state: %v", err)

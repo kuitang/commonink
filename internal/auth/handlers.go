@@ -69,7 +69,7 @@ func (h *Handler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    state,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secureCookies,
+		Secure:   secureCookiesFlag.Load(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600, // 10 minutes
 	})
@@ -81,7 +81,7 @@ func (h *Handler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 			Value:    returnTo,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   secureCookies,
+			Secure:   secureCookiesFlag.Load(),
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   600, // 10 minutes
 		})
@@ -111,7 +111,7 @@ func (h *Handler) setMockOIDCCallbackOriginCookie(w http.ResponseWriter, r *http
 		Value:    origin,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secureCookies,
+		Secure:   secureCookiesFlag.Load(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600, // 10 minutes
 	})

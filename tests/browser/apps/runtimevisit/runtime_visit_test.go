@@ -9,9 +9,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
-)
 
-const spriteTimeoutMS = 5000
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
+)
 
 func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	if testing.Short() {
@@ -39,12 +39,12 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
 	_, err = page.Goto(publicURL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
+		Timeout:   playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Failed to navigate to public URL %s: %v", publicURL, err)
@@ -53,7 +53,7 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	msgInput := page.Locator("input#msg")
 	err = msgInput.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Message input not visible on public app page: %v", err)
@@ -79,7 +79,7 @@ func TestBrowser_AppDetail_VisitAndPost(t *testing.T) {
 	echoP := page.Locator("p#echo")
 	err = echoP.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Echo paragraph not visible: %v", err)

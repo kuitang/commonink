@@ -9,6 +9,7 @@ import (
 // TestPassword_HashVerify_Roundtrip tests that hashed passwords can be verified.
 // Uses FakeInsecureHasher to test the PasswordHasher interface contract without Argon2 overhead.
 func TestPassword_HashVerify_Roundtrip(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		var hasher PasswordHasher = FakeInsecureHasher{}
 		password := rapid.StringN(8, 100, 200).Draw(t, "password")
@@ -43,6 +44,7 @@ func FuzzPassword_HashVerify_Roundtrip(f *testing.F) {
 
 // TestPassword_WrongPassword_FailsVerify tests that wrong passwords don't verify.
 func TestPassword_WrongPassword_FailsVerify(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		var hasher PasswordHasher = FakeInsecureHasher{}
 		password1 := rapid.StringN(8, 50, 100).Draw(t, "password1")
@@ -84,6 +86,7 @@ func FuzzPassword_WrongPassword_FailsVerify(f *testing.F) {
 // TestPassword_Argon2_NonDeterministic verifies that real Argon2 hashing uses random salt.
 // Single call, not rapid — this is an Argon2-specific property, not an interface contract.
 func TestPassword_Argon2_NonDeterministic(t *testing.T) {
+	t.Parallel()
 	hash1, err := HashPassword("test-password")
 	if err != nil {
 		t.Fatalf("first HashPassword failed: %v", err)
@@ -99,6 +102,7 @@ func TestPassword_Argon2_NonDeterministic(t *testing.T) {
 
 // TestPassword_Validation tests password strength validation.
 func TestPassword_Validation(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		// Test short passwords fail (passwords with fewer than 8 bytes)
 		// We generate short byte slices and convert to string to ensure byte length < 8
@@ -116,6 +120,7 @@ func TestPassword_Validation(t *testing.T) {
 
 // TestPassword_Validation_ValidPasswords tests that valid passwords pass validation.
 func TestPassword_Validation_ValidPasswords(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		// Test valid passwords pass (passwords with 8+ bytes)
 		// We generate byte slices with 8-100 bytes to ensure byte length >= 8

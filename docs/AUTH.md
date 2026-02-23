@@ -206,7 +206,7 @@ Protected app management routes:
 
 Operational split:
 - REST is read/manage (`/api/apps*`)
-- Deployment/execution is MCP-only (`app_create`, `app_write` with batched `files[]`, and `app_bash` on `/mcp/apps` or `/mcp`)
+- Deployment/execution is MCP-only (`app_create` and `app_bash` on `/mcp/apps` or `/mcp`; use bash heredocs to write files while `BASH_ONLY` is enabled)
 
 ## Known Interop Gaps (Current Runtime)
 - Consent persistence used by runtime OAuth handler is placeholder-backed, so prior consents are not durably reused.

@@ -1,6 +1,7 @@
 package testdb
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -8,13 +9,22 @@ import (
 	"github.com/kuitang/agent-notes/internal/db"
 )
 
+// TestDEK returns a deterministic 32-byte DEK for tests.
+// This replaces the removed hardcoded DEK. The value is derived from a
+// well-known test sentinel so it is stable across runs but clearly not
+// a real secret.
+func TestDEK() []byte {
+	h := sha256.Sum256([]byte("commonink-test-dek-do-not-use-in-production"))
+	return h[:]
+}
+
 // NewUserDBInMemory creates an in-memory encrypted UserDB for tests.
 func NewUserDBInMemory(userID string) (*db.UserDB, error) {
 	if userID == "" {
 		userID = "test-user"
 	}
 
-	dekHex := hex.EncodeToString(db.GetHardcodedDEK())
+	dekHex := hex.EncodeToString(TestDEK())
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
 
 	sqlDB, err := sql.Open(db.SQLiteDriverName, dsn)

@@ -1,6 +1,10 @@
 package mcp
 
-import "github.com/modelcontextprotocol/go-sdk/mcp"
+import (
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	ffclient "github.com/thomaspoignant/go-feature-flag"
+	"github.com/thomaspoignant/go-feature-flag/ffcontext"
+)
 
 // Toolset controls which tool families are mounted for a route.
 type Toolset string
@@ -177,10 +181,12 @@ func NoteToolDefinitions() []*mcp.Tool {
 
 // AppToolDefinitions returns the app deployment MCP tool definitions.
 func AppToolDefinitions() []*mcp.Tool {
-	return []*mcp.Tool{
+	bashOnly, _ := ffclient.BoolVariation("BASH_ONLY", ffcontext.NewEvaluationContext("mcp-tools"), true)
+
+	tools := []*mcp.Tool{
 		{
 			Name:        "app_create",
-			Description: "Apps tool. Create a public Fly Sprite app by trying candidate names in order. Use this when the user wants an app (not a note). Users can create either notes or apps; note creation is handled by note_create. Pass an ordered array of candidate names. The server returns the chosen name or structured rejections for each candidate. If all are rejected, try another name. The app workspace root is /home/sprite. After create, use app_write for files, then app_bash to install dependencies and launch service on port 8080. If user does not specify a stack (e.g., says 'make me a todo list app'), default to a minimal Flask app: app.py + requirements.txt, then register sprite-env service on port 8080.",
+			Description: "Apps tool. Create a public Fly Sprite app by trying candidate names in order. Use this when the user wants an app (not a note). Users can create either notes or apps; note creation is handled by note_create. Pass an ordered array of candidate names. The server returns the chosen name or structured rejections for each candidate. If all are rejected, try another name. The app workspace root is /home/sprite. After create, use app_exec with [\"tee\", \"file\"] + stdin to write files, then use app_exec with [\"bash\", \"-lc\", \"...\"] to install dependencies and launch service on port 8080. If user does not specify a stack (e.g., says 'make me a todo list app'), default to a minimal Flask app: app.py + requirements.txt, then register sprite-env service on port 8080.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -264,8 +270,24 @@ func AppToolDefinitions() []*mcp.Tool {
 			},
 		},
 		{
-			Name:        "app_bash",
-			Description: "Apps tool. Run a shell command on the app Sprite. Every app_bash invocation starts in /home/sprite; directory changes (cd) do not persist across separate app_bash calls. Use for install/build/debug/deploy operations. Optional timeout_seconds defaults to 120 and maxes at 600. Response includes runtime_ms and bounded stdout/stderr (with truncation flags when output is clipped). app_bash does not auto-append filesystem listings. The app must listen on port 8080. For persistent runtime, pass command and arguments separately (do not pass a space-joined shell string to --cmd). Examples to run via app_bash: sprite-env services list ; sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080 ; curl -sf http://localhost:8080 ; tail -n 100 /.sprite/logs/services/web.log. When stack is unspecified, use Flask conventions and verify with curl http://localhost:8080.",
+			Name: "app_exec",
+			Description: "Apps tool. Run a command on the app Sprite via direct exec. " +
+				"IMPORTANT: All code runs in a sandbox isolated to this user and this application. No commands will have any effect outside this sandbox. " +
+				"Pass command as an argv array — first element is the executable, rest are arguments. " +
+				"For shell features (pipes, &&, redirects, globs, heredocs), use [\"bash\", \"-lc\", \"your command\"]. " +
+				"The -l flag sources the Sprite login profile which puts node, gh, and other tools on PATH. " +
+				"Every invocation starts in /home/sprite; cd does not persist. The app must listen on port 8080. " +
+				"Optional timeout_seconds defaults to 120 and maxes at 600. " +
+				"Response includes runtime_ms, a human-readable message, and bounded stdout/stderr (with truncation flags when output is clipped).\n\n" +
+				"FILE WRITING: Use a bash heredoc to write files: [\"bash\", \"-lc\", \"cat > file.txt <<'HEREDOC'\\ncontent\\nHEREDOC\"]. " +
+				"To append: [\"bash\", \"-lc\", \"cat >> file.txt <<'HEREDOC'\\nappended content\\nHEREDOC\"]. " +
+				"For large files (>100 lines), break into multiple heredoc-append calls of ~100 lines each.\n\n" +
+				"Examples: " +
+				"Shell: command=[\"bash\",\"-lc\",\"pip install flask && python3 app.py\"]. " +
+				"Append: command=[\"bash\",\"-lc\",\"cat >> app.py <<'EOF'\\n# new route\\n@app.route('/health')\\ndef health():\\n    return 'ok'\\nEOF\"]. " +
+				"Direct exec: command=[\"python3\",\"-c\",\"print('hello')\"]. " +
+				"Persistent runtime: command=[\"bash\",\"-lc\",\"sprite-env services create web --cmd python3 --args /home/sprite/server.py --http-port 8080\"]. " +
+				"When stack is unspecified, use Flask conventions and verify with curl http://localhost:8080.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -274,9 +296,10 @@ func AppToolDefinitions() []*mcp.Tool {
 						"description": "App name returned by app_create.",
 					},
 					"command": map[string]any{
-						"type":        "string",
-						"description": "Command to run on the sprite shell.",
-						"maxLength":   32768,
+						"type":        "array",
+						"description": "Argv array. First element is the executable, rest are arguments.",
+						"items":       map[string]any{"type": "string"},
+						"minItems":    1,
 					},
 					"timeout_seconds": map[string]any{
 						"type":        "integer",
@@ -309,4 +332,17 @@ func AppToolDefinitions() []*mcp.Tool {
 			},
 		},
 	}
+
+	if !bashOnly {
+		return tools
+	}
+
+	filtered := make([]*mcp.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Name == "app_write" || tool.Name == "app_read" {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }

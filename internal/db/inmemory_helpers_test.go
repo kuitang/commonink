@@ -1,10 +1,27 @@
 package db
 
+// NOTE: This file is a cycle-breaking copy of internal/testdb/inmemory.go.
+// The canonical implementation lives in internal/testdb. This copy exists
+// because package db's whitebox tests (package db, not package db_test)
+// cannot import testdb without creating an import cycle (db -> testdb -> db).
+// When updating in-memory DB helpers, update internal/testdb/inmemory.go
+// first and mirror changes here.
+
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 )
+
+// testDEK returns a deterministic 32-byte DEK for tests.
+// This replaces the removed hardcoded DEK. The value is derived from a
+// well-known test sentinel so it is stable across runs but clearly not
+// a real secret.
+func testDEK() []byte {
+	h := sha256.Sum256([]byte("commonink-test-dek-do-not-use-in-production"))
+	return h[:]
+}
 
 // NewUserDBInMemory creates an in-memory encrypted UserDB for package db tests.
 func NewUserDBInMemory(userID string) (*UserDB, error) {
@@ -12,7 +29,7 @@ func NewUserDBInMemory(userID string) (*UserDB, error) {
 		userID = "test-user"
 	}
 
-	dekHex := hex.EncodeToString(GetHardcodedDEK())
+	dekHex := hex.EncodeToString(testDEK())
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_pragma_key=x'%s'&_pragma_cipher_page_size=4096", userID, dekHex)
 
 	sqlDB, err := sql.Open(SQLiteDriverName, dsn)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuitang/agent-notes/internal/db"
@@ -117,20 +118,24 @@ func (s *SessionService) Cleanup(ctx context.Context) error {
 
 // Cookie helpers
 
-// secureCookies controls whether session cookies require HTTPS.
+// secureCookiesFlag controls whether session cookies require HTTPS.
 // Set to false for local development/testing over HTTP.
-var secureCookies = true
+var secureCookiesFlag atomic.Bool
+
+func init() {
+	secureCookiesFlag.Store(true)
+}
 
 // SetSecureCookies enables or disables the Secure flag on session cookies.
 // Call with false for local development over HTTP.
 func SetSecureCookies(secure bool) {
-	secureCookies = secure
+	secureCookiesFlag.Store(secure)
 }
 
 // GetSecureCookies returns the current secure cookie setting.
 // Used by other packages that need to set cookies with consistent security settings.
 func GetSecureCookies() bool {
-	return secureCookies
+	return secureCookiesFlag.Load()
 }
 
 // SetCookie sets the session cookie on the response.
@@ -140,7 +145,7 @@ func SetCookie(w http.ResponseWriter, sessionID string) {
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secureCookies,
+		Secure:   secureCookiesFlag.Load(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(SessionDuration.Seconds()),
 	})
@@ -153,7 +158,7 @@ func ClearCookie(w http.ResponseWriter) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   secureCookies,
+		Secure:   secureCookiesFlag.Load(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1, // Delete immediately
 	})

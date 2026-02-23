@@ -76,3 +76,4 @@ server.log
 # Screenshots (Playwright verification)
 screenshots/
 agent-notes
+.claude*

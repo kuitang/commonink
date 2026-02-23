@@ -10,20 +10,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )
-
-const spriteTimeoutMS = 5000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 func sliceContains(values []string, needle string) bool {
 	for _, value := range values {
@@ -60,8 +49,8 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
 	consoleErrors := make([]string, 0, 8)
 	page.OnConsole(func(msg playwright.ConsoleMessage) {
@@ -84,12 +73,12 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 		t.Fatalf("Failed to install stream error route mock: %v", err)
 	}
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.NavigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	serverPyBtn := page.Locator("button.file-btn[data-path='server.py']")
 	if err := serverPyBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	}); err != nil {
 		fileListHTML, _ := page.Locator("#file-list").InnerHTML()
 		t.Fatalf("Initial file list missing after SSE failure: %v\nfile-list=%q", err, fileListHTML)
@@ -98,7 +87,7 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 	flash := page.Locator("#stream-inline-flash")
 	if err := flash.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	}); err != nil {
 		t.Fatalf("SSE error flash did not appear: %v", err)
 	}
@@ -115,7 +104,7 @@ func TestBrowser_AppDetail_StreamError_StickyFlash(t *testing.T) {
 			&& !flash.classList.contains('hidden')
 			&& (flash.textContent || '').includes('Streaming not supported');
 	}`, nil, playwright.PageWaitForFunctionOptions{
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	}); err != nil {
 		flashText, _ := flash.TextContent()
 		t.Fatalf("SSE error flash was not sticky across retry: %v\nflash=%q", err, flashText)

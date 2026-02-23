@@ -15,28 +15,52 @@ import (
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/obs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	ffclient "github.com/thomaspoignant/go-feature-flag"
+	"github.com/thomaspoignant/go-feature-flag/ffcontext"
 )
 
 const (
-	maxAppWriteFilesInput       = 64
-	maxAppWritePathBytesInput   = 1024
-	maxAppWriteFileBytesInput   = 1 << 20
-	maxAppWriteTotalBytesInput  = 8 << 20
-	maxAppBashCommandBytesInput = 32768
+	maxAppWriteFilesInput      = 64
+	maxAppWritePathBytesInput  = 1024
+	maxAppWriteFileBytesInput  = 1 << 20
+	maxAppWriteTotalBytesInput = 8 << 20
+	maxAppExecArgvBytesInput   = 1 << 20 // 1 MiB — heredocs carry file content in argv now
 )
 
-// Handler implements MCP tool call handling.
-type Handler struct {
-	notesSvc *notes.Service
-	appsSvc  *apps.Service
+// mcpContextKey is a type for MCP-specific context keys.
+type mcpContextKey string
+
+const (
+	notesServiceKey mcpContextKey = "notesSvc"
+	appsServiceKey  mcpContextKey = "appsSvc"
+)
+
+// ContextWithServices returns a context with the per-user notes and apps services injected.
+// Tool handlers retrieve these via notesFromContext/appsFromContext.
+func ContextWithServices(ctx context.Context, notesSvc *notes.Service, appsSvc *apps.Service) context.Context {
+	ctx = context.WithValue(ctx, notesServiceKey, notesSvc)
+	ctx = context.WithValue(ctx, appsServiceKey, appsSvc)
+	return ctx
 }
 
-// NewHandler creates a new MCP handler with notes/apps services.
-func NewHandler(notesSvc *notes.Service, appsSvc *apps.Service) *Handler {
-	return &Handler{
-		notesSvc: notesSvc,
-		appsSvc:  appsSvc,
-	}
+func notesFromContext(ctx context.Context) *notes.Service {
+	svc, _ := ctx.Value(notesServiceKey).(*notes.Service)
+	return svc
+}
+
+func appsFromContext(ctx context.Context) *apps.Service {
+	svc, _ := ctx.Value(appsServiceKey).(*apps.Service)
+	return svc
+}
+
+// Handler implements MCP tool call handling.
+// Services are resolved from context per-request, not stored as fields.
+type Handler struct{}
+
+// NewHandler creates a new MCP handler.
+// Per-user services are injected via ContextWithServices and resolved from context per-request.
+func NewHandler() *Handler {
+	return &Handler{}
 }
 
 type toolText string
@@ -101,29 +125,36 @@ func (h *Handler) createToolHandler(name string) func(ctx context.Context, req *
 
 // HandleToolCall routes tool calls to appropriate handlers.
 func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments map[string]any) (any, error) {
+	if name == "app_write" || name == "app_read" {
+		bashOnly, _ := ffclient.BoolVariation("BASH_ONLY", ffcontext.NewEvaluationContext("mcp-handlers"), true)
+		if bashOnly {
+			return nil, errs.New(errs.FailedPrecondition, fmt.Sprintf("%s is temporarily disabled while BASH_ONLY is enabled; use app_exec with tee + stdin instead", name))
+		}
+	}
+
 	switch name {
 	case "note_view":
-		return h.handleNoteView(arguments)
+		return h.handleNoteView(ctx, arguments)
 	case "note_create":
-		return h.handleNoteCreate(arguments)
+		return h.handleNoteCreate(ctx, arguments)
 	case "note_update":
-		return h.handleNoteUpdate(arguments)
+		return h.handleNoteUpdate(ctx, arguments)
 	case "note_search":
-		return h.handleNoteSearch(arguments)
+		return h.handleNoteSearch(ctx, arguments)
 	case "note_list":
-		return h.handleNoteList(arguments)
+		return h.handleNoteList(ctx, arguments)
 	case "note_delete":
-		return h.handleNoteDelete(arguments)
+		return h.handleNoteDelete(ctx, arguments)
 	case "note_edit":
-		return h.handleNoteEdit(arguments)
+		return h.handleNoteEdit(ctx, arguments)
 	case "app_create":
 		return h.handleAppCreate(ctx, arguments)
 	case "app_write":
 		return h.handleAppWrite(ctx, arguments)
 	case "app_read":
 		return h.handleAppRead(ctx, arguments)
-	case "app_bash":
-		return h.handleAppBash(ctx, arguments)
+	case "app_exec":
+		return h.handleAppExec(ctx, arguments)
 	case "app_list":
 		return h.handleAppList(ctx)
 	case "app_delete":
@@ -133,18 +164,20 @@ func (h *Handler) HandleToolCall(ctx context.Context, name string, arguments map
 	}
 }
 
-func (h *Handler) requireNotes() error {
-	if h.notesSvc == nil {
-		return errs.New(errs.FailedPrecondition, "notes tools are unavailable on this MCP endpoint")
+func requireNotes(ctx context.Context) (*notes.Service, error) {
+	svc := notesFromContext(ctx)
+	if svc == nil {
+		return nil, errs.New(errs.FailedPrecondition, "notes tools are unavailable on this MCP endpoint")
 	}
-	return nil
+	return svc, nil
 }
 
-func (h *Handler) requireApps() error {
-	if h.appsSvc == nil {
-		return errs.New(errs.FailedPrecondition, "app tools are unavailable on this MCP endpoint")
+func requireApps(ctx context.Context) (*apps.Service, error) {
+	svc := appsFromContext(ctx)
+	if svc == nil {
+		return nil, errs.New(errs.FailedPrecondition, "app tools are unavailable on this MCP endpoint")
 	}
-	return nil
+	return svc, nil
 }
 
 // newToolResultText creates a successful tool result with text content.
@@ -207,6 +240,8 @@ func classifyNotesError(err error, action string) error {
 		return nil
 	case errs.CodeOf(err) != errs.Internal:
 		return err
+	case errors.Is(err, notes.ErrNoteNotFound):
+		return errs.Wrap(errs.NotFound, err.Error(), err)
 	case errors.Is(err, notes.ErrPriorHashRequired),
 		errors.Is(err, notes.ErrInvalidPriorHash),
 		errors.Is(err, notes.ErrRevisionConflict),
@@ -214,12 +249,6 @@ func classifyNotesError(err error, action string) error {
 		errors.Is(err, notes.ErrAmbiguousMatch),
 		errors.Is(err, notes.ErrStorageLimitExceeded):
 		return errs.Wrap(errs.FailedPrecondition, err.Error(), err)
-	case strings.Contains(strings.ToLower(err.Error()), "not found"):
-		return errs.Wrap(errs.NotFound, err.Error(), err)
-	case strings.Contains(strings.ToLower(err.Error()), "required"),
-		strings.Contains(strings.ToLower(err.Error()), "must be"),
-		strings.Contains(strings.ToLower(err.Error()), "invalid"):
-		return errs.Wrap(errs.InvalidArgument, err.Error(), err)
 	default:
 		return errs.Wrap(errs.Internal, fmt.Sprintf("failed to %s: %v", action, err), err)
 	}
@@ -231,21 +260,8 @@ func classifyAppsError(err error, action string) error {
 		return nil
 	case errs.CodeOf(err) != errs.Internal:
 		return err
-	}
-
-	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	switch {
-	case strings.Contains(msg, "not found"):
+	case errors.Is(err, apps.ErrAppNotFound):
 		return errs.Wrap(errs.NotFound, err.Error(), err)
-	case strings.Contains(msg, "not configured"):
-		return errs.Wrap(errs.Unavailable, err.Error(), err)
-	case strings.Contains(msg, "required"),
-		strings.Contains(msg, "invalid"),
-		strings.Contains(msg, "must be"),
-		strings.Contains(msg, "too many"),
-		strings.Contains(msg, "duplicate"),
-		strings.Contains(msg, "path"):
-		return errs.Wrap(errs.InvalidArgument, err.Error(), err)
 	default:
 		return errs.Wrap(errs.Internal, fmt.Sprintf("failed to %s: %v", action, err), err)
 	}
@@ -256,8 +272,9 @@ type noteViewArgs struct {
 	LineRange []int  `json:"line_range,omitempty"`
 }
 
-func (h *Handler) handleNoteView(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteView(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -269,7 +286,7 @@ func (h *Handler) handleNoteView(args map[string]any) (any, error) {
 		return nil, errs.New(errs.InvalidArgument, "id is required")
 	}
 
-	note, err := h.notesSvc.Read(input.ID)
+	note, err := notesSvc.Read(input.ID)
 	if err != nil {
 		return nil, classifyNotesError(err, "read note")
 	}
@@ -308,8 +325,9 @@ type noteCreateArgs struct {
 	Content *string `json:"content,omitempty"`
 }
 
-func (h *Handler) handleNoteCreate(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteCreate(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -326,7 +344,7 @@ func (h *Handler) handleNoteCreate(args map[string]any) (any, error) {
 		content = *input.Content
 	}
 
-	note, err := h.notesSvc.Create(notes.CreateNoteParams{
+	note, err := notesSvc.Create(notes.CreateNoteParams{
 		Title:   input.Title,
 		Content: content,
 	})
@@ -355,8 +373,9 @@ type noteUpdateArgs struct {
 	PriorHash string  `json:"prior_hash"`
 }
 
-func (h *Handler) handleNoteUpdate(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteUpdate(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -377,7 +396,7 @@ func (h *Handler) handleNoteUpdate(args map[string]any) (any, error) {
 		PriorHash: &input.PriorHash,
 	}
 
-	note, err := h.notesSvc.Update(input.ID, params)
+	note, err := notesSvc.Update(input.ID, params)
 	if err != nil {
 		return nil, classifyNotesError(err, "update note")
 	}
@@ -400,8 +419,9 @@ type noteSearchArgs struct {
 	Query string `json:"query"`
 }
 
-func (h *Handler) handleNoteSearch(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteSearch(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -413,7 +433,7 @@ func (h *Handler) handleNoteSearch(args map[string]any) (any, error) {
 		return nil, errs.New(errs.InvalidArgument, "query is required")
 	}
 
-	results, err := h.notesSvc.SearchWithSnippets(input.Query)
+	results, err := notesSvc.SearchWithSnippets(input.Query)
 	if err != nil {
 		return nil, classifyNotesError(err, "search notes")
 	}
@@ -425,8 +445,9 @@ type noteListArgs struct {
 	Offset *int `json:"offset,omitempty"`
 }
 
-func (h *Handler) handleNoteList(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteList(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -444,7 +465,7 @@ func (h *Handler) handleNoteList(args map[string]any) (any, error) {
 		offset = *input.Offset
 	}
 
-	results, err := h.notesSvc.List(limit, offset)
+	results, err := notesSvc.List(limit, offset)
 	if err != nil {
 		return nil, classifyNotesError(err, "list notes")
 	}
@@ -480,8 +501,9 @@ type noteDeleteArgs struct {
 	ID string `json:"id"`
 }
 
-func (h *Handler) handleNoteDelete(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteDelete(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -493,7 +515,7 @@ func (h *Handler) handleNoteDelete(args map[string]any) (any, error) {
 		return nil, errs.New(errs.InvalidArgument, "id is required")
 	}
 
-	if err := h.notesSvc.Delete(input.ID); err != nil {
+	if err := notesSvc.Delete(input.ID); err != nil {
 		return nil, classifyNotesError(err, "delete note")
 	}
 
@@ -508,8 +530,9 @@ type noteEditArgs struct {
 	PriorHash  string `json:"prior_hash"`
 }
 
-func (h *Handler) handleNoteEdit(args map[string]any) (any, error) {
-	if err := h.requireNotes(); err != nil {
+func (h *Handler) handleNoteEdit(ctx context.Context, args map[string]any) (any, error) {
+	notesSvc, err := requireNotes(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -528,7 +551,7 @@ func (h *Handler) handleNoteEdit(args map[string]any) (any, error) {
 	}
 
 	priorHash := input.PriorHash
-	note, meta, err := h.notesSvc.StrReplace(input.ID, input.OldString, input.NewString, input.ReplaceAll, &priorHash)
+	note, meta, err := notesSvc.StrReplace(input.ID, input.OldString, input.NewString, input.ReplaceAll, &priorHash)
 	if err != nil {
 		return nil, classifyNotesError(err, "edit note")
 	}
@@ -557,7 +580,8 @@ type appCreateArgs struct {
 }
 
 func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (any, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -569,7 +593,7 @@ func (h *Handler) handleAppCreate(ctx context.Context, args map[string]any) (any
 		return nil, errs.New(errs.InvalidArgument, "names must be a non-empty array of strings")
 	}
 
-	result, err := h.appsSvc.Create(ctx, input.Names)
+	result, err := appsSvc.Create(ctx, input.Names)
 	if err != nil {
 		return nil, classifyAppsError(err, "create app")
 	}
@@ -590,7 +614,8 @@ type appWriteArgs struct {
 }
 
 func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (any, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -631,7 +656,7 @@ func (h *Handler) handleAppWrite(ctx context.Context, args map[string]any) (any,
 		})
 	}
 
-	result, err := h.appsSvc.WriteFiles(ctx, input.App, files)
+	result, err := appsSvc.WriteFiles(ctx, input.App, files)
 	if err != nil {
 		return nil, classifyAppsError(err, "write files")
 	}
@@ -648,7 +673,8 @@ type appReadArgs struct {
 }
 
 func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (any, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -677,36 +703,41 @@ func (h *Handler) handleAppRead(ctx context.Context, args map[string]any) (any, 
 		paths = append(paths, file.Path)
 	}
 
-	result, err := h.appsSvc.ReadFiles(ctx, input.App, paths)
+	result, err := appsSvc.ReadFiles(ctx, input.App, paths)
 	if err != nil {
 		return nil, classifyAppsError(err, "read files")
 	}
 	return result, nil
 }
 
-type appBashArgs struct {
+type appExecArgs struct {
 	App            string       `json:"app"`
-	Command        string       `json:"command"`
+	Command        []string     `json:"command"`
 	TimeoutSeconds *json.Number `json:"timeout_seconds,omitempty"`
 }
 
-func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (any, error) {
-	if err := h.requireApps(); err != nil {
+func (h *Handler) handleAppExec(ctx context.Context, args map[string]any) (any, error) {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	var input appBashArgs
+	var input appExecArgs
 	if err := decodeToolArgs(args, &input); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(input.App) == "" {
 		return nil, errs.New(errs.InvalidArgument, "app is required")
 	}
-	if strings.TrimSpace(input.Command) == "" {
-		return nil, errs.New(errs.InvalidArgument, "command is required")
+	if len(input.Command) == 0 {
+		return nil, errs.New(errs.InvalidArgument, "command must be a non-empty array")
 	}
-	if len(input.Command) > maxAppBashCommandBytesInput {
-		return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("command must be <= %d bytes", maxAppBashCommandBytesInput))
+	argvTotalBytes := 0
+	for _, arg := range input.Command {
+		argvTotalBytes += len(arg)
+	}
+	if argvTotalBytes > maxAppExecArgvBytesInput {
+		return nil, errs.New(errs.InvalidArgument, fmt.Sprintf("total argv size must be <= %d bytes", maxAppExecArgvBytesInput))
 	}
 
 	timeoutSeconds := 0
@@ -724,7 +755,7 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (any, 
 		timeoutSeconds = int(parsed)
 	}
 
-	result, err := h.appsSvc.RunBash(ctx, input.App, input.Command, timeoutSeconds)
+	result, err := appsSvc.RunExec(ctx, input.App, input.Command, timeoutSeconds)
 	if err != nil {
 		return nil, classifyAppsError(err, "run command")
 	}
@@ -732,11 +763,12 @@ func (h *Handler) handleAppBash(ctx context.Context, args map[string]any) (any, 
 }
 
 func (h *Handler) handleAppList(ctx context.Context) (any, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	items, err := h.appsSvc.List(ctx)
+	items, err := appsSvc.List(ctx)
 	if err != nil {
 		return nil, classifyAppsError(err, "list apps")
 	}
@@ -755,7 +787,8 @@ type appDeleteArgs struct {
 }
 
 func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (any, error) {
-	if err := h.requireApps(); err != nil {
+	appsSvc, err := requireApps(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -767,7 +800,7 @@ func (h *Handler) handleAppDelete(ctx context.Context, args map[string]any) (any
 		return nil, errs.New(errs.InvalidArgument, "app is required")
 	}
 
-	result, err := h.appsSvc.Delete(ctx, input.App)
+	result, err := appsSvc.Delete(ctx, input.App)
 	if err != nil {
 		return nil, classifyAppsError(err, "delete app")
 	}

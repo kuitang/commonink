@@ -9,20 +9,9 @@ import (
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )
-
-const spriteTimeoutMS = 5000
-
-func navigateSprite(t *testing.T, page playwright.Page, baseURL, path string) {
-	t.Helper()
-	_, err := page.Goto(baseURL+path, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(spriteTimeoutMS),
-	})
-	if err != nil {
-		t.Fatalf("Failed to navigate to %s: %v", path, err)
-	}
-}
 
 func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	if testing.Short() {
@@ -50,15 +39,15 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 		t.Fatalf("Failed to create page: %v", err)
 	}
 	defer page.Close()
-	page.SetDefaultTimeout(spriteTimeoutMS)
-	page.SetDefaultNavigationTimeout(spriteTimeoutMS)
+	page.SetDefaultTimeout(spriteutil.SpriteTimeoutMS)
+	page.SetDefaultNavigationTimeout(spriteutil.SpriteTimeoutMS)
 
-	navigateSprite(t, page, env.BaseURL, "/apps/"+appName)
+	spriteutil.NavigateSprite(t, page, env.BaseURL, "/apps/"+appName)
 
 	startBtn := page.Locator("#btn-start")
 	err = startBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Start button not visible: %v", err)
@@ -67,7 +56,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	restartBtn := page.Locator("#btn-restart")
 	err = restartBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Restart button not visible: %v", err)
@@ -76,7 +65,7 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 	stopBtn := page.Locator("#btn-stop")
 	err = stopBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(spriteTimeoutMS),
+		Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 	})
 	if err != nil {
 		t.Fatalf("Stop button not visible: %v", err)
@@ -91,13 +80,13 @@ func TestBrowser_AppDetail_ActionButtons(t *testing.T) {
 			if (!text) return false;
 			return text.indexOf(('running ' + act + '...').toLowerCase()) === -1;
 		}`, action, playwright.PageWaitForFunctionOptions{
-			Timeout: playwright.Float(spriteTimeoutMS),
+			Timeout: playwright.Float(spriteutil.SpriteTimeoutMS),
 		})
 		text, _ := actionOutput.TextContent()
 		lower := strings.ToLower(text)
 		if err != nil {
 			if allowInProgress && strings.Contains(lower, "running "+strings.ToLower(action)+"...") {
-				t.Logf("Action %q still in progress after %dms (output: %q)", action, spriteTimeoutMS, text)
+				t.Logf("Action %q still in progress after %dms (output: %q)", action, spriteutil.SpriteTimeoutMS, text)
 				return text
 			}
 			t.Fatalf("Action %q did not complete (output: %q): %v", action, text, err)

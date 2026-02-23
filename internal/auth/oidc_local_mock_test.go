@@ -12,6 +12,7 @@ import (
 
 // Test that mock OIDC callbacks use request-specific callback origins when provided.
 func TestLocalMockOIDC_CallbackUsesConfiguredOrigin(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		provider := NewLocalMockOIDCProvider("https://fallback.local")
 
@@ -57,6 +58,7 @@ func TestLocalMockOIDC_CallbackUsesConfiguredOrigin(t *testing.T) {
 
 // Test that, when no callback origin is set for a state, the provider falls back to request origin.
 func TestLocalMockOIDC_CallbackFallsBackToRequestOrigin(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		provider := NewLocalMockOIDCProvider("https://fallback.local")
 
@@ -115,6 +117,7 @@ func TestLocalMockOIDC_CallbackFallsBackToRequestOrigin(t *testing.T) {
 
 // Test that callback-origin overrides are consumed once and not reused.
 func TestLocalMockOIDC_CallbackOriginIsConsumedAfterUse(t *testing.T) {
+	t.Parallel()
 	provider := NewLocalMockOIDCProvider("https://fallback.local")
 	state := "state_once"
 	hostA := "tenant-a.example.test"

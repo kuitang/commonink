@@ -9,11 +9,10 @@ import (
 	"context"
 )
 
-const createConsent = `-- name: CreateConsent :one
+const createConsent = `-- name: CreateConsent :exec
 
 INSERT INTO oauth_consents (id, user_id, client_id, scopes, granted_at)
 VALUES (?, ?, ?, ?, ?)
-RETURNING id, user_id, client_id, scopes, granted_at
 `
 
 type CreateConsentParams struct {
@@ -25,23 +24,15 @@ type CreateConsentParams struct {
 }
 
 // OAuth consent queries for the shared sessions database
-func (q *Queries) CreateConsent(ctx context.Context, arg CreateConsentParams) (OauthConsent, error) {
-	row := q.db.QueryRowContext(ctx, createConsent,
+func (q *Queries) CreateConsent(ctx context.Context, arg CreateConsentParams) error {
+	_, err := q.db.ExecContext(ctx, createConsent,
 		arg.ID,
 		arg.UserID,
 		arg.ClientID,
 		arg.Scopes,
 		arg.GrantedAt,
 	)
-	var i OauthConsent
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.ClientID,
-		&i.Scopes,
-		&i.GrantedAt,
-	)
-	return i, err
+	return err
 }
 
 const deleteConsent = `-- name: DeleteConsent :exec
@@ -118,11 +109,10 @@ func (q *Queries) ListConsentsForUser(ctx context.Context, userID string) ([]Oau
 	return items, nil
 }
 
-const updateConsentScopes = `-- name: UpdateConsentScopes :one
+const updateConsentScopes = `-- name: UpdateConsentScopes :exec
 UPDATE oauth_consents
 SET scopes = ?, granted_at = ?
 WHERE user_id = ? AND client_id = ?
-RETURNING id, user_id, client_id, scopes, granted_at
 `
 
 type UpdateConsentScopesParams struct {
@@ -132,20 +122,12 @@ type UpdateConsentScopesParams struct {
 	ClientID  string `json:"client_id"`
 }
 
-func (q *Queries) UpdateConsentScopes(ctx context.Context, arg UpdateConsentScopesParams) (OauthConsent, error) {
-	row := q.db.QueryRowContext(ctx, updateConsentScopes,
+func (q *Queries) UpdateConsentScopes(ctx context.Context, arg UpdateConsentScopesParams) error {
+	_, err := q.db.ExecContext(ctx, updateConsentScopes,
 		arg.Scopes,
 		arg.GrantedAt,
 		arg.UserID,
 		arg.ClientID,
 	)
-	var i OauthConsent
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.ClientID,
-		&i.Scopes,
-		&i.GrantedAt,
-	)
-	return i, err
+	return err
 }

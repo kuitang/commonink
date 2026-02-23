@@ -160,7 +160,13 @@
                     return data;
                 });
             })
-            .then(function(data) { document.getElementById('editor-content').value = data.content || ''; })
+            .then(function(data) {
+                var content = '';
+                if (data && Array.isArray(data.files) && data.files.length > 0) {
+                    content = data.files[0].content || '';
+                }
+                document.getElementById('editor-content').value = content;
+            })
             .catch(function(e) { document.getElementById('editor-content').value = 'Error: ' + e.message; });
     }
 

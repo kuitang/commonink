@@ -10,6 +10,7 @@ import (
 )
 
 func TestServeHTTP_RecoversPanicWith500(t *testing.T) {
+	t.Parallel()
 	server := &Server{
 		httpHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			panic("simulated panic")
@@ -32,6 +33,7 @@ func TestServeHTTP_RecoversPanicWith500(t *testing.T) {
 }
 
 func TestServeHTTP_NoWriteFromDelegateReturns500(t *testing.T) {
+	t.Parallel()
 	server := &Server{
 		httpHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			// Intentionally no response write to verify fallback behavior.
@@ -54,6 +56,7 @@ func TestServeHTTP_NoWriteFromDelegateReturns500(t *testing.T) {
 }
 
 func TestServeHTTP_NonInitializeMissingSessionIDAllowed(t *testing.T) {
+	t.Parallel()
 	called := false
 	server := &Server{
 		httpHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +82,7 @@ func TestServeHTTP_NonInitializeMissingSessionIDAllowed(t *testing.T) {
 }
 
 func TestServeHTTP_NonInitializeInvalidSessionIDReturns400(t *testing.T) {
+	t.Parallel()
 	server := &Server{
 		httpHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			t.Fatal("delegate handler should not be called")
@@ -102,6 +106,7 @@ func TestServeHTTP_NonInitializeInvalidSessionIDReturns400(t *testing.T) {
 }
 
 func TestServeHTTP_InitializeAddsSessionIDHeader(t *testing.T) {
+	t.Parallel()
 	server := &Server{
 		httpHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)

@@ -77,6 +77,8 @@ func CodeOf(err error) Code {
 }
 
 // MessageOf returns a user-facing error message.
+// If the error has no typed wrapper, returns "internal error" to prevent
+// leaking raw DB errors, file paths, or connection strings to API responses.
 func MessageOf(err error) string {
 	if err == nil {
 		return string(Internal)
@@ -85,7 +87,7 @@ func MessageOf(err error) string {
 	if errors.As(err, &coded) && coded.Message != "" {
 		return coded.Message
 	}
-	return err.Error()
+	return "internal error"
 }
 
 // HTTPStatus maps error code to HTTP status.
