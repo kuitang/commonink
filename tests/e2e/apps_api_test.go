@@ -22,6 +22,7 @@ type appsAPIEnv struct {
 	baseURL     string
 	accessToken string
 	client      *http.Client
+	sessionID   string
 }
 
 var appsAPIEnvMu sync.Mutex
@@ -96,6 +97,10 @@ func (e *appsAPIEnv) doPostRequest(path, bearerToken string) (int, http.Header, 
 // the parsed result content text. Returns an error if the request fails or
 // the JSON-RPC response contains an error.
 func (e *appsAPIEnv) mcpCallTool(toolName string, args map[string]any) (json.RawMessage, error) {
+	if err := e.ensureMCPSession(); err != nil {
+		return nil, err
+	}
+
 	body := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "tools/call",
@@ -116,6 +121,7 @@ func (e *appsAPIEnv) mcpCallTool(toolName string, args map[string]any) (json.Raw
 	req.Header.Set("Authorization", "Bearer "+e.accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", e.sessionID)
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -142,6 +148,80 @@ func (e *appsAPIEnv) mcpCallTool(toolName string, args map[string]any) (json.Raw
 		return nil, fmt.Errorf("JSON-RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 	return rpcResp.Result, nil
+}
+
+func (e *appsAPIEnv) ensureMCPSession() error {
+	if e.sessionID != "" {
+		return nil
+	}
+
+	initReq := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "initialize",
+		"id":      1,
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "apps-api-tests",
+				"version": "1.0.0",
+			},
+		},
+	}
+	initBody, err := json.Marshal(initReq)
+	if err != nil {
+		return fmt.Errorf("marshal initialize request: %w", err)
+	}
+
+	initHTTPReq, err := http.NewRequest(http.MethodPost, e.baseURL+"/mcp", bytes.NewReader(initBody))
+	if err != nil {
+		return fmt.Errorf("create initialize request: %w", err)
+	}
+	initHTTPReq.Header.Set("Authorization", "Bearer "+e.accessToken)
+	initHTTPReq.Header.Set("Content-Type", "application/json")
+	initHTTPReq.Header.Set("Accept", "application/json, text/event-stream")
+
+	initResp, err := e.client.Do(initHTTPReq)
+	if err != nil {
+		return fmt.Errorf("initialize request failed: %w", err)
+	}
+	defer initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(initResp.Body)
+		return fmt.Errorf("initialize returned %d: %s", initResp.StatusCode, string(respBody))
+	}
+	e.sessionID = strings.TrimSpace(initResp.Header.Get("Mcp-Session-Id"))
+	if e.sessionID == "" {
+		return fmt.Errorf("initialize did not return Mcp-Session-Id")
+	}
+
+	initializedNotif := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "notifications/initialized",
+	}
+	notifBody, err := json.Marshal(initializedNotif)
+	if err != nil {
+		return fmt.Errorf("marshal initialized notification: %w", err)
+	}
+	notifReq, err := http.NewRequest(http.MethodPost, e.baseURL+"/mcp", bytes.NewReader(notifBody))
+	if err != nil {
+		return fmt.Errorf("create initialized request: %w", err)
+	}
+	notifReq.Header.Set("Authorization", "Bearer "+e.accessToken)
+	notifReq.Header.Set("Content-Type", "application/json")
+	notifReq.Header.Set("Accept", "application/json, text/event-stream")
+	notifReq.Header.Set("Mcp-Session-Id", e.sessionID)
+
+	notifResp, err := e.client.Do(notifReq)
+	if err != nil {
+		return fmt.Errorf("initialized notification failed: %w", err)
+	}
+	defer notifResp.Body.Close()
+	if notifResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(notifResp.Body)
+		return fmt.Errorf("initialized notification returned %d: %s", notifResp.StatusCode, string(respBody))
+	}
+	return nil
 }
 
 func testAppsAPI_List_Authenticated_Properties(rt *rapid.T, env *appsAPIEnv) {

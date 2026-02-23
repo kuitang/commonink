@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/kuitang/agent-notes/internal/obs"
 	"pgregory.net/rapid"
 )
 
@@ -140,7 +140,7 @@ func TestConnectionIDFromContext(t *testing.T) {
 
 	t.Run("SetContext", func(t *testing.T) {
 		const expected = "conn-test-1"
-		ctx := context.WithValue(context.Background(), connIDContextKey{}, expected)
+		ctx := obs.WithConnID(context.Background(), expected)
 		if got := connectionIDFromContext(ctx); got != expected {
 			t.Fatalf("expected connection id %q, got %q", expected, got)
 		}
@@ -149,9 +149,8 @@ func TestConnectionIDFromContext(t *testing.T) {
 
 func TestRequestLogging_IncludesConnectionIDFor405OnMCP(t *testing.T) {
 	var logs bytes.Buffer
-	origOutput := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(origOutput)
+	restore := obs.SetOutputForTests(&logs)
+	defer restore()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /mcp", func(w http.ResponseWriter, r *http.Request) {
@@ -191,12 +190,11 @@ func TestRequestLogging_IncludesConnectionIDFor405OnMCP(t *testing.T) {
 	}
 
 	logOutput := logs.String()
-	line := "conn=unknown"
-	if strings.Contains(logOutput, line) {
+	if strings.Contains(logOutput, `"conn_id":"unknown"`) {
 		t.Fatalf("expected request log to include real connection id, got: %q", logOutput)
 	}
-	if !strings.Contains(logOutput, "[REQ]") {
-		t.Fatalf("expected request log marker [REQ], got: %q", logOutput)
+	if !strings.Contains(logOutput, `"msg":"http_access"`) {
+		t.Fatalf("expected structured access log event, got: %q", logOutput)
 	}
 }
 
@@ -222,15 +220,15 @@ func (w *noFlushResponseWriter) WriteHeader(code int) {
 
 func TestNewStatusRecorder_PreservesFlusher(t *testing.T) {
 	raw := httptest.NewRecorder()
-	wrapped, recorder := newStatusRecorder(raw)
+	wrapped, recorder := obs.NewResponseRecorder(raw)
 
 	if _, ok := wrapped.(http.Flusher); !ok {
 		t.Fatal("expected wrapped response writer to expose http.Flusher")
 	}
 
 	wrapped.WriteHeader(http.StatusNoContent)
-	if recorder.statusCode != http.StatusNoContent {
-		t.Fatalf("expected recorded status %d, got %d", http.StatusNoContent, recorder.statusCode)
+	if recorder.StatusCode() != http.StatusNoContent {
+		t.Fatalf("expected recorded status %d, got %d", http.StatusNoContent, recorder.StatusCode())
 	}
 
 	wrapped.(http.Flusher).Flush()
@@ -238,7 +236,7 @@ func TestNewStatusRecorder_PreservesFlusher(t *testing.T) {
 
 func TestNewStatusRecorder_DoesNotInventFlusher(t *testing.T) {
 	raw := &noFlushResponseWriter{}
-	wrapped, _ := newStatusRecorder(raw)
+	wrapped, _ := obs.NewResponseRecorder(raw)
 
 	if _, ok := wrapped.(http.Flusher); ok {
 		t.Fatal("expected wrapped response writer to not expose http.Flusher")

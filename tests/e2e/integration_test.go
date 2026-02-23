@@ -2388,8 +2388,58 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 	accessToken := tokenResult["access_token"].(string)
 
 	// ==========================================================
-	// Step 5: Use MCP to list notes
+	// Step 5: Initialize MCP and list notes
 	// ==========================================================
+	initReq := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "initialize",
+		"params": map[string]interface{}{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo": map[string]interface{}{
+				"name":    "integration-test",
+				"version": "1.0.0",
+			},
+		},
+		"id": 1,
+	}
+	initBody, _ := json.Marshal(initReq)
+	initHTTPReq, _ := http.NewRequest("POST", ts.URL+"/mcp", strings.NewReader(string(initBody)))
+	initHTTPReq.Header.Set("Content-Type", "application/json")
+	initHTTPReq.Header.Set("Accept", "application/json, text/event-stream")
+	initHTTPReq.Header.Set("Authorization", "Bearer "+accessToken)
+
+	mcpClient := newIntegrationHTTPClient(ts)
+	initResp, err := mcpClient.Do(initHTTPReq)
+	if err != nil {
+		t.Fatalf("MCP initialize request failed: %v", err)
+	}
+	defer initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(initResp.Body)
+		t.Fatalf("MCP initialize should return 200, got %d: %s", initResp.StatusCode, string(body))
+	}
+	mcpSessionID := initResp.Header.Get("Mcp-Session-Id")
+	if strings.TrimSpace(mcpSessionID) == "" {
+		t.Fatal("MCP initialize should return Mcp-Session-Id")
+	}
+
+	initializedNotif := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "notifications/initialized",
+	}
+	initializedBody, _ := json.Marshal(initializedNotif)
+	initializedReq, _ := http.NewRequest("POST", ts.URL+"/mcp", strings.NewReader(string(initializedBody)))
+	initializedReq.Header.Set("Content-Type", "application/json")
+	initializedReq.Header.Set("Accept", "application/json, text/event-stream")
+	initializedReq.Header.Set("Authorization", "Bearer "+accessToken)
+	initializedReq.Header.Set("Mcp-Session-Id", mcpSessionID)
+	initializedResp, err := mcpClient.Do(initializedReq)
+	if err != nil {
+		t.Fatalf("MCP initialized notification failed: %v", err)
+	}
+	initializedResp.Body.Close()
+
 	mcpListReq := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "tools/call",
@@ -2397,7 +2447,7 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 			"name":      "note_list",
 			"arguments": map[string]interface{}{},
 		},
-		"id": 1,
+		"id": 2,
 	}
 	mcpBody, _ := json.Marshal(mcpListReq)
 
@@ -2405,15 +2455,14 @@ func testIntegration_FullUserJourney_PropertiesWithServer(t *rapid.T, ts *fullAp
 	mcpReq.Header.Set("Content-Type", "application/json")
 	mcpReq.Header.Set("Accept", "application/json, text/event-stream")
 	mcpReq.Header.Set("Authorization", "Bearer "+accessToken)
+	mcpReq.Header.Set("Mcp-Session-Id", mcpSessionID)
 
-	mcpClient := newIntegrationHTTPClient(ts)
 	mcpResp, err := mcpClient.Do(mcpReq)
 	if err != nil {
 		t.Fatalf("MCP list request failed: %v", err)
 	}
 	defer mcpResp.Body.Close()
 
-	// Property: MCP request should succeed
 	if mcpResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(mcpResp.Body)
 		t.Fatalf("MCP list should return 200, got %d: %s", mcpResp.StatusCode, string(body))

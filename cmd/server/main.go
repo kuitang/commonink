@@ -38,9 +38,11 @@ import (
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/email"
+	"github.com/kuitang/agent-notes/internal/errs"
 	"github.com/kuitang/agent-notes/internal/mcp"
 	"github.com/kuitang/agent-notes/internal/notes"
 	"github.com/kuitang/agent-notes/internal/oauth"
+	"github.com/kuitang/agent-notes/internal/obs"
 	"github.com/kuitang/agent-notes/internal/ratelimit"
 	"github.com/kuitang/agent-notes/internal/s3client"
 	"github.com/kuitang/agent-notes/internal/shorturl"
@@ -57,8 +59,6 @@ const (
 	// Max time allowed for reading HTTP request headers.
 	HTTPReadHeaderTimeout = 10 * time.Second
 )
-
-type connIDContextKey struct{}
 
 var (
 	connectionIDCounter atomic.Uint64
@@ -89,16 +89,7 @@ func connectionIDForConn(conn net.Conn) string {
 }
 
 func connectionIDFromContext(ctx context.Context) string {
-	if ctx == nil {
-		return "unknown"
-	}
-
-	connID, ok := ctx.Value(connIDContextKey{}).(string)
-	if !ok || connID == "" {
-		return "unknown"
-	}
-
-	return connID
+	return obs.ConnIDFromContext(ctx)
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
@@ -113,7 +104,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 		IdleTimeout:  0,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			connID := connectionIDForConn(c)
-			return context.WithValue(ctx, connIDContextKey{}, connID)
+			return obs.WithConnID(ctx, connID)
 		},
 		ConnState: func(c net.Conn, state http.ConnState) {
 			if c == nil {
@@ -121,18 +112,16 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 			}
 
 			connID := connectionIDForConn(c)
+			logger := obs.Pkg("cmd/server")
+			logger.Debug(
+				"conn_state",
+				"conn_id", connID,
+				"state", state.String(),
+				"remote", c.RemoteAddr().String(),
+				"unattributed", true,
+			)
 			switch state {
-			case http.StateNew:
-				log.Printf("[CONN OPEN] conn=%s remote=%s", connID, c.RemoteAddr())
-			case http.StateActive:
-				log.Printf("[CONN ACTIVE] conn=%s remote=%s", connID, c.RemoteAddr())
-			case http.StateIdle:
-				log.Printf("[CONN IDLE] conn=%s remote=%s", connID, c.RemoteAddr())
-			case http.StateHijacked:
-				log.Printf("[CONN HIJACKED] conn=%s remote=%s", connID, c.RemoteAddr())
-				connectionIDs.Delete(c)
-			case http.StateClosed:
-				log.Printf("[CONN CLOSE] conn=%s remote=%s", connID, c.RemoteAddr())
+			case http.StateHijacked, http.StateClosed:
 				connectionIDs.Delete(c)
 			}
 		},
@@ -142,23 +131,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 }
 
 func withRequestLogging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		connID := connectionIDFromContext(r.Context())
-		start := time.Now()
-		wrapped, recorder := newStatusRecorder(w)
-
-		next.ServeHTTP(wrapped, r)
-
-		log.Printf(
-			"[REQ] conn=%s method=%s path=%s status=%d remote=%s duration=%s",
-			connID,
-			r.Method,
-			r.URL.RequestURI(),
-			recorder.statusCode,
-			r.RemoteAddr,
-			time.Since(start),
-		)
-	})
+	return obs.RequestContextMiddleware(obs.AccessLogMiddleware("cmd/server", next))
 }
 
 // =============================================================================
@@ -186,6 +159,7 @@ func (v *OAuthProviderVerifier) VerifyAccessToken(token string) (*auth.OAuthToke
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	obs.Init()
 
 	// Step 1: Parse CLI flags
 	noEmail, noS3, noOIDC, addr := config.ParseFlags()
@@ -456,9 +430,9 @@ func main() {
 		SpriteToken: resolvedSpriteToken,
 	}
 
-	mcpAllRoute := mcpRouteGuard(rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP))))
-	mcpNotesRoute := mcpRouteGuard(rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP))))
-	mcpAppsRoute := mcpRouteGuard(rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP))))
+	mcpAllRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAllHandler.ServeHTTP)))
+	mcpNotesRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpNotesHandler.ServeHTTP)))
+	mcpAppsRoute := rateLimitMW(authMiddleware.RequireAuth(http.HandlerFunc(mcpAppsHandler.ServeHTTP)))
 
 	mountMCPRoute(mux, "/mcp", mcpAllRoute)
 	mountMCPRoute(mux, "/mcp/notes", mcpNotesRoute)
@@ -699,7 +673,9 @@ func (h *AuthenticatedNotesHandler) getService(r *http.Request) (*notes.Service,
 	}
 	svc := notes.NewService(userDB, storageLimit)
 	if err := svc.Purge(30 * 24 * time.Hour); err != nil {
-		log.Printf("[ERROR] notes purge failed for user %s: %v", userID, err)
+		obs.From(r.Context()).
+			With("pkg", "cmd/server").
+			Debug("notes_purge_failed", "user_id", userID, "error", err.Error())
 	}
 	return svc, nil
 }
@@ -1047,18 +1023,26 @@ func appErrorStatus(err error) int {
 		return http.StatusInternalServerError
 	}
 	msg := strings.ToLower(err.Error())
+	code := errs.Internal
 	switch {
 	case strings.Contains(msg, "not found"):
-		return http.StatusNotFound
+		code = errs.NotFound
 	case strings.Contains(msg, "path is required"),
 		strings.Contains(msg, "must be relative"),
-		strings.Contains(msg, "invalid lines parameter"):
-		return http.StatusBadRequest
+		strings.Contains(msg, "invalid lines parameter"),
+		strings.Contains(msg, "required"),
+		strings.Contains(msg, "invalid"),
+		strings.Contains(msg, "must be"):
+		code = errs.InvalidArgument
+	case strings.Contains(msg, "forbidden"),
+		strings.Contains(msg, "permission"):
+		code = errs.PermissionDenied
 	case strings.Contains(msg, "not configured"):
-		return http.StatusServiceUnavailable
+		code = errs.Unavailable
 	default:
-		return http.StatusInternalServerError
+		code = errs.Internal
 	}
+	return errs.HTTPStatus(code)
 }
 
 func writeAppError(w http.ResponseWriter, action string, err error) {
@@ -1231,7 +1215,14 @@ func (h *AuthenticatedAppsHandler) GetLogs(w http.ResponseWriter, r *http.Reques
 func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Request) {
 	svc, err := h.getService(r)
 	if err != nil {
-		log.Printf("[STREAM END] conn=%s app=%q reason=failed to resolve service", connectionIDFromContext(r.Context()), "<unknown>")
+		obs.From(r.Context()).
+			With("pkg", "cmd/server").
+			Debug(
+				"apps_stream_end",
+				"conn_id", connectionIDFromContext(r.Context()),
+				"app", "<unknown>",
+				"reason", "failed to resolve service",
+			)
 		writeError(w, http.StatusInternalServerError, "Internal server error")
 		return
 	}
@@ -1239,7 +1230,14 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "App name is required")
-		log.Printf("[STREAM END] conn=%s app=%q reason=empty app name", connectionIDFromContext(r.Context()), name)
+		obs.From(r.Context()).
+			With("pkg", "cmd/server").
+			Debug(
+				"apps_stream_end",
+				"conn_id", connectionIDFromContext(r.Context()),
+				"app", name,
+				"reason", "empty app name",
+			)
 		return
 	}
 
@@ -1247,10 +1245,20 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 	streamStart := time.Now()
 	streamEndReason := "completed"
 	defer func() {
-		log.Printf("[STREAM END] conn=%s app=%s reason=%q duration=%s", connID, name, streamEndReason, time.Since(streamStart))
+		obs.From(r.Context()).
+			With("pkg", "cmd/server").
+			Debug(
+				"apps_stream_end",
+				"conn_id", connID,
+				"app", name,
+				"reason", streamEndReason,
+				"dur_ms", float64(time.Since(streamStart).Microseconds())/1000.0,
+			)
 	}()
 
-	log.Printf("[STREAM START] conn=%s app=%s", connID, name)
+	obs.From(r.Context()).
+		With("pkg", "cmd/server").
+		Debug("apps_stream_start", "conn_id", connID, "app", name)
 
 	lines := 0
 	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
@@ -1266,7 +1274,14 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		streamEndReason = "response writer missing flusher"
-		log.Printf("[ERROR] apps stream unavailable for app=%s: response writer lacks http.Flusher (type=%T)", name, w)
+		obs.From(r.Context()).
+			With("pkg", "cmd/server").
+			Debug(
+				"apps_stream_unavailable",
+				"app", name,
+				"reason", "response writer lacks http.Flusher",
+				"writer_type", fmt.Sprintf("%T", w),
+			)
 		writeError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
 	}
@@ -1331,7 +1346,9 @@ func (h *AuthenticatedAppsHandler) StreamApp(w http.ResponseWriter, r *http.Requ
 			nextFilesHTML, renderErr := h.renderFilesHTML(nextFilesList, nextFilesErrText)
 			if renderErr != nil {
 				streamEndReason = fmt.Sprintf("apps stream render failed: %v", renderErr)
-				log.Printf("apps stream render failed for app=%s: %v", name, renderErr)
+				obs.From(r.Context()).
+					With("pkg", "cmd/server").
+					Debug("apps_stream_render_failed", "app", name, "error", renderErr.Error())
 				return
 			}
 			nextFileHash := hashJSON(map[string]string{"html": nextFilesHTML})
@@ -1445,7 +1462,9 @@ func (h *AuthenticatedMCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 		notesSvc = notes.NewService(userDB, storageLimit)
 		if err := notesSvc.Purge(30 * 24 * time.Hour); err != nil {
-			log.Printf("[ERROR] MCP note purge failed for user %s: %v", userID, err)
+			obs.From(r.Context()).
+				With("pkg", "cmd/server").
+				Debug("mcp_note_purge_failed", "user_id", userID, "error", err.Error())
 		}
 	}
 
@@ -1465,81 +1484,6 @@ func mountMCPRoute(mux *http.ServeMux, route string, handler http.Handler) {
 	mux.Handle("OPTIONS "+route, handler)
 }
 
-type responseWriteTracker struct {
-	http.ResponseWriter
-	wroteHeader bool
-}
-
-func (w *responseWriteTracker) WriteHeader(code int) {
-	w.wroteHeader = true
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *responseWriteTracker) Write(p []byte) (int, error) {
-	if !w.wroteHeader {
-		w.wroteHeader = true
-	}
-	return w.ResponseWriter.Write(p)
-}
-
-func (w *responseWriteTracker) Flush() {
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-func mcpRouteGuard(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tracked := &responseWriteTracker{ResponseWriter: w}
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				log.Printf("[ERROR] MCP route panic recovered: method=%s path=%s remote=%s panic=%v", r.Method, r.URL.Path, r.RemoteAddr, recovered)
-				if !tracked.wroteHeader {
-					http.Error(tracked, "Internal server error", http.StatusInternalServerError)
-				}
-			}
-
-			if (r.Method == http.MethodPost || r.Method == http.MethodDelete) && !tracked.wroteHeader {
-				log.Printf("[ERROR] MCP route returned without writing response: method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
-				http.Error(tracked, "MCP route returned without writing response", http.StatusInternalServerError)
-			}
-		}()
-
-		next.ServeHTTP(tracked, r)
-	})
-}
-
-// statusRecorder wraps http.ResponseWriter to capture the status code.
-type statusRecorder struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-type statusRecorderWithFlusher struct {
-	*statusRecorder
-}
-
-func newStatusRecorder(w http.ResponseWriter) (http.ResponseWriter, *statusRecorder) {
-	recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
-	if _, ok := w.(http.Flusher); ok {
-		return &statusRecorderWithFlusher{statusRecorder: recorder}, recorder
-	}
-	return recorder, recorder
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.statusCode = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *statusRecorder) Unwrap() http.ResponseWriter {
-	return r.ResponseWriter
-}
-
-func (r *statusRecorderWithFlusher) Flush() {
-	r.ResponseWriter.(http.Flusher).Flush()
-}
-
 // ErrorResponse represents an API error response
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -1550,7 +1494,7 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("[ERROR] failed to encode JSON response (status=%d): %v", status, err)
+		obs.Pkg("cmd/server").Debug("json_encode_failed", "status", status, "error", err.Error())
 	}
 }
 
