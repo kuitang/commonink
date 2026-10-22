@@ -23,6 +23,8 @@ jobs:
           go-version: "1.26.10"
           check-latest: true
       - name: Install Playwright Chromium
+        env:
+          PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev/dbazure/download/playwright
         run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
       - name: Run CI test suite (no external conformance)
         env:
