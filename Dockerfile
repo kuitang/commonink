@@ -2,7 +2,7 @@
 FROM golang:1.26.10-trixie AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libc6-dev libsqlite3-dev && rm -rf /var/lib/apt/lists/*
+    gcc libc6-dev libssl-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" CGO_LDFLAGS="-lm" \
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libsqlite3-0 && rm -rf /var/lib/apt/lists/*
+    ca-certificates libssl3t64 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

@@ -19,8 +19,8 @@ import (
 	"sync"
 	"testing"
 
+	_ "github.com/benoitpetit/go-sqlcipher/v4"
 	"github.com/coreos/go-oidc/v3/oidc"
-	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/oauth2-proxy/mockoidc"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"

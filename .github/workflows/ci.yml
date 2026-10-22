@@ -18,6 +18,24 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Use official signed Ubuntu archive with bounded downloads
+        run: |
+          # Azure's archive stalled during Chromium dependency provisioning.
+          # Preserve Ubuntu signature verification and the original suite/keyring.
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+          paths = [Path('/etc/apt/apt-mirrors.txt'), Path('/etc/apt/sources.list'), *Path('/etc/apt/sources.list.d').glob('*.sources'), *Path('/etc/apt/sources.list.d').glob('*.list')]
+          for path in paths:
+              if path.exists():
+                  old = path.read_text()
+                  new = old.replace('http://azure.archive.ubuntu.com/ubuntu', 'https://archive.ubuntu.com/ubuntu').replace('https://azure.archive.ubuntu.com/ubuntu', 'https://archive.ubuntu.com/ubuntu')
+                  if old != new:
+                      path.write_text(new)
+                      print(f'Using official Ubuntu archive in {path}')
+          PYTHON
+          printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n' | sudo tee /etc/apt/apt.conf.d/80-commonink-download-timeout
+      - name: Install SQLCipher OpenSSL development dependency
+        run: timeout 360 sudo apt-get update && timeout 360 sudo apt-get install -y libssl-dev
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.10"
@@ -32,7 +50,8 @@ jobs:
           ln -s "$RUNNER_TEMP/commonink-playwright/node_modules/playwright-core" "$RUNNER_TEMP/commonink-playwright-driver/package"
           echo "PLAYWRIGHT_DRIVER_PATH=$RUNNER_TEMP/commonink-playwright-driver" >> "$GITHUB_ENV"
           echo "PLAYWRIGHT_NODEJS_PATH=$(command -v node)" >> "$GITHUB_ENV"
-          node "$RUNNER_TEMP/commonink-playwright-driver/package/cli.js" install --with-deps chromium
+          timeout 360 node "$RUNNER_TEMP/commonink-playwright-driver/package/cli.js" install-deps chromium
+          timeout 360 node "$RUNNER_TEMP/commonink-playwright-driver/package/cli.js" install chromium
       - name: Run CI test suite (no external conformance)
         env:
           GO_TEST_PACKAGE_PARALLEL: "1"

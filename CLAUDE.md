@@ -31,6 +31,17 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 # $(eval "$(~/.goenv/bin/goenv init -)") && go build ...
 ```
 
+### SQLCipher native dependency
+
+The pinned `github.com/benoitpetit/go-sqlcipher/v4` driver bundles reviewed
+SQLCipher 4.17.0 / SQLite 3.53.3 and links OpenSSL libcrypto. Install `libssl-dev`
+on Debian/Ubuntu build hosts; runtime images need `libssl3t64`. Keep the exact
+module checksum and the official amalgamation provenance in
+`docs/SQLCIPHER_SECURITY.md`. Existing SQLCipher4 raw-key/4096-byte encrypted
+stores retain their format. The transactional FTS trigger migration rebuilds
+derived search data once; old encrypted fixtures must pass read/write/restore
+checks before any native engine change ships.
+
 ### CGO Flags (CRITICAL - Required for SQLCipher + FTS5)
 **ALL `go build`, `go test`, and `go run` commands MUST use these CGO flags:**
 
@@ -113,11 +124,23 @@ make test-full
 ```bash
 make test-fuzz
 ```
-- Calls `scripts/fuzz.sh` under the hood
+- Calls `scripts/fuzz.sh` under the hood; default30m is PER target, sequentially
 - Coverage-guided fuzzing of all `Fuzz*` functions
 - Compares baseline vs fuzz coverage
 - **Fails** if new crash inputs found
 - **Output**: `test-results/fuzz-findings/` (if issues found)
+
+For a native security change, run relevant campaigns via the same Makefile target,
+with bounded workers and separate output directories when running in parallel:
+
+```bash
+make test-fuzz FUZZ_PACKAGES='./internal/db' FUZZ_PATTERN='^FuzzUserDB_Encryption_Roundtrip_Properties$' FUZZ_TIMEOUT=30m PARALLEL=2 OUTPUT_DIR=test-results/native-encryption
+```
+
+`FUZZ_PACKAGES` and `FUZZ_PATTERN` are optional; omitting them preserves all-target
+nightly scope. The default final `./...` coverage phase includes conformance tests
+and needs their credentials; scoped DB/notes campaigns do not. Failure reports
+record the exact package corpus path and preserve errors even without a crash file.
 
 ### Advanced Fuzz Options
 The `scripts/fuzz.sh` script accepts options when called directly:
@@ -398,7 +421,7 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 
 ### MCP Transport (Streamable HTTP - MCP Spec 2025-03-26)
 - **Streamable HTTP** transport, stateless mode (no initialize handshake)
-- Single endpoint `POST /mcp` - protected by OAuth 2.1 Bearer token, API Key, or session cookie
+- Single endpoint `POST /mcp` - protected by OAuth 2.1 Bearer token, API Key (session cookies are for web/API routes; MCP requires Bearer authentication)
 - `JSONResponse: true` - returns `application/json` (not SSE)
 - Auth: `Authorization: Bearer <JWT>` or `Authorization: Bearer <API_KEY>`
 - 401 response includes `WWW-Authenticate: Bearer resource_metadata="..."` per RFC 6750

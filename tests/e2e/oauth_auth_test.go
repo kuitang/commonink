@@ -29,7 +29,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	_ "github.com/mutecomm/go-sqlcipher/v4"
+	_ "github.com/benoitpetit/go-sqlcipher/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"

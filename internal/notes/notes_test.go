@@ -30,6 +30,7 @@ func setupNotesServiceRapid(t *rapid.T) *Service {
 // Each call creates a completely isolated database, avoiding all file contention issues
 func createInMemoryService(t interface {
 	Fatalf(format string, args ...interface{})
+	Cleanup(func())
 }) *Service {
 	// Use unique ID for each test to ensure complete isolation
 	testID := testCounter.Add(1)
@@ -39,6 +40,11 @@ func createInMemoryService(t interface {
 	if err != nil {
 		t.Fatalf("failed to create in-memory database: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := userDB.Close(); err != nil {
+			t.Fatalf("close property database: %v", err)
+		}
+	})
 	return NewService(userDB, FreeStorageLimitBytes)
 }
 

@@ -1076,11 +1076,15 @@ func testDataDirectory_Wiring_Properties(t *rapid.T) {
 
 	// Use a unique temp directory to simulate DATABASE_PATH env var being set.
 	// We cannot use t.TempDir() on rapid.T, so create our own temp dir.
-	tmpBase := filepath.Join(os.TempDir(), "db-wiring-test")
-	os.RemoveAll(tmpBase)
-	if err := os.MkdirAll(tmpBase, 0755); err != nil {
+	tmpBase, err := os.MkdirTemp(testDataRoot, "db-wiring-")
+	if err != nil {
 		t.Fatalf("Failed to create temp base: %v", err)
 	}
+	defer func() {
+		ResetForTesting()
+		DataDirectory = DefaultDataDirectory
+		os.RemoveAll(tmpBase)
+	}()
 
 	// Generate a random subdirectory name to simulate different DATABASE_PATH values
 	subdir := rapid.StringMatching("[a-z]{3,10}").Draw(t, "subdir")

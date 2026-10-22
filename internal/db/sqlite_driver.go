@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	sqlite3 "github.com/mutecomm/go-sqlcipher/v4"
+	sqlite3 "github.com/benoitpetit/go-sqlcipher/v4"
 )
 
 const (

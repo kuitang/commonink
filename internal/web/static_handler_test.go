@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mutecomm/go-sqlcipher/v4"
+	_ "github.com/benoitpetit/go-sqlcipher/v4"
 	_ "pgregory.net/rapid" // registers -rapid.checks flag for unified make test
 
 	"github.com/kuitang/agent-notes/internal/auth"
