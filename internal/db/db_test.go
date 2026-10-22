@@ -43,6 +43,9 @@ func mustCloseSessionsDB(t *rapid.T, db *SessionsDB) {
 	}
 }
 
+// File-backed properties run serially: setupTestDirRapid resets process-wide
+// DataDirectory, connection caches, and session singletons. Parallel tests
+// would close another property's database.
 // TestMain runs before all tests and cleans up after.
 // File-based tests use a dedicated temp root under /tmp.
 func TestMain(m *testing.M) {
@@ -189,7 +192,6 @@ func testSessionsDB_Schema_Properties(t *rapid.T) {
 }
 
 func TestSessionsDB_Schema_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testSessionsDB_Schema_Properties)
 }
 
@@ -240,7 +242,6 @@ func testUserDB_ValidUserID_Properties(t *rapid.T) {
 }
 
 func TestUserDB_ValidUserID_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_ValidUserID_Properties)
 }
 
@@ -269,7 +270,6 @@ func testUserDB_EmptyUserID_Properties(t *rapid.T) {
 }
 
 func TestUserDB_EmptyUserID_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_EmptyUserID_Properties)
 }
 
@@ -324,7 +324,6 @@ func testUserDB_Schema_Properties(t *rapid.T) {
 }
 
 func TestUserDB_Schema_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_Schema_Properties)
 }
 
@@ -412,7 +411,6 @@ func testUserDB_MultipleUsers_Isolation_Properties(t *rapid.T) {
 }
 
 func TestUserDB_MultipleUsers_Isolation_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_MultipleUsers_Isolation_Properties)
 }
 
@@ -513,7 +511,6 @@ func testUserDB_FTS5_Sync_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_Sync_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_Sync_Properties)
 }
 
@@ -576,7 +573,6 @@ func testUserDB_ContentSizeLimit_Properties(t *rapid.T) {
 }
 
 func TestUserDB_ContentSizeLimit_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_ContentSizeLimit_Properties)
 }
 
@@ -784,7 +780,6 @@ func testUserDB_Encryption_Roundtrip_Properties(t *rapid.T) {
 }
 
 func TestUserDB_Encryption_Roundtrip_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_Encryption_Roundtrip_Properties)
 }
 
@@ -863,7 +858,6 @@ func testSessionsDB_CRUD_Properties(t *rapid.T) {
 }
 
 func TestSessionsDB_CRUD_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testSessionsDB_CRUD_Properties)
 }
 
@@ -937,7 +931,6 @@ func testUserDB_FTS5_ArbitraryQuery_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_ArbitraryQuery_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_ArbitraryQuery_Properties)
 }
 
@@ -983,7 +976,6 @@ func testUserDB_FTS5_ArbitraryQueryCount_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_ArbitraryQueryCount_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_ArbitraryQueryCount_Properties)
 }
 
@@ -1064,7 +1056,6 @@ func testUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *rapid.T) {
 }
 
 func TestUserDB_FTS5_ArbitrarySnippetQuery_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testUserDB_FTS5_ArbitrarySnippetQuery_Properties)
 }
 
@@ -1225,7 +1216,6 @@ func testSanitizeFTS5Word_Lowercase_Properties(t *rapid.T) {
 }
 
 func TestSanitizeFTS5Word_Lowercase_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testSanitizeFTS5Word_Lowercase_Properties)
 }
 
@@ -1252,7 +1242,6 @@ func testSanitizeFTS5Word_SafeChars_Properties(t *rapid.T) {
 }
 
 func TestSanitizeFTS5Word_SafeChars_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testSanitizeFTS5Word_SafeChars_Properties)
 }
 
@@ -1277,7 +1266,6 @@ func testSanitizeFTS5Word_Idempotent_Properties(t *rapid.T) {
 }
 
 func TestSanitizeFTS5Word_Idempotent_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testSanitizeFTS5Word_Idempotent_Properties)
 }
 
@@ -1314,7 +1302,6 @@ func testTokenizeHumanSearch_ContentPreserved_Properties(t *rapid.T) {
 }
 
 func TestTokenizeHumanSearch_ContentPreserved_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testTokenizeHumanSearch_ContentPreserved_Properties)
 }
 
@@ -1347,7 +1334,6 @@ func testTokenizeHumanSearch_QuotedPhrases_Properties(t *rapid.T) {
 }
 
 func TestTokenizeHumanSearch_QuotedPhrases_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testTokenizeHumanSearch_QuotedPhrases_Properties)
 }
 
@@ -1378,7 +1364,6 @@ func testTokenizeHumanSearch_TokenCount_Properties(t *rapid.T) {
 }
 
 func TestTokenizeHumanSearch_TokenCount_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testTokenizeHumanSearch_TokenCount_Properties)
 }
 
@@ -1416,7 +1401,6 @@ func testEscapeFTS5Query_NoLeadingTrailingOR_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NoLeadingTrailingOR_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NoLeadingTrailingOR_Properties)
 }
 
@@ -1446,7 +1430,6 @@ func testEscapeFTS5Query_NoConsecutiveOR_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NoConsecutiveOR_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NoConsecutiveOR_Properties)
 }
 
@@ -1491,7 +1474,6 @@ func testEscapeFTS5Query_NOTRequiresPositive_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NOTRequiresPositive_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NOTRequiresPositive_Properties)
 }
 
@@ -1530,7 +1512,6 @@ func testEscapeFTS5Query_BareWordsHavePrefix_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_BareWordsHavePrefix_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_BareWordsHavePrefix_Properties)
 }
 
@@ -1565,7 +1546,6 @@ func testEscapeFTS5Query_EmptyInput_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_EmptyInput_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_EmptyInput_Properties)
 }
 
@@ -1589,7 +1569,6 @@ func testEscapeFTS5Query_NullBytesStripped_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NullBytesStripped_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NullBytesStripped_Properties)
 }
 
@@ -1649,7 +1628,6 @@ func testEscapeFTS5Query_ValidFTS5Syntax_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_ValidFTS5Syntax_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_ValidFTS5Syntax_Properties)
 }
 
@@ -1707,7 +1685,6 @@ func testEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *rapid.T) {
 }
 
 func TestEscapeFTS5Query_NoUnescapedSpecialChars_Properties(t *testing.T) {
-	t.Parallel()
 	rapid.Check(t, testEscapeFTS5Query_NoUnescapedSpecialChars_Properties)
 }
 

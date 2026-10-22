@@ -37,6 +37,11 @@ func TestBrowser_DarkMode_ToggleCycles(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	toggle := page.Locator("#darkmode-toggle")
 	count, err := toggle.Count()
@@ -169,6 +174,11 @@ func TestBrowser_ThemeSwitcher_DefaultHasRing(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	// Default swatch should have ring-2 class
 	defaultSwatch := page.Locator("button[data-theme='default']")
@@ -211,6 +221,11 @@ func TestBrowser_ThemeSwitcher_SetsLocalStorage(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	// Click the academic swatch — page will reload
 	academicSwatch := page.Locator("button[data-theme='academic']")
@@ -220,6 +235,11 @@ func TestBrowser_ThemeSwitcher_SetsLocalStorage(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	// Verify localStorage was set
 	storedTheme, err := page.Evaluate(`() => localStorage.getItem('ci_theme')`)
@@ -395,6 +415,11 @@ func TestBrowser_ThemeVisual_DefaultAttributes(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	// data-theme="default" on html
 	dataTheme, err := page.Locator("html").GetAttribute("data-theme")
@@ -448,6 +473,11 @@ func TestBrowser_ThemeVisual_AcademicAttributes(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	// data-theme="academic" on html
 	dataTheme, err := page.Locator("html").GetAttribute("data-theme")
@@ -526,6 +556,11 @@ func TestBrowser_ThemeVisual_NeonfizzAttributes(t *testing.T) {
 	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 		State: playwright.LoadStateDomcontentloaded,
 	})
+	// Tailwind compiles the theme stylesheet asynchronously after DOM ready.
+	// Wait for its custom property before inspecting computed visual styles.
+	if _, err := page.WaitForFunction(`() => getComputedStyle(document.documentElement).getPropertyValue('--ci-glow').trim() !== ''`, nil, playwright.PageWaitForFunctionOptions{Timeout: playwright.Float(5000)}); err != nil {
+		t.Fatalf("Theme stylesheet did not finish compiling: %v", err)
+	}
 
 	// data-theme="neonfizz" on html
 	dataTheme, err := page.Locator("html").GetAttribute("data-theme")

@@ -18,10 +18,10 @@ Quick reference for Claude and developers working on this project.
 
 ## Prerequisites
 
-**Go 1.25+ REQUIRED via goenv** - This project uses goenv for Go version management.
+**Go 1.26.10+ REQUIRED via goenv** - This project uses goenv for Go version management.
 
 ### Go Setup (CRITICAL for Claude agents)
-The project has a `.go-version` file that specifies Go 1.25.6. All shell commands must initialize goenv:
+The project has a `.go-version` file that specifies Go 1.26.10. All shell commands must initialize goenv:
 
 ```bash
 # Add this prefix to ALL go commands in scripts/tasks:
@@ -51,7 +51,7 @@ Without these flags:
 **Verify correct Go version:**
 ```bash
 export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)" && go version
-# Should output: go version go1.25.6 linux/arm64
+# Should output: go version go1.26.10 linux/arm64
 ```
 
 **DO NOT use `/usr/bin/go`** - it's an outdated system Go (1.19).
@@ -442,7 +442,7 @@ go test -run=FuzzNotesAPI_CRUD/abc123  # Use the specific corpus filename
 ```bash
 export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval "$(goenv init -)"
 ```
-→ Verify with `go version` - must show go1.25.6
+→ Verify with `go version` - must show go1.26.10
 
 ### "CGO_ENABLED required for SQLCipher"
 → Install gcc: `sudo apt-get install build-essential`
