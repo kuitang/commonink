@@ -31,6 +31,17 @@ jobs:
         run: |
           docker build --pull --no-cache -t security-image:scan "${{ matrix.context }}"
           docker image inspect security-image:scan > image-metadata.json
+      - name: Verify distrusted emSign G3 root is absent
+        run: |
+          set -euo pipefail
+          cid=$(docker create security-image:scan)
+          trap 'docker rm "$cid" > /dev/null' EXIT
+          docker cp "$cid:/etc/ssl/certs/ca-certificates.crt" ca-bundle.crt
+          openssl crl2pkcs7 -nocrl -certfile ca-bundle.crt | openssl pkcs7 -print_certs -noout > ca-subjects.txt
+          if grep -Fi 'emSign ECC Root CA - G3' ca-subjects.txt; then
+            echo 'Compromised emSign G3 remains trusted' >&2
+            exit 1
+          fi
       - name: Scan complete image inventory
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
@@ -54,6 +65,7 @@ jobs:
             image-metadata.json
             vulnerabilities.json
             sbom.cdx.json
+            ca-subjects.txt
       - name: Fail on fixable high or critical image vulnerabilities
         run: |
           python3 - <<'PYTHON'
