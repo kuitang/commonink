@@ -1,0 +1,54 @@
+name: Security image inventory
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '19 5 * * 1'
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Check production entrypoint
+        working-directory: .
+        run: CGO_ENABLED=1 CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 CGO_LDFLAGS=-lm govulncheck -tags=fts5 ./cmd/server
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        context: ['.']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild current bases and record exact image
+        run: |
+          docker build --pull --no-cache -t security-image:scan "${{ matrix.context }}"
+          docker image inspect security-image:scan > image-metadata.json
+      - name: Scan complete image inventory
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          version: v0.76.1
+          image-ref: security-image:scan
+          format: json
+          output: vulnerabilities.json
+          exit-code: '0'
+      - name: Generate exact image SBOM
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          version: v0.76.1
+          image-ref: security-image:scan
+          format: cyclonedx
+          output: sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-${{ strategy.job-index }}
+          path: |
+            image-metadata.json
+            vulnerabilities.json
+            sbom.cdx.json

@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.25-trixie AS builder
+FROM golang:1.26.10-trixie AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev libsqlite3-dev && rm -rf /var/lib/apt/lists/*
