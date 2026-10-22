@@ -52,3 +52,17 @@ jobs:
             image-metadata.json
             vulnerabilities.json
             sbom.cdx.json
+      - name: Fail on fixable high or critical image vulnerabilities
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          report = json.load(open("vulnerabilities.json"))
+          findings = [v for result in report.get("Results", [])
+                      for v in result.get("Vulnerabilities", [])
+                      if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion")]
+          for v in findings:
+              print(f"{v['VulnerabilityID']}: {v['PkgName']} {v['InstalledVersion']} -> {v['FixedVersion']}")
+          # Full unfiltered findings, including issues without vendor fixes,
+          # remain in the uploaded report and SBOM for explicit triage.
+          raise SystemExit(bool(findings))
+          PYTHON
