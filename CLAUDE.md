@@ -31,6 +31,17 @@ export GOENV_ROOT="$HOME/.goenv" && export PATH="$GOENV_ROOT/bin:$PATH" && eval 
 # $(eval "$(~/.goenv/bin/goenv init -)") && go build ...
 ```
 
+### SQLCipher native dependency
+
+The pinned `github.com/benoitpetit/go-sqlcipher/v4` driver bundles reviewed
+SQLCipher 4.17.0 / SQLite 3.53.3 and links OpenSSL libcrypto. Install `libssl-dev`
+on Debian/Ubuntu build hosts; runtime images need `libssl3t64`. Keep the exact
+module checksum and the official amalgamation provenance in
+`docs/SQLCIPHER_SECURITY.md`. Existing SQLCipher4 raw-key/4096-byte encrypted
+stores retain their format. The transactional FTS trigger migration rebuilds
+derived search data once; old encrypted fixtures must pass read/write/restore
+checks before any native engine change ships.
+
 ### CGO Flags (CRITICAL - Required for SQLCipher + FTS5)
 **ALL `go build`, `go test`, and `go run` commands MUST use these CGO flags:**
 

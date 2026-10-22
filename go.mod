@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.7
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
+	github.com/benoitpetit/go-sqlcipher/v4 v4.17.0-mira.2
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/gin-contrib/sse v1.1.0
 	github.com/go-jose/go-jose/v3 v3.0.5
@@ -15,7 +16,6 @@ require (
 	github.com/johannesboyne/gofakes3 v0.0.0-20250916175020-ebf3e50324d3
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/modelcontextprotocol/go-sdk v1.4.1
-	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
 	github.com/oauth2-proxy/mockoidc v0.0.0-20240214162133-caebfff84d25
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/playwright-community/playwright-go v0.5200.1

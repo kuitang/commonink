@@ -487,7 +487,7 @@ func (u *UserDB) MigrateUserDB() error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
-	return nil
+	return u.migrateExternalContentFTS()
 }
 
 // OpenSessionsDB opens the shared sessions database (unencrypted).
@@ -721,4 +721,29 @@ func (u *UserDB) Close() error {
 		return u.db.Close()
 	}
 	return nil
+}
+
+// migrateExternalContentFTS atomically replaces the historical FTS triggers and
+// rebuilds derived search data once. Note bodies, keys and encrypted file format
+// stay intact; failures roll back the entire migration.
+func (u *UserDB) migrateExternalContentFTS() error {
+	tx, err := u.db.Begin()
+	if err != nil {
+		return fmt.Errorf("start FTS migration: %w", err)
+	}
+	defer tx.Rollback()
+	var version int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version >= 1 {
+		return tx.Commit()
+	}
+	if _, err := tx.Exec("DROP TRIGGER IF EXISTS notes_ad; DROP TRIGGER IF EXISTS notes_au;" + UserDBFTSTriggers); err != nil {
+		return fmt.Errorf("replace FTS triggers: %w", err)
+	}
+	if _, err := tx.Exec("INSERT INTO fts_notes(fts_notes) VALUES('rebuild'); PRAGMA user_version=1;"); err != nil {
+		return fmt.Errorf("rebuild FTS index: %w", err)
+	}
+	return tx.Commit()
 }

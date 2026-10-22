@@ -44,15 +44,16 @@ CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
     VALUES (new.rowid, new.title, new.content);
 END;
 
--- Trigger: sync FTS index on DELETE
+-- External-content FTS5 must receive the old indexed values explicitly.
 CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-    DELETE FROM fts_notes WHERE rowid = old.rowid;
+    INSERT INTO fts_notes(fts_notes, rowid, title, content)
+    VALUES ('delete', old.rowid, old.title, old.content);
 END;
-
--- Trigger: sync FTS index on UPDATE
 CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-    UPDATE fts_notes SET title = new.title, content = new.content
-    WHERE rowid = new.rowid;
+    INSERT INTO fts_notes(fts_notes, rowid, title, content)
+    VALUES ('delete', old.rowid, old.title, old.content);
+    INSERT INTO fts_notes(rowid, title, content)
+    VALUES (new.rowid, new.title, new.content);
 END;
 
 -- API keys table: long-lived keys for programmatic API access

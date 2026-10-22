@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mutecomm/go-sqlcipher/v4"
+	_ "github.com/benoitpetit/go-sqlcipher/v4"
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"

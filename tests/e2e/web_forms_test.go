@@ -24,9 +24,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	_ "github.com/benoitpetit/go-sqlcipher/v4"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
-	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"pgregory.net/rapid"
 
 	"github.com/kuitang/agent-notes/internal/auth"
