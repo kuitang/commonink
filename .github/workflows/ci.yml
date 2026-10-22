@@ -36,7 +36,7 @@ jobs:
           printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n' | sudo tee /etc/apt/apt.conf.d/80-commonink-download-timeout
       - name: Install SQLCipher OpenSSL development dependency
         run: timeout 360 sudo apt-get update && timeout 360 sudo apt-get install -y libssl-dev
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26.10"
           check-latest: true
