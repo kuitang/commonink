@@ -26,7 +26,7 @@ require (
 	github.com/thomaspoignant/go-feature-flag v1.51.2
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.35.0
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.16.0
 	pgregory.net/rapid v1.2.0
 )
 
