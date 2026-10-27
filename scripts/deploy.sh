@@ -75,5 +75,6 @@ echo ""
 echo "Deploying..."
 flyctl deploy \
   --remote-only \
+  --no-cache \
   --config "${CONFIG_FILE}" \
   --app "${APP_NAME}"

@@ -112,5 +112,6 @@ flyctl secrets set \
 
 flyctl deploy \
   --remote-only \
+  --no-cache \
   --config fly.staging.toml \
   --app "${APP_NAME}"

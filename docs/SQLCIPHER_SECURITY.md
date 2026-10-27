@@ -46,7 +46,7 @@ CVE-2021-20227 (malicious SQL read-after-free); upstream disputes an RCE claim.
 concat_ws CVE-2025-3277/CVE-2025-29087 affects a function absent in 3.33, so
 assigning it solely by version range would be incorrect.
 
-Official current SQLCipher 4.19.0 (SQLite 3.53.4) additionally repairs low-risk
+Official SQLCipher 4.19.0 (SQLite 3.53.4) additionally repairs low-risk
 hexkey-URI and sqlcipher_export handling. The application generates raw DEKs
 internally and does not expose hexkey URI parameters, SQLCipher export, arbitrary
 SQL or database-file import to clients. Those differences remain tracked rather
@@ -63,3 +63,18 @@ The runtime uses Debian `libssl3t64` 3.5.7-1~deb13u3. Its distribution changelog
 explicitly backports the OpenSSL 3.5.8 and 3.5.9 security fixes, including the
 September DTLS, QUIC, CRLDP, SM2 and CMP fixes. Judge the full Debian revision
 and advisory status rather than comparing only the upstream 3.5.7 string.
+
+
+2026-10-28 upstream review: SQLCipher 4.20.0 was released on October 27 and
+updates its SQLite baseline to 3.54.1. SQLite documents the 3.54.1 heap-buffer
+fix as affecting 32-bit builds only; this application is built for amd64. The
+other 4.20 changes concern PRAGMA cipher_migrate error deferral and a WebAssembly
+finalizer. The application uses neither native cipher_migrate nor WebAssembly;
+its MigrateUserDB FTS migration is a separate application operation. The reviewed
+Go driver still publishes 4.17.0-mira.2 as its latest tag. No native baseline is
+changed merely to match the newest release; the feature-scoped 4.19 differences
+above remain tracked, and the next maintained driver refresh should reassess
+4.20 or newer against encrypted-store compatibility tests.
+
+- https://www.zetetic.net/blog/2026/10/27/sqlcipher-4.20.0-release/
+- https://sqlite.org/changes.html
