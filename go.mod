@@ -15,7 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/johannesboyne/gofakes3 v0.0.0-20250916175020-ebf3e50324d3
 	github.com/microcosm-cc/bluemonday v1.0.27
-	github.com/modelcontextprotocol/go-sdk v1.4.1
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oauth2-proxy/mockoidc v0.0.0-20240214162133-caebfff84d25
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/playwright-community/playwright-go v0.5200.1
@@ -26,7 +26,7 @@ require (
 	github.com/thomaspoignant/go-feature-flag v1.51.2
 	golang.org/x/crypto v0.58.0
 	golang.org/x/oauth2 v0.35.0
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.15.0
 	pgregory.net/rapid v1.2.0
 )
 
@@ -58,9 +58,9 @@ require (
 	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/kr/text v0.2.0 // indirect
@@ -79,8 +79,9 @@ require (
 	go.shabbyrobe.org/gocovmerge v0.0.0-20230507111327-fa4f82cfbf4d // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
-	golang.org/x/tools v0.41.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
