@@ -10,7 +10,7 @@ jobs:
   source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install SQLCipher OpenSSL development dependency
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - uses: actions/setup-go@v5
@@ -26,7 +26,7 @@ jobs:
       matrix:
         context: ['.']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rebuild current bases and record exact image
         run: |
           docker build --pull --no-cache -t security-image:scan "${{ matrix.context }}"
