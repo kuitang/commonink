@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-jose/go-jose/v3"
-	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"pgregory.net/rapid"
 )
 
@@ -40,7 +40,7 @@ func signAccessToken(t *testing.T, privateKey ed25519.PrivateKey, issuer, audien
 		ClientID: clientID,
 	}
 
-	token, err := jwt.Signed(signer).Claims(claims).CompactSerialize()
+	token, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		t.Fatalf("failed to sign token: %v", err)
 	}

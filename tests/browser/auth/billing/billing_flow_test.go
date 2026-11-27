@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // newPageFromContext creates a page from a browser context with default timeouts.

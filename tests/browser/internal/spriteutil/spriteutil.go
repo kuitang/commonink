@@ -5,7 +5,7 @@ package spriteutil
 import (
 	"testing"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // SpriteTimeoutMS is the canonical timeout for all sprite-related Playwright

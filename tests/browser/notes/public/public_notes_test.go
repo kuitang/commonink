@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // TestBrowser_PublishNote tests creating a note and making it public.

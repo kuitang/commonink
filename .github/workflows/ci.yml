@@ -38,14 +38,14 @@ jobs:
         run: timeout 360 sudo apt-get update && timeout 360 sudo apt-get install -y libssl-dev
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
           check-latest: true
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22.1'
       - name: Install matching Playwright npm driver and Chromium
         run: |
-          npm install --prefix "$RUNNER_TEMP/commonink-playwright" --ignore-scripts playwright-core@1.52.0
+          npm install --prefix "$RUNNER_TEMP/commonink-playwright" --ignore-scripts playwright-core@1.64.1
           mkdir -p "$RUNNER_TEMP/commonink-playwright-driver"
           ln -s "$RUNNER_TEMP/commonink-playwright/node_modules/playwright-core" "$RUNNER_TEMP/commonink-playwright-driver/package"
           echo "PLAYWRIGHT_DRIVER_PATH=$RUNNER_TEMP/commonink-playwright-driver" >> "$GITHUB_ENV"

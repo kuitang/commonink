@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/kuitang/agent-notes/internal/crypto"
 	"github.com/kuitang/agent-notes/internal/db"
 	"github.com/kuitang/agent-notes/internal/obs"
@@ -113,7 +114,7 @@ func NewTokenVerifier(issuer, resource string, publicKey ed25519.PublicKey) *Tok
 // 6. Return claims on success
 func (v *TokenVerifier) VerifyToken(ctx context.Context, token string) (*TokenClaims, error) {
 	// 1. Parse JWT and verify signature
-	parsedToken, err := jwt.ParseSigned(token)
+	parsedToken, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.EdDSA})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformedToken, err)
 	}

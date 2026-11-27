@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // TestBrowser_Search_PorterStemming tests that FTS5 Porter stemming works through
