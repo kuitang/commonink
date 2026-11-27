@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/appseed"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 
 	"github.com/kuitang/agent-notes/tests/browser/internal/spriteutil"
 )

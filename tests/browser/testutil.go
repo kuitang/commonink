@@ -28,7 +28,7 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 
 	"github.com/kuitang/agent-notes/internal/apps"
 	"github.com/kuitang/agent-notes/internal/auth"

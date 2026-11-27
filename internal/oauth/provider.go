@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-jose/go-jose/v3"
-	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/kuitang/agent-notes/internal/db/sessions"
 	"github.com/kuitang/agent-notes/internal/urlutil"
 )
@@ -237,7 +237,7 @@ func (p *Provider) SignAccessToken(claims AccessTokenClaims) (string, error) {
 	}
 
 	// Sign the token
-	token, err := jwt.Signed(signer).Claims(claims).CompactSerialize()
+	token, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		return "", fmt.Errorf("oauth: failed to sign token: %w", err)
 	}
@@ -248,7 +248,7 @@ func (p *Provider) SignAccessToken(claims AccessTokenClaims) (string, error) {
 // VerifyAccessToken verifies and parses a JWT access token.
 // Returns the claims if valid, or an error if invalid/expired.
 func (p *Provider) VerifyAccessToken(token string) (*AccessTokenClaims, error) {
-	parsedToken, err := jwt.ParseSigned(token)
+	parsedToken, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.EdDSA})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
 	}
